@@ -196,7 +196,7 @@ It finds items that are better placed in other chests (rule mismatch, higher pri
 ## Help and feedback
 
 Everything goes through **GitHub issues**: bugs, questions, ideas and requests.
-
+https://github.com/BastionNtB/YAVSOS/issues
 ---
 
 ## Reference

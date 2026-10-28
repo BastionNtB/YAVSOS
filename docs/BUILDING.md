@@ -59,9 +59,10 @@ Pure core tests run without proprietary game references. Plugin CI must obtain t
 python3 scripts/package.py [--media-url <public repository assets/media URL>] [--repo-url <public repository URL>] [--strict]
 
 # The release action. Without --publish it is the dry run: check, build, tests,
-# verify-build, package, and with --validate-online Thunderstore's validators:
-python3 scripts/release.py --validate-online
-python3 scripts/release.py --tag v1.0.0 --media-url <url> --repo-url <url> --publish thunderstore,hexium
+# verify-build, package, and with --validate-online Thunderstore's validators, the Nexus
+# key, mod and file, and the tag on the public repository (all read-only):
+python3 scripts/release.py --validate-online --tag v1.0.1 --repo-url <url>
+python3 scripts/release.py --tag v1.0.1 --media-url <url> --repo-url <url> --publish thunderstore,hexium,nexus,github
 ```
 
 - `artifacts/package/<version>/`: `YAVSOS-<version>-thunderstore.zip` (Thunderstore and Hexium),
@@ -71,8 +72,10 @@ python3 scripts/release.py --tag v1.0.0 --media-url <url> --repo-url <url> --pub
   repository at the release tag (`--repo-url`). The store changelog is the `## x.y.z` sections of `CHANGELOG.md`. Package name, namespace,
   dependencies and files: `packaging/package.json`.
 - Publishing refuses a dirty tree, a CHANGELOG entry still marked `(unreleased)`, a media slot
-  without its image, a link left relative, and `--skip-build`. Thunderstore goes before Hexium. Nexus Mods is
-  uploaded by the public repository's workflow; this script builds its zip.
+  without its image, a link left relative, and `--skip-build`. Order: Thunderstore, Hexium, Nexus Mods (a new
+  version of the existing main file through Nexus's v3 upload API, the old one archived, then the
+  changelog entry), then the GitHub release with both zips (gh CLI login). The public repository
+  must have the tag first.
 - **Credentials** (names only; values never in files here, logs or command lines), read as
   data from `~/.config/tokens/` or from environment variables of the same names (repository
   secrets in CI):
@@ -81,4 +84,4 @@ python3 scripts/release.py --tag v1.0.0 --media-url <url> --repo-url <url> --pub
   | --- | --- |
   | `thunderstore.env` | `THUNDERSTORE_URL`, `THUNDERSTORE_COMMUNITY`, `THUNDERSTORE_NAMESPACE`, `THUNDERSTORE_TOKEN` |
   | `hexium.env` | `HEXIUM_URL`, `HEXIUM_COMMUNITY`, `HEXIUM_NAMESPACE`, `HEXIUM_TOKEN` |
-  | `nexusmods.env` | `NEXUSMODS_GAME`, `NEXUSMODS_MOD_ID`, `NEXUSMODS_FILE_ID`, `NEXUSMODS_API_KEY` (for the workflow) |
+  | `nexusmods.env` | `NEXUSMODS_GAME`, `NEXUSMODS_MOD_ID`, `NEXUSMODS_FILE_ID`, `NEXUSMODS_API_KEY` (MOD_ID: the page number; FILE_ID: the "File ID" under the file's Advanced details; the personal API key) |

@@ -116,24 +116,10 @@ they're sent to every player who joins.
 
 ## Setup types
 
-| Setup | YAVSOS on | How it works |
-| --- | --- | --- |
-| **Single-player** | Your game | Everything, with your own categories and settings. |
-| **Client and server** | The server and every player | The full setup. The server's categories and shared settings apply to everyone. |
-| **Client only** | Your game, not the server | YAVSOS runs just for you. |
-| **Server only** | The server, not the players | Not a working setup: players without YAVSOS can't join. |
-
-- **Client and server.** This covers dedicated servers and Steam-hosted worlds, where the
-  host acts as the server. YAVSOS is required: every player needs it, version 1.0.0 or later.
-  A player without it can't join, and one with an older copy is told to update. Everyone shares the
-  server's categories and settings, and while the shared settings are locked, only admins
-  can change them.
-- **Client only.** When you join a server that doesn't have YAVSOS, it notices and runs just
-  for you, with your own categories and settings. Nobody else is affected, and you can still
-  stash into other players' chests.
-- **Server only.** Once the server has YAVSOS, it requires it from everyone. If some of your
-  players can't or won't install it, leave it off the server; they can still use it client
-  only.
+YAVSOS works in single-player, on a server, or just for you on a server that doesn't have it.
+If the server has YAVSOS installed, every player will need it as well. The server's categories and settings
+apply to everyone. If it's on client only stashing should work on its own, but stashing into busy
+chests requires the other player(s) to have either YAVSOS, AzuAutoStore, or MultiUserChest as well.
 
 ## How it works
 

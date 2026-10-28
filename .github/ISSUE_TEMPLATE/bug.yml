@@ -1,0 +1,56 @@
+name: Bug report
+description: Something doesn't work, or items went somewhere they shouldn't.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead. A screenshot helps.
+      placeholder: I pressed the store key next to my Ores chest, but the Copper stayed in my inventory.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: YAVSOS version
+      description: Shown in your mod manager.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: Where were you playing?
+      options:
+        - Dedicated server with YAVSOS
+        - Steam-hosted world
+        - Single-player
+        - A server without YAVSOS
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: azu
+    attributes:
+      label: Is AzuAutoStore installed?
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: |
+        Drag `BepInEx/LogOutput.log` into this box (it's in your game folder or mod manager profile).
+        Upload it right after the problem happens, before you restart the game.
+    validations:
+      required: true
+  - type: textarea
+    id: mods
+    attributes:
+      label: Other mods (optional)
+      description: A mod manager profile code or a list of your mods, if you have one handy.

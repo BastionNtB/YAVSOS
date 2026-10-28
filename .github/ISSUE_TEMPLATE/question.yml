@@ -1,0 +1,10 @@
+name: Question or something else
+description: Help with setup, a compatibility question, or anything that isn't a bug or an idea.
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: What's on your mind?
+    validations:
+      required: true

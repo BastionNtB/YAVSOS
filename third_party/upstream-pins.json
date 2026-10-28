@@ -1,0 +1,38 @@
+{
+  "note": "Pins of the upstream code bundled into YAVSOS.dll, read by scripts/bundled-deps/bundled_deps.py. Update a pin only through the procedure in third_party/README.md; update reviewedThrough after the open issues have been read.",
+  "dependencies": [
+    {
+      "name": "ServerSync",
+      "repository": "blaxxun-boop/ServerSync",
+      "kind": "release",
+      "pinnedTag": "v1.20",
+      "pinnedCommit": "c57c2aa54e07cdcc7630d6068699ea781622323e",
+      "copiedCode": "whole library (release DLL)",
+      "copiedNamesFrom": null,
+      "issuesReviewedThrough": "2026-10-27",
+      "trackedIssues": {
+        "11": "enum : ulong config entries fail to sync. YAVSOS has no ulong-backed enum (checked 2026-10-27); stays unaffected while that holds.",
+        "12": "Synced client changes relayed to other clients when the server lacks the mod. Checked 2026-10-27 (detached reading): YAVSOS not affected. Receiving is blocked by ServerPolicyRoutedGuard/IsServerSender (a relayed message keeps the original client ID), and PolicyHost.OnRemoteChanged also requires a server; sending happens only with LockSharedPolicy off and is dropped. Re-check if the sender guard changes or ServerSync is upgraded."
+      }
+    },
+    {
+      "name": "MultiUserChest",
+      "repository": "MSchmoecker/No-Chest-Block",
+      "kind": "source",
+      "pinnedTag": "0.6.2",
+      "pinnedCommit": "e85141286f755652827934b58d8052861ad89c34",
+      "copiedCode": "MultiUserChest/ source folder without Plugin.cs and Properties/",
+      "copiedNamesFrom": "src/YAVSOS.MultiUserChest/Upstream",
+      "issuesReviewedThrough": "2026-10-27",
+      "trackedIssues": {
+        "19": "ChangeOwnerCheck transpiler crashes with Runic Storage. Runic Storage is not in the production pack; the bundled copy unpatches itself on a failed patch. Wait for the upstream fix (D090).",
+        "14": "Crash on chest access with Jotunn 2.27.1 (2025-12). Pack uses Jotunn 2.30.2 and the 2026-10 MUC checks passed; no action.",
+        "15": "Longship container NullReferenceException; stack is in ZenUI (CraftingPanelGrid), not MUC code. No action.",
+        "20": "Standalone MUC flagged missing on a server by Jotunn's version check. The bundled copy carries no Jotunn NetworkCompatibility attribute (CHANGES.md item 2); no action."
+      },
+      "openPullRequests": {
+        "21": "RequestEvents (D083 hook), opened by the maintainer 2026-10-27. When released, update the pin and switch YAVSOS's observer to the events."
+      }
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "set-rule.gif": {"source": "session-20261027/set-rule-take2.mp4", "start": 0.5, "end": 17.0, "crop": [1460, 830, 0, 0], "width": 960, "fps": 15, "mp4": true},
+  "panel-overview.png": {"source": "session-20261027/panel-overview-callouts.png", "edit": "panel-overview.png cropped 1080x700 at (20,56) plus a 360 px callout strip, by session-20261027/callouts.py"},
+  "priority.png": {"source": "session-20261027/priority.png", "crop": [1560, 770, 20, 56]},
+  "search-highlight.gif": {"source": "session-20261027/search-highlight.mp4", "start": 1.0, "end": 11.4, "width": 960, "fps": 15, "mp4": true},
+  "always-never.gif": {"source": "session-20261027/always-never-edit.mp4", "crop": [856, 640, 640, 0], "width": 720, "fps": 15, "mp4": true, "edit": "cut from always-never.mp4: 3.4-5.9, 9.2-12.9, 17.0-20.3, 22.8-25.8 s"},
+  "filters.png": {"source": "session-20261027/filters.png", "crop": [1080, 650, 20, 56]},
+  "stash-single.gif": {"source": "session-20261027/stash-single.mp4", "start": 2.0, "end": 12.5, "width": 960, "fps": 15, "mp4": true},
+  "hero.gif": {"source": "session-20261027/hero.mp4", "start": 7.5, "end": 14.5, "crop": [2040, 520, 360, 240], "width": 960, "fps": 12, "mp4": true},
+  "cleanup.gif": {"source": "session-20261027/cleanup.mp4", "start": 2.5, "end": 10.0, "crop": [1600, 1224, 0, 0], "width": 960, "fps": 12, "mp4": true},
+  "result-panel.png": {"source": "session-20261027/result-panel.png", "crop": [560, 130, 1004, 1100]},
+  "panel-compatibilitychecks.png": {"source": "session-20261027/panel-compatibilitychecks.png", "edit": "compat-a.png and compat-b.png, each cropped to 710x295 at (680,70), side by side with a 16 px gap; Lab faults azu-store-order and epicloot-shim (D088)"},
+  "status-marks.png": {"source": "session-20261027/status-marks.png", "edit": "status-a.png and status-b.png, each cropped to 640x630 at (680,70), side by side with a 16 px gap; demonstration Azu exclusion Bronze in piece_chest_wood, removed afterwards"},
+  "labels-tooltips.png": {"source": "session-20261027/labels-tooltips.png", "edit": "labels-a.png cropped 560x240 at (1160,600) and labels-b2.png cropped 390x335 at (370,130), side by side with a 16 px gap"}
+}

@@ -1,0 +1,22 @@
+<Project>
+  <Target Name="MergePinnedServerSync" Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="$(IntermediateOutputPath)$(TargetFileName);$(ServerSyncPath);$(MultiUserChestPath);$(MSBuildProjectDirectory)/ILRepack.targets"
+          Outputs="$(IntermediateOutputPath)bundled/$(TargetFileName)">
+    <MakeDir Directories="$(IntermediateOutputPath)bundled" />
+    <ItemGroup>
+      <!-- Always merge the compiler output, not a previously merged target assembly. -->
+      <YavsosMergeInput Include="$(IntermediateOutputPath)$(TargetFileName);$(ServerSyncPath);$(MultiUserChestPath)" />
+      <YavsosMergeLibrary Include="$(TargetDir);$(ValheimManagedDir);$(BepInExDir)/core;$([System.IO.Path]::GetDirectoryName($(JotunnPath)))" />
+      <FileWrites Include="$(IntermediateOutputPath)bundled/$(TargetFileName);$(IntermediateOutputPath)bundled/$(TargetName).pdb" />
+    </ItemGroup>
+    <ILRepack Parallel="false" DebugInfo="true" Internalize="true"
+              InputAssemblies="@(YavsosMergeInput)" OutputFile="$(IntermediateOutputPath)bundled/$(TargetFileName)"
+              TargetKind="SameAsPrimaryAssembly" LibraryPath="@(YavsosMergeLibrary)" />
+  </Target>
+  <Target Name="BundlePinnedServerSync" AfterTargets="Build" DependsOnTargets="MergePinnedServerSync"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Copy SourceFiles="$(IntermediateOutputPath)bundled/$(TargetFileName)" DestinationFiles="$(TargetPath)" />
+    <Copy SourceFiles="$(IntermediateOutputPath)bundled/$(TargetName).pdb" DestinationFolder="$(TargetDir)"
+          Condition="Exists('$(IntermediateOutputPath)bundled/$(TargetName).pdb')" />
+  </Target>
+</Project>

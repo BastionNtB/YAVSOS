@@ -1,0 +1,11 @@
+<Project>
+  <Target Name="ValidateGameReferences" BeforeTargets="ResolveAssemblyReferences"
+          Condition="'$(NeedsValheimReferences)' == 'true'">
+    <Error Condition="'$(ValheimManagedDir)' == ''"
+           Text="Set ValheimDir or ValheimManagedDir in BuildPaths.local.props or with -p:. See docs/BUILDING.md." />
+    <Error Condition="'$(BepInExDir)' == ''"
+           Text="Set BepInExDir to the profile's BepInEx folder containing core/. See docs/BUILDING.md." />
+    <Error Condition="'%(Reference.HintPath)' != '' and !Exists('%(Reference.HintPath)')"
+           Text="Missing build reference %(Reference.Identity): %(Reference.HintPath). Check BuildPaths.local.props and installed versions." />
+  </Target>
+</Project>

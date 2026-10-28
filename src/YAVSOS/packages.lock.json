@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "dependencies": {
+    ".NETStandard,Version=v2.1": {
+      "ILRepack.Lib.MSBuild.Task": {
+        "type": "Direct",
+        "requested": "[2.0.48, )",
+        "resolved": "2.0.48",
+        "contentHash": "vI+Jivcy1/eIFAXC5Kxa9K4OTQIiD69eqOuCh6ulWX7/kGlACKFB/csrSVqt7b08XxoAIMn96tJxLXe3TkDEqg=="
+      },
+      "yavsos.core": {
+        "type": "Project"
+      },
+      "yavsos.multiuserchest": {
+        "type": "Project"
+      }
+    }
+  }
+}

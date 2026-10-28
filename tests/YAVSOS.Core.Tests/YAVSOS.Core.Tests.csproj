@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/YAVSOS/Integrations/OptionalReflection.cs" Link="Adapters/OptionalReflection.cs" />
+    <Compile Include="../../src/YAVSOS/Integrations/OptionalEpicLootRegistration.cs" Link="Adapters/OptionalEpicLootRegistration.cs" />
+    <Compile Include="../../src/YAVSOS/Integrations/OptionalDefinitionWork.cs" Link="Adapters/OptionalDefinitionWork.cs" />
+    <Compile Include="../../src/YAVSOS/Integrations/OptionalEpicLootSemanticsApi.cs" Link="Adapters/OptionalEpicLootSemanticsApi.cs" />
+    <Compile Include="../../src/YAVSOS/Classification/ClassificationHost.cs" Link="Adapters/ClassificationHost.cs" />
+    <Compile Include="../../src/YAVSOS/Interface/JotunnGuiCapability.cs" Link="Adapters/JotunnGuiCapability.cs" />
+    <Compile Include="../../src/YAVSOS/Interface/ChestHighlightCapability.cs" Link="Adapters/ChestHighlightCapability.cs" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
+    <Compile Include="../../src/YAVSOS/Networking/PolicyMailbox.cs" Link="Adapters/PolicyMailbox.cs" />
+    <Compile Include="../../src/YAVSOS/Networking/PeerIdentityGate.cs" Link="Adapters/PeerIdentityGate.cs" />
+    <Compile Include="../../src/YAVSOS/Networking/ServerSyncVersionAdvertisement.cs" Link="Adapters/ServerSyncVersionAdvertisement.cs" />
+    <Compile Include="../../src/YAVSOS/Networking/CategoryPolicyFileReader.cs" Link="Adapters/CategoryPolicyFileReader.cs" />
+    <Compile Include="../../src/YAVSOS/Networking/ServerSyncSettingsBridge.cs" Link="Adapters/ServerSyncSettingsBridge.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\YAVSOS.Core\YAVSOS.Core.csproj" />
+  </ItemGroup>
+</Project>

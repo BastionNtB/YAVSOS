@@ -1,0 +1,17 @@
+{
+  "name": "YAVSOS",
+  "namespace": "BastionNtB",
+  "website_url": "https://github.com/BastionNtB/YAVSOS",
+  "description": "YAVSOS: A Valheim storage organization system built around efficiency, mod compatibility, extensibility and multiplayer support. Stash and organize your items with automatic item categorizations. All while supporting and working with other mods!",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2333",
+    "ValheimModding-Jotunn-2.30.2"
+  ],
+  "files": [
+    "YAVSOS.dll",
+    "YAVSOS.Core.dll",
+    "YAVSOS-LICENSE.txt",
+    "ServerSync-LICENSE.txt",
+    "MultiUserChest-LICENSE.txt"
+  ]
+}

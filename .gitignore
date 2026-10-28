@@ -1,0 +1,35 @@
+# Local build references and editor state
+BuildPaths.local.props
+.vs/
+.idea/
+*.user
+*.suo
+*.sln.DotSettings.user
+
+# Generated build/package output
+artifacts/
+dist/
+**/bin/
+**/obj/
+TestResults/
+coverage/
+*.nupkg
+*.snupkg
+
+# Private/runtime material
+.env
+.env.*
+!.env.example
+*.log
+*.db
+*.db.old
+*.fwl
+*.fwl.old
+*.fch
+*.fch.old
+local/
+.DS_Store
+
+# Python bytecode
+__pycache__/
+*.pyc

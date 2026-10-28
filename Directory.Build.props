@@ -1,0 +1,28 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)BuildPaths.local.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)BuildPaths.local.props')" />
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <!-- D077 B09: Lab is Release plus the lab fixtures (YAVSOS_LAB); the release DLL carries none of them. -->
+    <Configurations>Debug;Release;Lab</Configurations>
+    <!-- B08: the version has one source, ProjectIdentity.Version; assembly and file versions are read from it. -->
+    <Version>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)src/YAVSOS.Core/ProjectIdentity.cs')), 'const string Version = "([0-9.]+)"').Groups[1].Value)</Version>
+    <Product>Yet Another Valheim Storage Organization System</Product>
+    <Authors>BastionNtB</Authors>
+    <!-- D082: GPL-3.0 or later, plain (no added permissions). -->
+    <Copyright>Copyright (C) 2026 BastionNtB</Copyright>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)artifacts/build/$(MSBuildProjectName)/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)artifacts/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+    <ValheimManagedDir Condition="'$(ValheimManagedDir)' == '' and '$(ValheimDir)' != ''">$(ValheimDir)/valheim_Data/Managed</ValheimManagedDir>
+    <!-- D062: Jotunn is a required runtime dependency, referenced from an installed copy and never packaged. -->
+    <JotunnPath Condition="'$(JotunnPath)' == '' and '$(BepInExDir)' != ''">$(BepInExDir)/plugins/ValheimModding-Jotunn/Jotunn.dll</JotunnPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Lab'">
+    <Optimize>true</Optimize>
+    <DefineConstants>$(DefineConstants);YAVSOS_LAB</DefineConstants>
+  </PropertyGroup>
+</Project>

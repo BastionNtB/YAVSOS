@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Vendored MultiUserChest (MIT, Copyright (c) 2022 Maximilian Schmöcker), upstream
+    https://github.com/MSchmoecker/No-Chest-Block at e85141286f755652827934b58d8052861ad89c34 (0.6.2).
+    Upstream/ is the upstream source with the local changes listed in third_party/MultiUserChest/CHANGES.md;
+    Bundle/ is YAVSOS's own. Merged into YAVSOS.dll; never shipped on its own (D057, D061).
+    Upstream compiles against a publicized game assembly, so this project does too; YAVSOS itself does not.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>YAVSOS.MultiUserChest</AssemblyName>
+    <RootNamespace>YAVSOS.Vendor.MultiUserChest</RootNamespace>
+    <NeedsValheimReferences>true</NeedsValheimReferences>
+    <Nullable>disable</Nullable>
+    <LangVersion>12.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CS0618;CS0649;CS0169;CS0414;CS8981</NoWarn>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- Upstream's transpilers use HarmonyX's CodeMatcher, whose signatures name Reflection.Emit types that the
+         netstandard2.1 reference set lacks. Compile against the game's own runtime libraries instead. -->
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Krafs.Publicizer" Version="2.3.0" PrivateAssets="all" />
+    <Publicize Include="assembly_valheim" />
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExDir)/core/BepInEx.dll</HintPath>
+      <Private>false</Private>
+      <ExternallyResolved>true</ExternallyResolved>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExDir)/core/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Upstream's InventoryHelper.ClampStackSize uses Jotunn's prefab cache; Jotunn is required by YAVSOS (D062, D090).
+         Referenced only, never merged or copied. -->
+    <Reference Include="Jotunn">
+      <HintPath>$(JotunnPath)</HintPath>
+      <Private>false</Private>
+      <ExternallyResolved>true</ExternallyResolved>
+    </Reference>
+    <Reference Include="mscorlib;System;System.Core;netstandard;UnityEngine;UnityEngine.CoreModule;UnityEngine.PhysicsModule;UnityEngine.UI;UnityEngine.UIModule;Unity.TextMeshPro;assembly_valheim;assembly_utils;assembly_guiutils">
+      <HintPath>$(ValheimManagedDir)/%(Identity).dll</HintPath>
+      <Private>false</Private>
+      <ExternallyResolved>true</ExternallyResolved>
+    </Reference>
+  </ItemGroup>
+</Project>

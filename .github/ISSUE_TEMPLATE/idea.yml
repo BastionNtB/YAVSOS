@@ -1,0 +1,11 @@
+name: Idea or feature request
+description: Something you'd like YAVSOS to do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like?
+      description: A few sentences are plenty. How you'd use it in game helps.
+    validations:
+      required: true

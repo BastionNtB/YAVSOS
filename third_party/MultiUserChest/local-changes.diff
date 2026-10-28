@@ -1,0 +1,178 @@
+diff -ru --label upstream --label local upstream local
+--- upstream
++++ local
+@@ -6,23 +6,38 @@
+ namespace YAVSOS.Vendor.MultiUserChest {
+     public static class ContainerRPCHandler {
+         public static void RPC_RequestItemAdd(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(containerId, sender, ContainerPatch.ItemAddResponseRPC, RequestItemAdd, new RequestChestAdd(package));
++            // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(containerId, sender, ContainerPatch.ItemAddResponseRPC, RequestItemAdd, new RequestChestAdd(package));
++            }
+         }
+ 
+         public static void RPC_RequestItemRemove( long sender, ZDOID containerId,ZPackage package) {
+-            HandleRPC(containerId, sender, ContainerPatch.ItemRemoveResponseRPC, RequestItemRemove, new RequestChestRemove(package));
++            // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(containerId, sender, ContainerPatch.ItemRemoveResponseRPC, RequestItemRemove, new RequestChestRemove(package));
++            }
+         }
+ 
+         public static void RPC_RequestItemConsume(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(containerId, sender, ContainerPatch.ItemConsumeResponseRPC, RequestItemConsume, new RequestConsume(package));
++            // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(containerId, sender, ContainerPatch.ItemConsumeResponseRPC, RequestItemConsume, new RequestConsume(package));
++            }
+         }
+ 
+         public static void RPC_RequestItemMove(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(containerId, sender, ContainerPatch.ItemMoveResponseRPC, RequestItemMove, new RequestMove(package));
++            // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(containerId, sender, ContainerPatch.ItemMoveResponseRPC, RequestItemMove, new RequestMove(package));
++            }
+         }
+ 
+         public static void RPC_RequestDrop(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(containerId, sender, ContainerPatch.ItemDropResponseRPC, RequestDrop, new RequestDrop(package));
++            // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(containerId, sender, ContainerPatch.ItemDropResponseRPC, RequestDrop, new RequestDrop(package));
++            }
+         }
+ 
+         private static void HandleRPC<TResponse, TInput>(ZDOID containerId, long target, string rpcInvoke, Func<Inventory, TInput, TResponse> message, TInput input) where TResponse : IResponse, new() where TInput : IPackage {
+diff -ru --label upstream --label local upstream local
+--- upstream
++++ local
+@@ -28,7 +28,8 @@
+             string crafterName = pkg.ReadString();
+             int worldLevel = pkg.ReadInt();
+             bool pickedUp = pkg.ReadBool();
+-            bool cheated = pkg.ReadBool();
++            // YAVSOS: only when the sending peer's copy writes it (YAVSOS-LOCAL, PeerFormat).
++            bool cheated = PeerFormat.WithCheated && pkg.ReadBool();
+ 
+             Dictionary<string, string> customData = new Dictionary<string, string>();
+             int customDataCount = pkg.ReadInt();
+@@ -67,7 +68,10 @@
+             pkg.Write(itemData.m_crafterName);
+             pkg.Write(itemData.m_worldLevel);
+             pkg.Write(itemData.m_pickedUp);
+-            pkg.Write(itemData.m_cheated);
++            // YAVSOS: only when the receiving peer's copy reads it (YAVSOS-LOCAL, PeerFormat).
++            if (PeerFormat.WithCheated) {
++                pkg.Write(itemData.m_cheated);
++            }
+ 
+             pkg.Write(itemData.m_customData.Count);
+             foreach (KeyValuePair<string, string> pair in itemData.m_customData) {
+diff -ru --label upstream --label local upstream local
+--- upstream
++++ local
+@@ -6,23 +6,38 @@
+ namespace YAVSOS.Vendor.MultiUserChest {
+     public static class InventoryHandler {
+         public static void RPC_RequestItemAddResponse(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(new RequestChestAddResponse(package), p => GetSourceInventory(p.SourceID), RPC_RequestItemAddResponse);
++            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(new RequestChestAddResponse(package), p => GetSourceInventory(p.SourceID), RPC_RequestItemAddResponse);
++            }
+         }
+ 
+         public static void RPC_RequestItemRemoveResponse(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(new RequestChestRemoveResponse(package), p => GetTargetInventory(p.SourceID), RPC_RequestItemRemoveResponse);
++            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(new RequestChestRemoveResponse(package), p => GetTargetInventory(p.SourceID), RPC_RequestItemRemoveResponse);
++            }
+         }
+ 
+         public static void RPC_RequestDropResponse(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(new RequestDropResponse(package), RPC_RequestDropResponse);
++            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(new RequestDropResponse(package), RPC_RequestDropResponse);
++            }
+         }
+ 
+         public static void RPC_RequestItemConsumeResponse(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(new RequestConsumeResponse(package), RPC_RequestItemConsumeResponse);
++            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(new RequestConsumeResponse(package), RPC_RequestItemConsumeResponse);
++            }
+         }
+ 
+         public static void RPC_RequestItemMoveResponse(long sender, ZDOID containerId, ZPackage package) {
+-            HandleRPC(new RequestMoveResponse(package), RPC_RequestItemMoveResponse);
++            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(sender)) {
++                HandleRPC(new RequestMoveResponse(package), RPC_RequestItemMoveResponse);
++            }
+         }
+ 
+         private static void HandleRPC<T>(T package, Func<T, Inventory> inventory, Container container,
+diff -ru --label upstream --label local upstream local
+--- upstream
++++ local
+@@ -27,7 +27,10 @@
+             Timer.Start(package);
+ #endif
+ 
+-            ZRoutedRpc.instance.InvokeRoutedRPC(netView.m_zdo.GetOwner(), rpc, netView.m_zdo.m_uid, package.WriteToPackage());
++            // YAVSOS: write items in the receiving owner's format (YAVSOS-LOCAL, PeerFormat).
++            using (PeerFormat.For(netView.m_zdo.GetOwner())) {
++                ZRoutedRpc.instance.InvokeRoutedRPC(netView.m_zdo.GetOwner(), rpc, netView.m_zdo.m_uid, package.WriteToPackage());
++            }
+         }
+     }
+ }
+diff -ru --label upstream --label local upstream local
+--- upstream
++++ local
+@@ -34,6 +34,11 @@
+                 return false;
+             }
+ 
++            // YAVSOS: see InventoryPatch.InterceptAddItem (YAVSOS-LOCAL, PeerFormat).
++            if (!PeerFormat.Known(__instance.m_currentContainer.m_nview.GetZDO().GetOwner())) {
++                return false;
++            }
++
+             if (player.CanConsumeItem(item)) {
+                 InventoryBlock.Get(player.GetInventory()).BlockConsume = true;
+                 RequestConsume request = new RequestConsume(item);
+@@ -88,6 +93,12 @@
+                 return;
+             }
+ 
++            // YAVSOS: see InventoryPatch.InterceptAddItem (YAVSOS-LOCAL, PeerFormat).
++            if (!PeerFormat.Known(__instance.m_currentContainer.m_nview.GetZDO().GetOwner())) {
++                __runOriginal = false;
++                return;
++            }
++
+             RequestDrop request = new RequestDrop(__instance.m_dragItem.m_gridPos, __instance.m_dragAmount, Player.m_localPlayer.GetZDOID());
+             GamePatches.InvokeRPC(__instance.m_currentContainer.m_nview, ContainerPatch.ItemDropRPC, request);
+             __instance.SetupDragItem(null, null, 1);
+diff -ru --label upstream --label local upstream local
+--- upstream
++++ local
+@@ -130,6 +130,12 @@
+                 return false;
+             }
+ 
++            // YAVSOS: never send a request whose item format the other owner might misread; refuse the move instead (YAVSOS-LOCAL, PeerFormat).
++            if (!PeerFormat.Known(from.ZNetView.GetZDO().GetOwner()) || !PeerFormat.Known(to.ZNetView.GetZDO().GetOwner())) {
++                successfulAdded = false;
++                return true;
++            }
++
+             if (from.ZNetView.IsOwner() && !to.ZNetView.IsOwner()) {
+                 if (to is ContainerInventoryOwner toContainer) {
+                     RequestChestAdd requestChestAdd = toContainer.Container.AddItemToChest(item, from.Inventory, pos, from.ZNetView.GetZDO().m_uid, amount);

@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>YAVSOS</AssemblyName>
+    <RootNamespace>YAVSOS</RootNamespace>
+    <NeedsValheimReferences>true</NeedsValheimReferences>
+    <Description>Valheim plugin entry point and game adapters for YAVSOS.</Description>
+    <ServerSyncPath>$(MSBuildThisFileDirectory)../../artifacts/dependencies/ServerSync/ServerSync.dll</ServerSyncPath>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <!-- The merged MultiUserChest code reads private game members, as upstream does. Mono allows that only in an
+         assembly marked unverifiable (SkipVerification), which /unsafe adds; ILRepack keeps YAVSOS.dll's own attributes. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <MultiUserChestPath>$(MSBuildThisFileDirectory)../../artifacts/build/YAVSOS.MultiUserChest/$(Configuration)/netstandard2.1/YAVSOS.MultiUserChest.dll</MultiUserChestPath>
+  </PropertyGroup>
+  <!-- D077 B09: lab fixtures (reached by reflection from the GABS bridge) build only in the Lab configuration. -->
+  <ItemGroup Condition="'$(Configuration)' != 'Lab'">
+    <Compile Remove="Transfers/RuleLab.cs;Transfers/FaultLab.cs;Cleanup/StashLab.cs;Cleanup/CleanupLab.cs;Interface/UiLab.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../LICENSE" Link="YAVSOS-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../third_party/ServerSync/LICENSE.txt" Link="ServerSync-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="../YAVSOS.Core/YAVSOS.Core.csproj" />
+    <!-- Vendored MultiUserChest (D057, D061), merged into YAVSOS.dll by ILRepack.targets. -->
+    <ProjectReference Include="../YAVSOS.MultiUserChest/YAVSOS.MultiUserChest.csproj" Private="false" />
+    <None Include="../../third_party/MultiUserChest/LICENSE.txt" Link="MultiUserChest-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <PackageReference Include="ILRepack.Lib.MSBuild.Task" Version="2.0.48" PrivateAssets="all" />
+    <Reference Include="ServerSync">
+      <HintPath>$(ServerSyncPath)</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExDir)/core/BepInEx.dll</HintPath>
+      <Private>false</Private>
+      <ExternallyResolved>true</ExternallyResolved>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(BepInExDir)/core/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- D062: required at runtime, never merged or copied (verify-build.py checks both). -->
+    <Reference Include="Jotunn">
+      <HintPath>$(JotunnPath)</HintPath>
+      <Private>false</Private>
+      <ExternallyResolved>true</ExternallyResolved>
+    </Reference>
+    <Reference Include="UnityEngine;UnityEngine.CoreModule;UnityEngine.UI;UnityEngine.UIModule;UnityEngine.InputLegacyModule;UnityEngine.TextRenderingModule;UnityEngine.AssetBundleModule;UnityEngine.AnimationModule;UnityEngine.PhysicsModule;assembly_valheim;assembly_utils;assembly_guiutils;Unity.TextMeshPro;SoftReferenceableAssets">
+      <HintPath>$(ValheimManagedDir)/%(Identity).dll</HintPath>
+      <Private>false</Private>
+      <ExternallyResolved>true</ExternallyResolved>
+    </Reference>
+  </ItemGroup>
+  <Import Project="ServerSync.targets" />
+</Project>

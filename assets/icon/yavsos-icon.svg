@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- YAVSOS mod icon. Original artwork for the YAVSOS project (chest after the Valheim chest
+     silhouette, hand-drawn fork rune). Source of truth: this file; PNGs are exported from it. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+ <defs>
+  <radialGradient id="glow" cx="50%" cy="60%" r="60%"><stop offset="0" stop-color="#4a3a24"/><stop offset="1" stop-color="#1e2126"/></radialGradient>
+  <linearGradient id="wood" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7f4a25"/><stop offset="1" stop-color="#5a2f14"/></linearGradient>
+ </defs>
+ <!-- tile -->
+ <rect width="256" height="256" rx="48" fill="url(#glow)"/>
+ <path d="M24 206 H232" stroke="#141619" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
+ <!-- side rings as flat bumps -->
+ <rect x="14" y="132" width="24" height="30" rx="8" fill="#4e2a12"/>
+ <rect x="218" y="132" width="24" height="30" rx="8" fill="#4e2a12"/>
+ <!-- body, flaring toward the floor -->
+ <path d="M34 96 H222 L236 196 H20 Z" fill="url(#wood)"/>
+ <path d="M40 130 H216 M36 164 H220" stroke="#4a2810" stroke-width="3"/>
+ <path d="M34 96 H222 L223 104 H33 Z" fill="#3a1e0a"/>
+ <!-- lid -->
+ <path d="M46 70 H210 L230 96 H26 Z" fill="#8a5530"/>
+ <path d="M60 78 H196 M50 87 H206" stroke="#6b3d1c" stroke-width="3"/>
+ <path d="M26 92 H230 V100 H26 Z" fill="#4e2a12"/>
+ <!-- hasp and ring -->
+ <rect x="123.0" y="98" width="10" height="31.5" rx="3" fill="#50535a"/>
+ <circle cx="128.0" cy="153.5" r="27" fill="#4a2810" stroke="#50535a" stroke-width="7"/>
+ <!-- fork rune: groove shadow, then cream fill -->
+ <path d="M136.5 212.4 Q139.3 178.7 135.4 145.2 L118.9 155.0 Q120.7 179.2 121.2 203.4 Z M137.8 152.9 Q117.4 131.7 98.0 109.7 L93.4 125.9 Q103.3 143.9 118.2 157.5 Z M131.9 164.5 Q152.9 142.9 168.7 117.0 L151.9 115.2 Q138.5 131.0 124.1 145.9 Z" fill="#2a160a" stroke="#2a160a" stroke-width="6" stroke-linejoin="round" transform="translate(2 3)"/>
+ <path d="M136.5 212.4 Q139.3 178.7 135.4 145.2 L118.9 155.0 Q120.7 179.2 121.2 203.4 Z M137.8 152.9 Q117.4 131.7 98.0 109.7 L93.4 125.9 Q103.3 143.9 118.2 157.5 Z M131.9 164.5 Q152.9 142.9 168.7 117.0 L151.9 115.2 Q138.5 131.0 124.1 145.9 Z" fill="#f1e6c8"/>
+</svg>

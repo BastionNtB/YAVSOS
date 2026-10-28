@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <ValheimDir>/path/to/steamapps/common/Valheim</ValheimDir>
+    <BepInExDir>/path/to/gale/profile/BepInEx</BepInExDir>
+    <!-- Set ValheimManagedDir directly if the game's managed assembly layout differs. -->
+    <!-- Jotunn.dll defaults to $(BepInExDir)/plugins/ValheimModding-Jotunn/Jotunn.dll; set JotunnPath to use another copy. -->
+    <!-- <JotunnPath>/path/to/gale/profile/BepInEx/plugins/ValheimModding-Jotunn/Jotunn.dll</JotunnPath> -->
+  </PropertyGroup>
+</Project>

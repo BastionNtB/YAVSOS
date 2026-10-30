@@ -55,14 +55,19 @@ internal static class MucRoute
             }
         }
         Available(out var source);
+        string? cause = null;
         localFormat = source switch
         {
             "" => 0,
             "YAVSOS's MultiUserChest" => 2,
-            "MultiUserChest" => WriterFormat(AccessTools.TypeByName("MultiUserChest.InventoryHelper")),
-            _ => WriterFormat(AccessTools.TypeByName("AzuAutoStore.APIs.MUC.MUCSrc.Helper.InventoryHelper"))
+            "MultiUserChest" => WriterFormat(AccessTools.TypeByName("MultiUserChest.InventoryHelper"), out cause),
+            _ => WriterFormat(AccessTools.TypeByName("AzuAutoStore.APIs.MUC.MUCSrc.Helper.InventoryHelper"), out cause)
         };
         log.LogInfo($"YAVSOS's MultiUserChest: {BundledStatus}. In use: {(source.Length == 0 ? "none" : source)}; item format {Describe(localFormat)}.");
+        // SF11 (D087): other players can't tell this copy's format, so their YAVSOS treats this player's open chests as busy.
+        if (cause != null)
+            log.LogWarning($"{source}'s item format could not be read ({cause}). Other players whose YAVSOS uses its own MultiUserChest skip chests " +
+                "you have open (\"busy\") until you close them; everything else works.");
     }
 
     internal static bool Available(out string source)
@@ -115,19 +120,23 @@ internal static class MucRoute
     }
 
     // A capability check on the copy's item writer (D058): does it write ItemData.m_cheated? 0 when it cannot be read.
-    private static int WriterFormat(Type? helper)
+    // cause: why the result is 0, for the log (SF11); null otherwise.
+    private static int WriterFormat(Type? helper, out string? cause)
     {
+        cause = null;
         try
         {
             var writer = helper == null ? null : AccessTools.DeclaredMethod(helper, "WriteItemToPackage");
             var cheated = AccessTools.DeclaredField(typeof(ItemDrop.ItemData), "m_cheated");
-            if (writer == null || cheated == null) return 0;
+            if (helper == null) { cause = "its InventoryHelper type not found"; return 0; }
+            if (writer == null) { cause = "InventoryHelper.WriteItemToPackage not found"; return 0; }
+            if (cheated == null) { cause = "the game has no ItemData.m_cheated"; return 0; }
             var instructions = PatchProcessor.ReadMethodBody(writer).ToList();
             var writes = instructions.Count(x => x.Key == OpCodes.Call || x.Key == OpCodes.Callvirt);
-            if (writes == 0) return 0;
+            if (writes == 0) { cause = "WriteItemToPackage writes nothing YAVSOS recognises"; return 0; }
             return instructions.Any(x => x.Key == OpCodes.Ldfld && Equals(x.Value, cheated)) ? 2 : 1;
         }
-        catch (Exception error) when (error is not OutOfMemoryException) { return 0; }
+        catch (Exception error) when (error is not OutOfMemoryException) { cause = "reading WriteItemToPackage failed: " + error.GetType().Name + ": " + error.Message; return 0; }
     }
 
     private static string Describe(int format) => format switch { 2 => "0.6.2 (with cheated flag)", 1 => "older (without cheated flag)", _ => "unknown" };

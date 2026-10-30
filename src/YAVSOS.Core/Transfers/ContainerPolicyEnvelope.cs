@@ -13,6 +13,9 @@ namespace YAVSOS.Core.Transfers;
 
 public enum ContainerPolicyReadState { Absent, Supported, Unsupported }
 
+/// <summary>Why an edit was refused as <see cref="TransferRefusal.UnsupportedCapability"/> (B4.7), so the player is told the real cause.</summary>
+public enum ChestRuleEditProblem { None, UnreadableRule, RevisionExhausted, UnknownCategory, TooLarge, Invalid }
+
 /// <summary>The original payload survives unsupported/unknown formats; parsing grants no edit authority.</summary>
 public sealed class ContainerPolicyRead
 {
@@ -176,14 +179,19 @@ public static class ContainerPolicyEnvelope
     /// removes it, as clearing does (D051): the updated payload is empty, so the chest is unruled for every reader.</summary>
     /// <param name="edit">Categories and exact items (D048); null clears every part of the rule, priority included (D086 D5).</param>
     public static TransferRefusal TryEdit(string currentPayload, string expectedPayload, ClassificationTaxonomy taxonomy,
-        ChestRuleEdit? edit, out string? updatedPayload)
+        ChestRuleEdit? edit, out string? updatedPayload) => TryEdit(currentPayload, expectedPayload, taxonomy, edit, out updatedPayload, out _);
+
+    /// <param name="problem">The cause when the result is <see cref="TransferRefusal.UnsupportedCapability"/>; otherwise None.</param>
+    public static TransferRefusal TryEdit(string currentPayload, string expectedPayload, ClassificationTaxonomy taxonomy,
+        ChestRuleEdit? edit, out string? updatedPayload, out ChestRuleEditProblem problem)
     {
-        updatedPayload = null;
+        updatedPayload = null; problem = ChestRuleEditProblem.None;
         if (!StringComparer.Ordinal.Equals(currentPayload, expectedPayload)) return TransferRefusal.PolicyChanged;
         var read = Read(currentPayload, taxonomy);
         // The owner may explicitly clear a rule this build cannot read; it is never edited or reinterpreted.
         if (edit == null) { updatedPayload = ""; return TransferRefusal.None; }
-        if (read.State == ContainerPolicyReadState.Unsupported || read.Revision == ulong.MaxValue) return TransferRefusal.UnsupportedCapability;
+        if (read.State == ContainerPolicyReadState.Unsupported) { problem = ChestRuleEditProblem.UnreadableRule; return TransferRefusal.UnsupportedCapability; }
+        if (read.Revision == ulong.MaxValue) { problem = ChestRuleEditProblem.RevisionExhausted; return TransferRefusal.UnsupportedCapability; }
         var previous = read.Rules;
         try
         {
@@ -198,7 +206,8 @@ public static class ContainerPolicyEnvelope
                 var kept = others.Where(x => x.Full != null).Select(x => x.Full!);
                 var keptPreserved = others.Where(x => x.Preserved != null).Select(x => x.Preserved!);
                 // Unknown category IDs the owner kept stay stored with the edited categories (D050).
-                foreach (var id in edit.Categories) taxonomy.Require(id);
+                foreach (var id in edit.Categories)
+                    if (!taxonomy.Categories.ContainsKey(id)) { problem = ChestRuleEditProblem.UnknownCategory; return TransferRefusal.UnsupportedCapability; }
                 var filters = edit.Filters.Select(x => new KeyValuePair<string, IEnumerable<string>>(x.Key, x.Value)).ToArray();
                 var edited = edit.Categories.Count + edit.UnknownCategories.Count == 0
                     ? filters.Length == 0 ? (null, null) : (new ClassificationFilterRule(taxonomy, Array.Empty<string>(), filters), null)
@@ -211,11 +220,16 @@ public static class ContainerPolicyEnvelope
                     edit.Priority ?? previous?.Priority ?? 0, overflow,
                     preserved: edited.Preserved == null ? keptPreserved : keptPreserved.Concat(new[] { edited.Preserved }));
             }
-            updatedPayload = Serialize(read.Revision + 1, rules);
+            try { updatedPayload = Serialize(read.Revision + 1, rules); }
+            catch (InvalidDataException) { problem = ChestRuleEditProblem.TooLarge; throw; }
             return TransferRefusal.None;
         }
         catch (Exception ex) when (ex is ArgumentException || ex is InvalidDataException)
-        { updatedPayload = null; return TransferRefusal.UnsupportedCapability; }
+        {
+            updatedPayload = null;
+            if (problem == ChestRuleEditProblem.None) problem = ChestRuleEditProblem.Invalid;
+            return TransferRefusal.UnsupportedCapability;
+        }
     }
     private static XElement Value(string name, string type, string value) => new(name, new XAttribute("type", type), value);
     // The framework's JSON/XML reader tolerates a missing final object delimiter.

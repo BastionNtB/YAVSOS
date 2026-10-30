@@ -24,6 +24,11 @@ internal sealed class OptionalIntegrations
     internal OptionalCapability Jotunn { get; }
     internal OptionalCapability EpicLoot { get; }
     internal OptionalCapability EpicLootSemantics { get; }
+    /// <summary>
+    /// SF5 (D087): adapters that failed during this capture (not at the probe, which <c>LoadedSourceHost.Report</c> covers),
+    /// or that skipped part of their input, with what is Unknown because of it. Filled as the capture runs.
+    /// </summary>
+    internal List<(OptionalCapability Capability, string Effect)> CaptureProblems { get; } = new();
     private OptionalIntegrations(OptionalCapability jotunnCapability, OptionalJotunnApi? api, OptionalCapability epicLoot,
         OptionalCapability semantics, OptionalEpicLootSemanticsApi? semanticApi)
     { Jotunn = jotunnCapability; jotunn = api; EpicLoot = epicLoot; EpicLootSemantics = semantics; this.semanticApi = semanticApi; }
@@ -113,6 +118,8 @@ internal sealed class OptionalIntegrations
         }
         Fresh();
         var capability = api?.CaptureCapability(Jotunn) ?? Jotunn;
+        if (Jotunn.Supported && !capability.Supported)
+            CaptureProblems.Add((capability, "Item origin is \"origin not known\" for items Jotunn mods add, and which mod's pieces use or creatures drop an item is unknown"));
         // A faulted adapter publishes no partial ownership; every dependent dimension stays Unknown.
         // Over-bound collections are passed through so the builder records the bound gap instead of truncating.
         var admitted = capability.Supported ? observations : new List<OptionalDefinitionObservation>();
@@ -126,6 +133,9 @@ internal sealed class OptionalIntegrations
         var claimed = new HashSet<string>(admitted.Where(x => x.Kind == OptionalDefinitionKind.ItemRegistration).Select(x => x.Item), StringComparer.Ordinal);
         var managed = new List<(string Item, string Owner)>();
         var managers = ItemOrigins.Managers(managed);
+        if (!managers.Supported || managers.Diagnostic.Contains("other shape"))
+            CaptureProblems.Add((managers, managers.Supported ? "Item origin is \"origin not known\" for the items of the mods listed as skipped"
+                : "Item origin is \"origin not known\" for items mods add through their own ItemManager copy"));
         // D086 B3.10: one slot per ItemManager copy that lists the item, so two copies claiming one prefab make only that
         // item ambiguous (its origin Unknown) instead of failing every ItemManager origin as a duplicate slot.
         var registrations = managed.Where(x => !claimed.Contains(x.Item) && catalog.Items.ContainsKey(x.Item))
@@ -137,6 +147,7 @@ internal sealed class OptionalIntegrations
         if (managers.Supported) claimed.UnionWith(registrations.Select(x => x.Item));
         Fresh();
         var baseGame = ItemOrigins.BaseGame(out var vanilla);
+        if (!baseGame.Supported) CaptureProblems.Add((baseGame, "Item origin \"Base game\" matches no item; base-game items are \"origin not known\""));
         var native = vanilla.Where(x => !claimed.Contains(x) && catalog.Items.ContainsKey(x))
             .Select(x => new OptionalDefinitionObservation(OptionalDefinitionKind.ItemRegistration, x, Core.Interface.RuleText.Vanilla, x)).ToList();
         yield return null;
@@ -195,6 +206,8 @@ internal sealed class OptionalIntegrations
         }
         fresh();
         var capability = api?.CaptureCapability(EpicLootSemantics) ?? EpicLootSemantics;
+        if (EpicLootSemantics.Supported && !capability.Supported)
+            CaptureProblems.Add((capability, "EpicLoot's own items (dust, shards, runestones, socket tools and materials, unidentified items) aren't recognised by their role, so they get only their general categories"));
         yield return new LoadedSourceFact(LoadedSourceFactKind.Coverage,
             "optional:" + OptionalEpicLootSemantics.Adapter + ":capability", detail: capability.Witness);
         if (!capability.Supported) yield break; // Discard all partial semantic evidence on any adapter fault.

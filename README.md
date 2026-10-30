@@ -119,7 +119,7 @@ they're sent to every player who joins.
 YAVSOS works in single-player, on a server, or just for you on a server that doesn't have it.
 If the server has YAVSOS installed, every player will need it as well. The server's categories and settings
 apply to everyone. If it's on client only stashing should work on its own, but stashing into busy
-chests requires the other player(s) to have either YAVSOS, AzuAutoStore, or MultiUserChest as well.
+chests requires the other player(s) to have YAVSOS as well.
 
 ## How it works
 
@@ -149,12 +149,12 @@ If you want more control:
 
 ### Status marks
 
-On the top right of the YAVSOS panel, you can find the status of integrations, if they are active or inactive, only if the companion mod is installed. Hover over each of the status icons in game to see explanations of exactly what's going on. Below is a general overview:
+On the top right of the YAVSOS panel, you can find the status of YAVSOS and its integrations (if the companion mod is installed). Hover over each of the status icons in game to see explanations of exactly what's going on. Below is a general overview:
 
-- Green means the integration is active.
-- Amber/yellow means a partial failure or there is something you might need to look at, such as AAS exclusions for a chest or categories for a mod not working.
-- Red X means a mod integration was disabled due to an automatic incompatibility check or functionality of YAVSOS is considered not working.
-- Grey dash means a setting has been disabled.
+- Green `✔` means everything is active.
+- Amber/yellow `!` means a partial failure or there is something you might need to look at, such as AAS exclusions for a chest or categories for a mod not working.
+- Red `𐄂` means a mod integration was disabled due to an automatic incompatibility check or functionality of YAVSOS is considered not working.
+- Grey `⁃` means a setting has been disabled.
 
 ![The marks at the top right with the AzuAutoStore mark's hover open, showing its amber caution, and the matching amber slots in the item grid.](assets/media/status-marks.png)
 
@@ -196,7 +196,9 @@ It finds items that are better placed in other chests (rule mismatch, higher pri
 ## Help and feedback
 
 Everything goes through **GitHub issues**: bugs, questions, ideas and requests.
-https://github.com/BastionNtB/YAVSOS/issues
+
+**[Open an issue on GitHub ›](https://github.com/BastionNtB/YAVSOS/issues/new/choose)** · [See existing issues](https://github.com/BastionNtB/YAVSOS/issues)
+
 ---
 
 ## Reference

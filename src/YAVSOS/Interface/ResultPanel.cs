@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using BepInEx.Logging;
 using UnityEngine;
 using UnityEngine.UI;
 using YAVSOS.Cleanup;
@@ -101,6 +103,9 @@ internal sealed class ResultPanel
 /// </summary>
 internal static class GridHover
 {
+    internal static ManualLogSource? Log;
+    private static readonly HashSet<string> Reported = new(StringComparer.Ordinal);
+
     internal static ItemDrop.ItemData? Item(InventoryGrid? grid)
     {
         if (!grid) return null;
@@ -109,6 +114,13 @@ internal static class GridHover
             var pointer = ZInput.pointerPosition;
             return grid!.GetItem(new Vector2i((int)pointer.x, (int)pointer.y));
         }
-        catch (Exception error) when (error is not OutOfMemoryException) { return null; }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            // SF8 (D087): runs every frame, so once per exception type.
+            if (Reported.Add(error.GetType().FullName ?? error.GetType().Name))
+                Log?.LogWarning($"Inventory slot lookup failed ({error.GetType().Name}: {error.Message}); the single-stack key and hover explanations don't work while it fails. " +
+                    "Another mod's inventory grid may cause this.");
+            return null;
+        }
     }
 }

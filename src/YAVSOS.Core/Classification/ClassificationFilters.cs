@@ -107,7 +107,8 @@ public static class ClassificationFilters
     public static string QualityValue(int quality) => quality >= 5 ? "5+" : Math.Max(1, quality).ToString(CultureInfo.InvariantCulture);
     /// <summary>
     /// Legacy "upgraded" filter values (before P6-21) as upgrade levels, for the editor to show and save: yes is level 2
-    /// and above, no is level 1. A rule not edited since keeps evaluating "upgraded" as before.
+    /// and above, no is level 1. A rule not edited since keeps its "upgraded" filter, which is yes only for an item a
+    /// recipe can upgrade at quality 2 or more (D086 D14, B3.6).
     /// </summary>
     public static IReadOnlyList<string> LevelsFor(IEnumerable<string> upgraded)
     {
@@ -269,7 +270,8 @@ public static class ClassificationFilters
     }
 
     /// <summary>
-    /// Current condition of one item instance (P6-07b), shaped for the matcher. Upgraded: quality 2 or more. Damaged:
+    /// Current condition of one item instance (P6-07b), shaped for the matcher. Upgraded: quality 2 or more on an item a
+    /// recipe can upgrade (D086 D14, B3.6: a quality-2 egg is not upgraded). Damaged:
     /// durability below the instance's maximum. An item without durability gets no damaged row (Unknown), so a
     /// "damaged: no" filter never collects materials. The adapter reads the numbers from the live item.
     /// </summary>
@@ -278,7 +280,7 @@ public static class ClassificationFilters
     public static IReadOnlyList<FacetEvidence> Condition(int quality, bool usesDurability, float durability, float maximumDurability, bool upgradable = false)
     {
         if (quality < 1) throw new ArgumentOutOfRangeException(nameof(quality));
-        var rows = new List<FacetEvidence> { new FacetEvidence("upgraded", quality >= 2 ? "yes" : "no", "instance", "Item quality."),
+        var rows = new List<FacetEvidence> { new FacetEvidence("upgraded", upgradable && quality >= 2 ? "yes" : "no", "instance", "Item quality."),
             new FacetEvidence("upgradable", upgradable ? "yes" : "no", "instance", "A recipe upgrades the item.") };
         if (upgradable) rows.Add(new FacetEvidence("quality", QualityValue(quality), "instance", "Upgrade level."));
         if (usesDurability && Finite(durability) && Finite(maximumDurability) && maximumDurability > 0)

@@ -21,7 +21,7 @@ internal static class ItemTooltips
     private static readonly Dictionary<string, string> Lines = new(StringComparer.Ordinal);
     private static long generation = long.MinValue;
     private static object? taxonomy;
-    private static bool failed, portalsMatter = true;
+    private static bool failed, whereFailed, portalsMatter = true;
     internal static ManualLogSource? Log;
 
     [HarmonyPostfix, HarmonyPriority(Priority.Low)]
@@ -34,12 +34,18 @@ internal static class ItemTooltips
             try { __result += Line(plugin, item); }
             catch (Exception error) when (OptionalFailure.Recoverable(error))
             {
-                failed = true;
+                failed = true; DisplayFaults.Add(DisplayFaults.Categories);
                 Log?.LogWarning("Item category tooltips turned off: " + error.GetType().Name + ": " + error.Message);
             }
         // P6-23: where the stack would go, only in the inventory screen's own slot tooltip (see WhereTooltip).
-        if (ReferenceEquals(item, WhereTooltip.Item) && plugin.RuleEditor?.TooltipLine(item) is { Length: > 0 } where)
-            __result += "\n\n" + where;
+        // B1.18: guarded on its own, so a fault turns off only this line and never reaches the game's tooltip.
+        if (!whereFailed && ReferenceEquals(item, WhereTooltip.Item))
+            try { if (plugin.RuleEditor?.TooltipLine(item) is { Length: > 0 } where) __result += "\n\n" + where; }
+            catch (Exception error) when (OptionalFailure.Recoverable(error))
+            {
+                whereFailed = true; DisplayFaults.Add(DisplayFaults.Where);
+                Log?.LogWarning("\"Where would it go?\" tooltip line turned off: " + error.GetType().Name + ": " + error.Message);
+            }
     }
 
     private static string Line(Plugin plugin, ItemDrop.ItemData item)
@@ -82,7 +88,18 @@ internal static class WhereTooltip
     private static System.Reflection.MethodBase? TargetMethod() =>
         AccessTools.DeclaredMethod(typeof(InventoryGrid), "CreateItemTooltip", new[] { typeof(ItemDrop.ItemData), typeof(UITooltip) });
 
-    private static bool Prepare() => TargetMethod() != null;
+    private static bool Prepare()
+    {
+        if (TargetMethod() != null) return true;
+        // SF9 (D087): Harmony skips a patch whose Prepare says no without an error, so say here that the line is off.
+        if (!missingReported)
+        {
+            missingReported = true; DisplayFaults.Add(DisplayFaults.Where);
+            ItemTooltips.Log?.LogWarning("\"Where would it go?\" in item tooltips turned off: InventoryGrid.CreateItemTooltip(ItemData, UITooltip) not found. Stashing and the rule panel keep working.");
+        }
+        return false;
+    }
+    private static bool missingReported;
 
     // First: EpicLoot's prefix (2026-10-23, priority 400) builds the tooltip text itself, so the stack must be marked
     // before any other prefix runs. Marking changes nothing for the other mods.

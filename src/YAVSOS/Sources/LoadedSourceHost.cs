@@ -92,6 +92,7 @@ internal sealed class LoadedSourceHost : IDisposable
             foreach (var gap in receipt.Coverage)
                 if (gap.EndsWith("; skipped", StringComparison.Ordinal) && malformedReported.Add(gap))
                     log.LogWarning("Loaded sources: " + gap + ". Only this evidence is missing; report it to the mod that adds the item.");
+            ReportCapture(optional);
         }
         else if (reported == LoadedSourceState.Failed) log.LogWarning("Fresh loaded sources rejected: " + cache.Diagnostic);
     }
@@ -139,6 +140,17 @@ internal sealed class LoadedSourceHost : IDisposable
         foreach (var capability in off)
             log.LogWarning($"{capability.Adapter} turned off for version {capability.ObservedVersion}: its code differs from what YAVSOS checked " +
                            $"({capability.Diagnostic}). The rest of YAVSOS keeps working.");
+    }
+
+    // SF5 (D087): an adapter that failed during the capture leaves its filters Unknown; said once per distinct answer.
+    private readonly HashSet<string> captureReported = new(StringComparer.Ordinal);
+    private void ReportCapture(OptionalIntegrations? found)
+    {
+        if (found == null) return;
+        foreach (var (capability, effect) in found.CaptureProblems)
+            if (captureReported.Add(capability.Witness))
+                log.LogWarning($"Loaded sources: {capability.Adapter} {(capability.Supported ? "skipped part of its input" : "failed while reading")} " +
+                               $"({capability.Diagnostic}). {effect}. Everything else keeps working; it is read again when mods or settings change.");
     }
 
     /// <summary>

@@ -40,19 +40,38 @@ public sealed class CleanupReport
     public int ChestsInRange { get; private set; }
     public int ChestsHandled { get; private set; }
 
-    public void Remain(CleanupReason reason, string? item = null)
-    { remaining[reason] = Count(reason) + 1; Name(ResultKind.Remaining, (int)reason, item, 1); }
+    /// <param name="excludedFrom">For <see cref="CleanupReason.AzuExcluded"/>: the chest type Azu's config excludes it from, as the
+    /// game names it ("Reinforced chest"), so the player knows which chest to replace (D086 D10).</param>
+    public void Remain(CleanupReason reason, string? item = null, string? excludedFrom = null)
+    {
+        remaining[reason] = Count(reason) + 1; Name(ResultKind.Remaining, (int)reason, item, 1);
+        if (reason == CleanupReason.AzuExcluded && !string.IsNullOrWhiteSpace(excludedFrom) && !excludedTypes.Contains(excludedFrom!))
+            if (excludedTypes.Count < MaximumExcludedTypes) excludedTypes.Add(excludedFrom!); else excludedTypesMore = true;
+    }
+    public const int MaximumExcludedTypes = 3;
+    private readonly List<string> excludedTypes = new();
+    private bool excludedTypesMore;
+    public IReadOnlyList<string> ExcludedChestTypes => excludedTypes;
+
+    // Describe with this run's detail: the chest types behind AzuExcluded (D086 D10).
+    private string DescribeRun(CleanupReason reason) =>
+        reason != CleanupReason.AzuExcluded || excludedTypes.Count == 0 ? Describe(reason)
+        : "AzuAutoStore's config excludes it from " + string.Join(", ", excludedTypes.Select(x => ResultSummary.Bound(x, 40))) + (excludedTypesMore ? " and others" : "");
     public void Refuse(TransferRefusal reason, string? item = null)
     {
         if (reason == TransferRefusal.None || reason == TransferRefusal.Unconfirmed) throw new ArgumentException("Not a refusal.", nameof(reason));
         refused[reason] = Count(reason) + 1; Name(ResultKind.Refused, (int)reason, item, 1);
     }
-    public void Moved(int units, bool viaMuc = false, string? item = null)
+    /// <param name="stack">The source stack's handle (B4.3): a stack split across several chests counts once. Null counts each call.</param>
+    public void Moved(int units, bool viaMuc = false, string? item = null, Guid? stack = null)
     {
         if (units < 1) throw new ArgumentOutOfRangeException(nameof(units));
-        MovedStacks++; MovedUnits += units; if (viaMuc) MucMovedStacks++;
+        MovedUnits += units;
+        if (stack == null || movedStacks.Add(stack.Value)) MovedStacks++;
+        if (viaMuc && (stack == null || mucMovedStacks.Add(stack.Value))) MucMovedStacks++;
         Name(ResultKind.Moved, 0, item, units);
     }
+    private readonly HashSet<Guid> movedStacks = new(), mucMovedStacks = new();
     public void Unconfirm(bool viaMuc = false, string? item = null) { Unconfirmed++; if (viaMuc) MucUnconfirmed++; Name(ResultKind.Unconfirmed, 0, item, 1); }
 
     /// <summary>Distinct names kept per result line; further ones only count (bounded memory per run).</summary>
@@ -96,7 +115,8 @@ public sealed class CleanupReport
         Add(ResultKind.Moved, 0, MovedStacks, $"{verb} {MovedStacks} stack{Plural(MovedStacks)} ({MovedUnits} item{Plural(MovedUnits)})" +
             (MucMovedStacks == 0 ? "" : $", {MucMovedStacks} via MultiUserChest"));
         foreach (var reason in Left.Concat(Skipped))
-            Add(ResultKind.Remaining, (int)reason, Count(reason), Count(reason) + " " + (Skipped.Contains(reason) ? "skipped" : left) + " (" + Describe(reason) + ")");
+            Add(ResultKind.Remaining, (int)reason, Count(reason), Count(reason) + " " + (Skipped.Contains(reason) ? "skipped" : left) + " (" + DescribeRun(reason) + ")");
+        Add(ResultKind.Remaining, (int)CleanupReason.ChestUnreadable, Count(CleanupReason.ChestUnreadable), Unreadable());
         foreach (var pair in refused.OrderBy(x => x.Key))
             Add(ResultKind.Refused, (int)pair.Key, pair.Value, pair.Value + " refused (" + Describe(pair.Key) + ")");
         Add(ResultKind.Unconfirmed, 0, Unconfirmed, Unconfirmed + " unconfirmed" + (MucUnconfirmed == 0 ? "" : $" ({MucUnconfirmed} via MultiUserChest)") +
@@ -111,7 +131,7 @@ public sealed class CleanupReport
         return string.IsNullOrWhiteSpace(shown) ? item : shown!;
     }
     private static readonly CleanupReason[] Left = { CleanupReason.NoCapacity, CleanupReason.NoDestination, CleanupReason.AzuExcluded,
-        CleanupReason.Held, CleanupReason.Unsupported, CleanupReason.MucBusy, CleanupReason.Budget, CleanupReason.ChestLimit, CleanupReason.CategoriesPending };
+        CleanupReason.Held, CleanupReason.Unsupported, CleanupReason.MucBusy, CleanupReason.Budget, CleanupReason.ChestLimit, CleanupReason.CategoriesPending, CleanupReason.OptedOut };
     private static readonly CleanupReason[] Skipped = { CleanupReason.OtherOwnerNoMuc, CleanupReason.BothRemote, CleanupReason.OtherOwnerFormatUnknown };
 
     /// <summary>
@@ -126,11 +146,12 @@ public sealed class CleanupReport
             (MucMovedStacks == 0 ? "" : $", {MucMovedStacks} via MultiUserChest")
         };
         var left = new[] { CleanupReason.NoCapacity, CleanupReason.NoDestination, CleanupReason.AzuExcluded, CleanupReason.Held,
-            CleanupReason.Unsupported, CleanupReason.MucBusy, CleanupReason.Budget, CleanupReason.ChestLimit, CleanupReason.CategoriesPending };
-        var leftParts = left.Where(x => Count(x) != 0).Select(x => Count(x) + " " + Describe(x)).ToList();
+            CleanupReason.Unsupported, CleanupReason.MucBusy, CleanupReason.Budget, CleanupReason.ChestLimit, CleanupReason.CategoriesPending, CleanupReason.OptedOut };
+        var leftParts = left.Where(x => Count(x) != 0).Select(x => Count(x) + " " + DescribeRun(x)).ToList();
         if (leftParts.Count != 0) parts.Add(LeftTotal(left) + " " + this.left + " (" + string.Join(", ", leftParts) + ")");
         var skipped = new[] { CleanupReason.OtherOwnerNoMuc, CleanupReason.BothRemote, CleanupReason.OtherOwnerFormatUnknown };
         foreach (var reason in skipped.Where(x => Count(x) != 0)) parts.Add(Count(reason) + " skipped (" + Describe(reason) + ")");
+        if (Count(CleanupReason.ChestUnreadable) != 0) parts.Add(Unreadable());
         if (Refused != 0)
             parts.Add(Refused + " refused (" + string.Join(", ", refused.OrderBy(x => x.Key).Select(x => x.Value + " " + Describe(x.Key))) + ")");
         if (Unconfirmed != 0)
@@ -141,6 +162,9 @@ public sealed class CleanupReport
     }
 
     private int LeftTotal(IEnumerable<CleanupReason> reasons) => reasons.Sum(Count);
+    // SF3 (batch C): chests, not stacks, so they get their own part instead of "left in your inventory (protected)".
+    private string Unreadable() =>
+        $"{Count(CleanupReason.ChestUnreadable)} nearby chest{Plural(Count(CleanupReason.ChestUnreadable))} " + Describe(CleanupReason.ChestUnreadable);
     private static string Plural(int count) => count == 1 ? "" : "s";
 
     public static string Describe(CleanupReason reason) => reason switch
@@ -157,6 +181,8 @@ public sealed class CleanupReport
         CleanupReason.BothRemote => "both chests are other players'",
         CleanupReason.OtherOwnerFormatUnknown => "another player's chest, their MultiUserChest format is unknown",
         CleanupReason.CategoriesPending => "waiting for categories to load, run again shortly",
+        CleanupReason.OptedOut => "its chest was set to be left alone",
+        CleanupReason.ChestUnreadable => "couldn't be read (see the log)",
         _ => reason.ToString()
     };
 

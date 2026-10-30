@@ -58,6 +58,7 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
 
     protected abstract float PollSeconds { get; }
     protected abstract string Prefab(TMove move);
+    protected abstract Guid Stack(TMove move);
     protected abstract CleanupRoute Route(TMove move);
     /// <summary>
     /// D093: this move conflicts with a pending MultiUserChest request, so it is set aside until that request ends; the
@@ -72,6 +73,8 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
     protected abstract bool PendingCurrent(TRun run, MovePending<TMove> pending);
     protected abstract string MovedViaMuc(TMove move, DelegatedMoveObserver observer);
     protected abstract void Log(TMove move, string text);
+    /// <summary>SF15 (D087): a failure's type and message for the move's log line.</summary>
+    protected static string Cause(Exception error) => error.GetType().Name + ": " + error.Message;
 
     internal void Update()
     {
@@ -111,7 +114,7 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
             if (current)
             {
                 try { counts = Observe(run, pending); }
-                catch (Exception error) when (error is not OutOfMemoryException) { current = false; Log(pending.Move, "observation failed: " + error.GetType().Name); }
+                catch (Exception error) when (error is not OutOfMemoryException) { current = false; Log(pending.Move, "observation failed: " + Cause(error)); }
             }
             if (pending.Observer.Observe(now, counts.Source, counts.Destination, counts.OtherDestination, current) == DelegatedMoveState.Pending) continue;
             run.Delegated.Remove(pending);
@@ -125,7 +128,7 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         switch (observer.State)
         {
             case DelegatedMoveState.Moved:
-                run.Report.Moved(observer.MovedUnits, viaMuc: true, Prefab(move));
+                run.Report.Moved(observer.MovedUnits, viaMuc: true, Prefab(move), Stack(move));
                 if (observer.MovedUnits < observer.Units) run.Report.Remain(CleanupReason.NoCapacity, Prefab(move));
                 log.LogInfo(MovedViaMuc(move, observer));
                 break;
@@ -167,8 +170,8 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         try { ExecuteChecked(run, move); }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            if (run.MayHaveWritten) { run.Report.Unconfirm(Route(move) != CleanupRoute.Direct, Prefab(move)); Log(move, "failed after the write (" + error.GetType().Name + "); result unconfirmed. Not corrected (D041)."); }
-            else { run.Report.Refuse(TransferRefusal.UnsupportedCapability, Prefab(move)); Log(move, "failed before any write: " + error.GetType().Name); }
+            if (run.MayHaveWritten) { run.Report.Unconfirm(Route(move) != CleanupRoute.Direct, Prefab(move)); Log(move, "failed after the write (" + Cause(error) + "); result unconfirmed. Not corrected (D041)."); }
+            else { run.Report.Refuse(TransferRefusal.UnsupportedCapability, Prefab(move)); Log(move, "failed before any write: " + Cause(error)); }
         }
     }
 
@@ -199,12 +202,13 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         catch (Exception error) when (error is not OutOfMemoryException)
         {
             operation.Refuse(TransferRefusal.InvariantFailed);
-            return DirectMoveResult.Unconfirmed("the game's move threw " + error.GetType().Name + "; result unconfirmed");
+            return DirectMoveResult.Unconfirmed("the game's move threw " + Cause(error) + "; result unconfirmed");
         }
         GameInventoryCapture after, afterDestination;
-        try { after = captureSource(); afterDestination = captureDestination(); }
+        var side = labels.Source; // SF15: which recapture failed, for the log only.
+        try { after = captureSource(); side = labels.Destination; afterDestination = captureDestination(); }
         catch (Exception error) when (error is not OutOfMemoryException)
-        { operation.Refuse(TransferRefusal.InvariantFailed); return DirectMoveResult.Unconfirmed("recapture failed: " + error.GetType().Name + "; result unconfirmed"); }
+        { operation.Refuse(TransferRefusal.InvariantFailed); return DirectMoveResult.Unconfirmed("recapture of the " + side + " failed: " + Cause(error) + "; result unconfirmed"); }
         var key = MoveVerification.MergeKey(before.Snapshot, handle, identity);
         var seen = MoveVerification.Observe(before.Snapshot, beforeDestination.Snapshot, after.Snapshot, afterDestination.Snapshot, key, plan.DestinationX, plan.DestinationY);
         var ownersCurrent = ownersBefore == owners() && ReferenceEquals(ZNet.instance, run.Session) && ownersLocal();
@@ -224,7 +228,7 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         switch (result.Outcome)
         {
             case DirectMoveOutcome.Moved:
-                run.Report.Moved(result.Units, item: Prefab(move));
+                run.Report.Moved(result.Units, item: Prefab(move), stack: Stack(move));
                 // D086 M4 (B2.6): the plan clamps to the room left at the write; what didn't fit is reported, as on the MultiUserChest path.
                 if (result.Units < result.Planned) run.Report.Remain(CleanupReason.NoCapacity, Prefab(move));
                 return true;

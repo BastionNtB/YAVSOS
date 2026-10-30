@@ -79,27 +79,57 @@ public static class PanelMarks
     }
 
     /// <summary>YAVSOS's own stashing, when AzuAutoStore is not installed (D061).</summary>
-    public static IntegrationMark Stashing(bool allowed, bool reader, string storeKey, string itemKey) => new IntegrationMark("Stashing", new[]
+    /// <param name="chests">SF2 (D087): the game's chest members could be bound; false means no chest can be read.</param>
+    public static IntegrationMark Stashing(bool allowed, bool reader, string storeKey, string itemKey, bool chests = true) => new IntegrationMark("Stashing", new[]
     {
-        !reader ? new MarkLine("stashing: your inventory can't be read exactly in this game version", MarkState.Broken)
+        !chests ? new MarkLine(ChestsUnbound("stashing"), MarkState.Broken)
+        : !reader ? new MarkLine("stashing: your inventory can't be read exactly in this game version", MarkState.Broken)
         : allowed ? new MarkLine($"{storeKey} stores nearby, {itemKey} on a stack stores it", MarkState.Working)
         : new MarkLine("stashing is turned off by the server setting Server.AllowStashing", MarkState.Off)
     });
 
     /// <summary>Clean up nearby: a mark only when it is turned off or cannot run, since it is YAVSOS's own.</summary>
-    public static IntegrationMark? Cleanup(bool allowed, bool reader) =>
-        !reader ? new IntegrationMark("Clean up", new[] { new MarkLine("clean up: chests can't be read exactly in this game version", MarkState.Broken) })
+    /// <param name="azuUnreadable">B4.22, D088: AzuAutoStore's exclusion list can't be read at all, so clean up refuses to run.</param>
+    /// <param name="chests">SF2 (D087): as for <see cref="Stashing"/>.</param>
+    public static IntegrationMark? Cleanup(bool allowed, bool reader, bool azuUnreadable = false, bool chests = true) =>
+        !chests ? new IntegrationMark("Clean up", new[] { new MarkLine(ChestsUnbound("clean up"), MarkState.Broken) })
+        : !reader ? new IntegrationMark("Clean up", new[] { new MarkLine("clean up: chests can't be read exactly in this game version", MarkState.Broken) })
         : !allowed ? new IntegrationMark("Clean up", new[] { new MarkLine("clean up is turned off by the server setting Server.AllowCleanup", MarkState.Off) })
+        : azuUnreadable ? new IntegrationMark("Clean up", new[] { new MarkLine(
+            "clean up is off: AzuAutoStore's exclusion list can't be read, so it can't tell which chests AzuAutoStore keeps items out of. See the AzuAutoStore line.", MarkState.Broken) })
         : null;
+
+    // SF2: the game's chest fields changed, so YAVSOS finds no chest it can use.
+    private static string ChestsUnbound(string feature) => feature + " is off: YAVSOS can't read chests in this game version (see the log)";
+
+    /// <summary>
+    /// SF4 (D087): display-only parts turned off after an error this session, named in the order they failed; null when
+    /// none is. Each also logged its own warning. Chest rules, stashing and clean up don't depend on them.
+    /// </summary>
+    public static IntegrationMark? Display(IEnumerable<string> off)
+    {
+        var parts = (off ?? throw new ArgumentNullException(nameof(off))).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal).ToList();
+        if (parts.Count == 0) return null;
+        var named = parts.Count == 1 ? parts[0] : string.Join(", ", parts.Take(parts.Count - 1)) + " and " + parts[parts.Count - 1];
+        return new IntegrationMark("Display", new[] { new MarkLine(
+            named + (parts.Count == 1 ? " is" : " are") + " off after an error (see the log); a game restart turns " + (parts.Count == 1 ? "it" : "them") +
+            " back on. Chest rules, stashing and clean up still work.", MarkState.Limited) });
+    }
 
     /// <summary>
     /// YAVSOS's categories: amber while they load (D101, in place of the panel's old banner), then ready, with whose
     /// settings apply. Answers only become ready once the server's settings are accepted, so there is no "out of sync"
     /// state to show.
     /// </summary>
-    /// <param name="gaveUp">D086 B5.36, D087: a stage gave up after its retries; the mark says so instead of "loading".</param>
-    public static IntegrationMark Categories(bool ready, int items, bool fromServer, bool gaveUp = false)
+    /// <param name="gaveUp">D086 B5.36, D087: a stage gave up after its retries; the mark says so instead of "loading". While the
+    /// previous answers are kept (D086 D7), it adds an amber line (B4.26).</param>
+    /// <param name="serverRejected">B4.9: the server's category settings were rejected, so categories can't load.</param>
+    public static IntegrationMark Categories(bool ready, int items, bool fromServer, bool gaveUp = false, bool serverRejected = false)
     {
+        if (!ready && serverRejected)
+            return new IntegrationMark("Categories", new[] { new MarkLine(
+                "the server's category settings could not be read, so category rules take nothing. Exact items (Always, Never) still work. The log says why; a server and game on different YAVSOS versions can cause this.",
+                MarkState.Broken) });
         if (!ready)
             return !gaveUp
                 ? new IntegrationMark("Categories", new[] { new MarkLine(
@@ -111,7 +141,9 @@ public static class PanelMarks
         {
             new MarkLine("ready: " + items.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + " items sorted", MarkState.Working),
             new MarkLine(fromServer ? "the server's category settings apply" : "this game's own category settings apply", MarkState.Working)
-        });
+        }.Concat(!gaveUp ? Array.Empty<MarkLine>() : new[] { new MarkLine(
+            "the last update gave up, so these are the categories from before the latest mod or settings change. The log says why; it tries again when mods or settings change.",
+            MarkState.Limited) }));
     }
 
     /// <summary>A server without YAVSOS (D044, D074 Q4): shown only then, since every other mode is the expected one.</summary>
@@ -130,18 +162,12 @@ public static class PanelMarks
         : new MarkLine("no working copy, so clean up and stashing skip chests another player has open", MarkState.Broken)
     });
 
-    /// <summary>
-    /// EpicLoot (P6-14): its rarity filter depends on YAVSOS reading it. <paramref name="recipesFailed"/> (D086 D1): the
-    /// compatibility that registers EpicLoot's own crafted items failed, so only those items may lack categories. Null when
-    /// not installed.
-    /// </summary>
-    public static IntegrationMark? EpicLoot(bool installed, bool reader, bool recipesFailed = false) => !installed ? null : new IntegrationMark("EpicLoot", new[]
+    /// <summary>EpicLoot (P6-14): its rarity filter depends on YAVSOS reading it. Null when not installed.</summary>
+    public static IntegrationMark? EpicLoot(bool installed, bool reader) => !installed ? null : new IntegrationMark("EpicLoot", new[]
     {
         reader ? new MarkLine("the rarity filter reads each item's rarity", MarkState.Working)
         : new MarkLine("rarity filter: EpicLoot changed in a way YAVSOS does not recognise. Everything else works.", MarkState.Broken)
-    }.Concat(!recipesFailed ? Array.Empty<MarkLine>() : new[] { new MarkLine(
-        "crafted items: EpicLoot changed how it adds its own crafted items (such as its belt and rings), so on a dedicated server those may have no category. Every other category works.",
-        MarkState.Limited) }));
+    });
 
     /// <summary>RossItemDrawers (D047): AzuAutoStore fills a drawer reserved for an item. Null when not installed.</summary>
     public static IntegrationMark? Drawers(bool installed, bool working, bool azu) => !installed ? null : new IntegrationMark("Item drawers", new[]

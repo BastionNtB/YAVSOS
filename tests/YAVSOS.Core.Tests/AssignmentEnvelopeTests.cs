@@ -39,9 +39,12 @@ public sealed class AssignmentEnvelopeTests
     public void Envelope_MalformedDeliveryWithdrawsReadinessAndRequiresNewerValidRecovery(string malformed)
     {
         var receiver = new AssignmentEnvelopeReceiver(); receiver.Receive(AssignmentEnvelope.Encode(Session, 5, "accepted"));
+        Assert.False(receiver.Rejected);
         Assert.True(receiver.Receive(malformed)); Assert.Empty(receiver.Payload); Assert.Contains("rejected", receiver.Diagnostic);
+        Assert.True(receiver.Rejected); // B4.8: the host logs it.
         Assert.False(receiver.Receive(AssignmentEnvelope.Encode(Session, 5, "replayed"))); Assert.Empty(receiver.Payload);
         Assert.True(receiver.Receive(AssignmentEnvelope.Encode(Session, 6, "recovered"))); Assert.Equal("recovered", receiver.Payload);
+        Assert.False(receiver.Rejected);
     }
     [Fact]
     public void Envelope_PayloadAndSequenceBoundsAcceptMaximumAndRejectAdjacentOverrun()

@@ -71,6 +71,9 @@ internal sealed class RuleControls
     {
         this.enabled = enabled; this.showResults = showResults; OffsetX = offsetX; OffsetY = offsetY; Cleanup = cleanup; this.stash = stash;
         this.results = results; Highlight = highlight; this.log = log;
+        // B1.17: without the game's open-chest field the panel can never open; say so once instead of staying silent.
+        if (CurrentContainer == null)
+            log.LogWarning("Chest rule panel turned off: the game's open-chest field (InventoryGui.m_currentContainer) could not be read. Chests open as usual without YAVSOS's panel.");
     }
 
     private static AccessTools.FieldRef<InventoryGui, Container>? Field()
@@ -87,8 +90,9 @@ internal sealed class RuleControls
         var lit = UiCost.Start();
         Highlight.Update(); // Runs on with the inventory closed, so the lit chests can be seen.
         UiCost.Stop("highlight frame", lit);
-        var open = enabled.Value && styled && plugin != null && CurrentContainer != null && gui && InventoryGui.IsVisible()
-            ? CurrentContainer(gui) : null;
+        var shown = plugin != null && CurrentContainer != null && gui && InventoryGui.IsVisible() ? CurrentContainer(gui) : null;
+        if (shown) Notice();
+        var open = enabled.Value && styled ? shown : null;
         if (!open)
         {
             var closed = Chest != null; Chest = null; pending = null; panel?.Hide();
@@ -97,10 +101,16 @@ internal sealed class RuleControls
             // D086 D12 (M23): with only the inventory open, a stack's tooltip still says where the stash key would send it.
             if (closed || explainOff || !enabled.Value || !styled || plugin == null || !gui || !InventoryGui.IsVisible()) Forget();
             else
-                try { Hover(gui!, inventoryOnly: true); Step(); }
+                try
+                {
+#if YAVSOS_LAB
+                    FaultLab.Raise("explanations"); // D088: lab-only display fault (SF4).
+#endif
+                    Hover(gui!, inventoryOnly: true); Step();
+                }
                 catch (Exception error) when (OptionalFailure.Recoverable(error))
                 {
-                    explainOff = true; Forget();
+                    explainOff = true; Forget(); DisplayFaults.Add(DisplayFaults.Where);
                     log.LogWarning($"Item explanations turned off after {error.GetType().Name}: {error.Message}; the rule panel keeps working.");
                 }
             return;
@@ -114,22 +124,59 @@ internal sealed class RuleControls
         if (!eligible) { panel?.Hide(); return; }
         if (!Styled(gui!)) return;
         if (!explainOff)
-            try { Hover(gui!); Step(); }
+            try
+            {
+#if YAVSOS_LAB
+                FaultLab.Raise("explanations"); // D088: lab-only display fault (SF4).
+#endif
+                Hover(gui!); Step();
+            }
             catch (Exception error) when (OptionalFailure.Recoverable(error))
             {
-                explainOff = true; Forget();
+                explainOff = true; Forget(); DisplayFaults.Add(DisplayFaults.Where);
                 log.LogWarning($"Item explanations turned off after {error.GetType().Name}: {error.Message}; the rule panel keeps working.");
             }
         if (!searchOff)
-            try { Searching(); Lighting(); }
+            try
+            {
+#if YAVSOS_LAB
+                FaultLab.Raise("search"); // D088: lab-only display fault (SF4).
+#endif
+                Searching(); Lighting();
+            }
             catch (Exception error) when (OptionalFailure.Recoverable(error))
             {
-                searchOff = true; Search = CategorySearchResult.None; SearchRevision++; rowHover = rowLit = "";
+                searchOff = true; DisplayFaults.Add(DisplayFaults.Search); Search = CategorySearchResult.None; SearchRevision++; rowHover = rowLit = "";
                 try { Highlight.Clear(); } catch (Exception again) when (OptionalFailure.Recoverable(again)) { }
                 log.LogWarning($"Category search turned off after {error.GetType().Name}: {error.Message}; the rule panel keeps working.");
             }
-        try { panel!.Show(); }
+        try
+        {
+#if YAVSOS_LAB
+            FaultLab.Raise("panel"); // D088: lab-only drawing fault (SF1).
+#endif
+            panel!.Show();
+        }
         catch (Exception error) when (OptionalFailure.Recoverable(error)) { TurnOff("drawing failed: " + error.GetType().Name + ": " + error.Message); }
+    }
+
+    // SF1, SF2 (D087): with the panel off, or no chest readable, the status marks can't show either, so the first chest
+    // opened says so once per session; the log has the cause.
+    private bool noticedChests, noticedPanel;
+    private void Notice()
+    {
+        if (!ChestRuleStore.Bound)
+        {
+            if (noticedChests) return;
+            noticedChests = true;
+            CleanupRunner.Say("Chests can't be read in this game version, so " + (StashRunner.Enabled ? "chest rules, stashing and cleanup are off"
+                : "chest rules and cleanup are off; AzuAutoStore keeps storing on its own") + " (see the log).", overInventory: true);
+        }
+        else if (!styled && enabled.Value && !noticedPanel)
+        {
+            noticedPanel = true;
+            CleanupRunner.Say("The chest rule panel is off (see the log); chest rules, stashing and cleanup still work.", overInventory: true);
+        }
     }
 
     // P6-04: the result panel, on Jotunn's overlay canvas, so it shows with or without the inventory screen.
@@ -187,7 +234,7 @@ internal sealed class RuleControls
 
     // The rule panel only; the result panel keeps working.
     // The first frames of the trace, so a one-time warning from the field names its cause.
-    private static string Where(Exception error) =>
+    internal static string Where(Exception error) =>
         " at " + string.Join(" < ", (error.StackTrace ?? "").Split('\n').Take(3).Select(x => x.Trim()));
 
     private void TurnOff(string reason)
@@ -206,7 +253,7 @@ internal sealed class RuleControls
         if (!resultStyled) return;
         resultStyled = false;
         try { resultPanel?.Destroy(); } catch (Exception error) when (OptionalFailure.Recoverable(error)) { }
-        resultPanel = null;
+        resultPanel = null; DisplayFaults.Add(DisplayFaults.Results);
         log.LogWarning("Result panel turned off; results still show as one line. " + reason);
     }
 
@@ -684,8 +731,8 @@ internal sealed class RuleControls
         if (shared == null) return false;
         switch (dimension)
         {
-            case "upgraded": return shared.m_maxQuality > 1;
-            case "upgradable": case "quality": return UpgradeRecipes.Can(prefab); // P6-21: a recipe upgrades it.
+            // B3.21: the stack fact "upgraded" needs an upgrade recipe since B3.6, as "upgradable" and "quality" do.
+            case "upgraded": case "upgradable": case "quality": return UpgradeRecipes.Can(prefab); // P6-21: a recipe upgrades it.
             case "damaged": return shared.m_useDurability;
             case "crafter": return Craftable().Contains(prefab);
             default: return false;
@@ -832,15 +879,17 @@ internal sealed class RuleControls
                 AzuExclusions.State == AzuExclusionState.Limited ? "AzuAutoStore changed how it checks exclusions, so clean up moves items only into chest types with no exclusions in its config."
                 : AzuExclusions.RecentErrors ? "reading its exclusion list failed in the last few minutes (" + AzuExclusions.Errors + " time" + (AzuExclusions.Errors == 1 ? "" : "s") +
                     " this session, see the log); each check is tried again, and meanwhile clean up moves items only into chest types with no exclusions in its config." : null),
-            azu == null ? PanelMarks.Stashing(settings.AllowStashing.Value, reader, settings.StashShortcut.Value.ToString(), settings.StashItemShortcut.Value.ToString()) : null,
-            PanelMarks.Cleanup(settings.AllowCleanup.Value, reader),
+            azu == null ? PanelMarks.Stashing(settings.AllowStashing.Value, reader, settings.StashShortcut.Value.ToString(), settings.StashItemShortcut.Value.ToString(),
+                ChestRuleStore.Bound) : null,
+            PanelMarks.Cleanup(settings.AllowCleanup.Value, reader, azu != null && AzuExclusions.State == AzuExclusionState.Unavailable, ChestRuleStore.Bound),
             PanelMarks.Server(plugin.ServerWithoutYavsos),
-            PanelMarks.Categories(plugin.ClassificationEvidenceReady, plugin.LoadedCatalog?.Items.Count ?? 0, plugin.PolicyFromServer, plugin.CategoriesGaveUp != null),
+            PanelMarks.Categories(plugin.ClassificationEvidenceReady, plugin.LoadedCatalog?.Items.Count ?? 0, plugin.PolicyFromServer, plugin.CategoriesGaveUp != null,
+                plugin.ServerPolicyRejected),
             PanelMarks.MultiUserChest(copy, muc),
-            PanelMarks.EpicLoot(epic != OptionalCapabilityState.Absent || plugin.EpicLootRegistration != EpicLootRegistrationState.Absent,
-                epic == OptionalCapabilityState.Supported, plugin.EpicLootRegistration == EpicLootRegistrationState.Failed),
+            PanelMarks.EpicLoot(epic != OptionalCapabilityState.Absent, epic == OptionalCapabilityState.Supported),
             PanelMarks.Drawers(Chainloader.PluginInfos.ContainsKey(RossItemDrawersIntegration.RossGuid), AzuAutoStoreIntegration.ReservedDrawerWants != null,
-                AzuAutoStoreIntegration.State == AzuIntegrationState.Active));
+                AzuAutoStoreIntegration.State == AzuIntegrationState.Active),
+            PanelMarks.Display(DisplayFaults.Off));
         return marks;
     }
 
@@ -898,7 +947,8 @@ internal sealed class RuleControls
         if (StringComparer.Ordinal.Equals(key, keptOutKey)) return;
         keptOutKey = key;
         var container = Chest; var observed = Observed; var taxonomy = plugin.RuleTaxonomy;
-        var found = StasherExclusionConflicts.Find(catalog.Items.Keys,
+        // F10: only the items the grid lists (with an icon), so creature attacks ("Lox bite") aren't counted or named.
+        var found = StasherExclusionConflicts.Find(catalog.Items.Keys.Where(prefab => GridIcon(prefab) != null),
             prefab => plugin.RuleEvaluator.Evaluate(observed, prefab, taxonomy, answers) == ChestRuleDecision.Accept,
             prefab => AzuExclusions.Allows(container, prefab) != false);
         keptOut = new HashSet<string>(found.Items, StringComparer.Ordinal);

@@ -43,6 +43,7 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
 
     protected override float PollSeconds => 0.25f;
     protected override string Prefab(StashMove move) => move.Identity.Prefab;
+    protected override Guid Stack(StashMove move) => move.Handle;
     protected override CleanupRoute Route(StashMove move) => move.Route;
     protected override string PolicyStamp(Run run) => run.Plan.PolicyStamp;
     // D093: one MultiUserChest request per chest in flight, and none of the same stack key (A02): a request that would share
@@ -111,6 +112,8 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         run.Plan = plan;
         foreach (var stack in input.Player.Stacks) run.Keys[stack.Handle] = stack.MergeKey;
         foreach (var rest in plan.Remainders) run.Report.Remain(rest.Reason, rest.Identity.Prefab);
+        // SF3 (D087): a chest that couldn't be read is reported as not supported, as cleanup does; the log names it.
+        for (var i = 0; i < unreadable; i++) run.Report.Remain(CleanupReason.ChestUnreadable);
         for (var i = 0; i < plan.SkippedChests; i++) run.Report.Remain(CleanupReason.ChestLimit);
         log.LogInfo($"Stash planned {plan.Moves.Count} moves into {input.Chests.Count} containers within {range:0.#} m in {run.Clock.Elapsed.TotalMilliseconds:0.0} ms" +
             (unreadable == 0 ? "" : $" ({unreadable} unreadable skipped)") +
@@ -134,7 +137,8 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
             failure = "Stashing is unavailable: your inventory could not be read exactly."; return null;
         }
         // D086 D16, D087: a stack that couldn't be captured stays where it is (reported as not supported); the log names it.
-        foreach (var skipped in own.Uncapturable) log.LogWarning("Stash leaves " + skipped + " in your inventory: YAVSOS can't move it without changing it.");
+        foreach (var skipped in own.Uncapturable)
+            if (CleanupRunner.LogLimit("player|" + skipped) is { } more) log.LogWarning("Stash leaves " + skipped + " in your inventory: YAVSOS can't move it without changing it." + more);
         var held = new List<Guid>(); var only = new List<Guid>();
         var drag = CleanupRunner.DragItem != null && InventoryGui.instance ? CleanupRunner.DragItem(InventoryGui.instance) : null;
         if (drag != null && run.Adapter.TryHandle(player.GetInventory(), drag, out var dragHandle)) held.Add(dragHandle);
@@ -164,14 +168,22 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         if (run.Chests.ContainsKey(id)) return true;
         try
         {
+#if YAVSOS_LAB
+            if (FaultLab.UnreadableChests) throw new InvalidOperationException("Lab: unreadable chest (D088, SF3)."); // D088: lab-only.
+#endif
             var capture = CleanupRunner.Capture(run.Adapter, container, id);
+            foreach (var skipped in capture.Uncapturable)
+                if (CleanupRunner.LogLimit(id + "|" + skipped) is { } more)
+                    log.LogInfo($"Stash: {skipped} in {CleanupRunner.Localize(container.m_name)} at {container.transform.position} can't be read exactly; it stays and holds its slot." + more);
             chests.Add(new StashChest(id, ChestRuleStore.Payload(container), capture.Snapshot, view.IsOwner(), MucRoute.OwnerFormatKnown(zdo.GetOwner())));
             run.Chests.Add(id, container);
             return true;
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            log.LogInfo($"Stash skipped container {container.m_name} at {container.transform.position}: {error.GetType().Name}: {error.Message}");
+            if (CleanupRunner.LogLimit(id + "|" + error.GetType().Name) is { } more)
+                log.LogWarning($"Stash skipped container {CleanupRunner.Localize(container.m_name)} at {container.transform.position}: it could not be read " +
+                $"({error.GetType().Name}: {error.Message}); its items stay and it takes nothing this run." + more);
             return false;
         }
     }
@@ -264,8 +276,9 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         if (refusal == TransferRefusal.PolicyChanged) { run.PolicyChanged = true; run.Report.Refuse(refusal, move.Identity.Prefab); return; }
         if (refusal != TransferRefusal.None) { run.Report.Refuse(refusal, move.Identity.Prefab); return; }
         GameInventoryCapture before, beforeDestination;
-        try { before = CapturePlayer(run, player!); beforeDestination = CleanupRunner.Capture(run.Adapter, destination!, move.DestinationId); }
-        catch (Exception error) when (error is not OutOfMemoryException) { run.Report.Refuse(TransferRefusal.UnsupportedCapability, move.Identity.Prefab); Log(move, "capture failed: " + error.GetType().Name); return; }
+        var side = "your inventory"; // SF15: which capture failed, for the log only.
+        try { before = CapturePlayer(run, player!); side = "the chest"; beforeDestination = CleanupRunner.Capture(run.Adapter, destination!, move.DestinationId); }
+        catch (Exception error) when (error is not OutOfMemoryException) { run.Report.Refuse(TransferRefusal.UnsupportedCapability, move.Identity.Prefab); Log(move, "capture of " + side + " failed: " + Cause(error)); return; }
         var source = player!.GetInventory(); var target = destination!.GetInventory();
         if (!run.Adapter.TryResolve(source, before.Snapshot.Stamp.InstanceGeneration, move.Handle, out var item) || item == null ||
             !before.Snapshot.Stacks.Any(x => x.Handle == move.Handle && x.Identity.Equals(move.Identity) && !x.Protected))
@@ -312,7 +325,7 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         // Cell (−1, −1): the owner picks a free slot; if MultiUserChest does not intercept, the game refuses the move.
         try { destination.GetInventory().MoveItemToThis(player.GetInventory(), item, units, -1, -1); }
         catch (Exception error) when (error is not OutOfMemoryException)
-        { run.Report.Unconfirm(viaMuc: true, move.Identity.Prefab); Log(move, "the MultiUserChest request threw " + error.GetType().Name + "; result unconfirmed"); return; }
+        { run.Report.Unconfirm(viaMuc: true, move.Identity.Prefab); Log(move, "the MultiUserChest request threw " + Cause(error) + "; result unconfirmed"); return; }
         // MultiUserChest takes the item out of the local inventory at once; if it did not, it never sent a request.
         if (StringComparer.Ordinal.Equals(CapturePlayer(run, player).Snapshot.ContentFingerprint, before.Snapshot.ContentFingerprint))
         { run.Report.Refuse(TransferRefusal.Busy, move.Identity.Prefab); Log(move, "MultiUserChest did not take the request"); return; }
@@ -360,7 +373,7 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         if (azu)
             return run.Adapter.Capture(inventory, PlayerId, zdo.GetOwner(), zdo.OwnerRevision, CleanupRunner.Registration,
                 AzuStoreOrder.Skips, Array.Empty<int>(), () => NativeInventoryProbe.Supported, keepUncapturable: true);
-        var quick = QuickSlots.Items(inventory);
+        var quick = QuickSlots.Items(inventory, log);
         var keepQuick = !settings.StashQuickSlots.Value;
         var cells = (settings.StashHotbar.Value ? Enumerable.Empty<int>() : Enumerable.Range(0, inventory.GetWidth()))
             .Concat(keepQuick ? quick.Cells : Enumerable.Empty<int>());
@@ -383,8 +396,9 @@ internal static class QuickSlots
     private const string Guid = "Azumatt.AzuExtendedPlayerInventory";
     private static Func<List<ItemDrop.ItemData>>? read;
     private static bool bound;
+    private static readonly HashSet<string> Reported = new(StringComparer.Ordinal);
 
-    internal static (HashSet<ItemDrop.ItemData> Items, IEnumerable<int> Cells) Items(Inventory inventory)
+    internal static (HashSet<ItemDrop.ItemData> Items, IEnumerable<int> Cells) Items(Inventory inventory, ManualLogSource? log = null)
     {
         var none = (new HashSet<ItemDrop.ItemData>(), Enumerable.Empty<int>());
         if (!Chainloader.PluginInfos.ContainsKey(Guid)) return none;
@@ -397,8 +411,21 @@ internal static class QuickSlots
             if (method != null) read = (Func<List<ItemDrop.ItemData>>)Delegate.CreateDelegate(typeof(Func<List<ItemDrop.ItemData>>), method);
         }
         // D086 M3 (B2.7): a null list is no answer, so this read falls back as a missing API does.
-        try { if (read?.Invoke() is { } list) return (new HashSet<ItemDrop.ItemData>(list), Enumerable.Empty<int>()); }
-        catch (Exception error) when (error is not OutOfMemoryException) { read = null; }
+        string reason;
+        try
+        {
+            if (read?.Invoke() is { } list) return (new HashSet<ItemDrop.ItemData>(list), Enumerable.Empty<int>());
+            reason = read == null ? "API.GetQuickSlotsItems() not found or of another shape" : "API.GetQuickSlotsItems() returned no list";
+        }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        {
+            read = null;
+            var cause = error is System.Reflection.TargetInvocationException { InnerException: { } inner } ? inner : error;
+            reason = "API.GetQuickSlotsItems() threw " + cause.GetType().Name + ": " + cause.Message;
+        }
+        // SF12 (D087): the fallback is safe but changes what stashing takes, so say why, once per kind of cause.
+        if (Reported.Add(reason.Split(':')[0]))
+            log?.LogWarning("AzuExtendedPlayerInventory's quick slots could not be read (" + reason + "); stashing leaves every row below the fourth in place.");
         var width = inventory.GetWidth();
         return (new HashSet<ItemDrop.ItemData>(), Enumerable.Range(4 * width, Math.Max(0, inventory.GetHeight() - 4) * width));
     }
@@ -417,6 +444,10 @@ internal static class StashTriggers
         if (InventoryGui.IsVisible())
         {
             if (settings.StashItemShortcut.Value.IsDown() && Pointed() is { } item) runner.Start(single: item);
+            // F7 (DOCS-CODE-COMPARISON U2): the store key stores nothing with the inventory open; say so instead of nothing.
+            else if (settings.StashShortcut.Value.IsDown())
+                CleanupRunner.Say("Close the inventory to stash everything. " + (CleanupTriggers.StackKey(false, settings.StashItemShortcut) is { Length: > 0 } key
+                    ? key + " on a stack stashes just that stack." : "The stack key stashes just the stack under the mouse."), overInventory: true);
             return;
         }
         if (settings.StashShortcut.Value.IsDown()) runner.Start();

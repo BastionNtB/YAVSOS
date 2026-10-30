@@ -12,8 +12,8 @@ namespace YAVSOS.Transfers;
 /// durability, crafter, world level, flags and custom data, saves it, validates the bytes with
 /// <see cref="NativeTransferInventoryCodec"/>, loads them into a second inventory and requires every identity, cell and
 /// the re-saved bytes to match exactly. Custom data another mod adds on load is allowed when everything of ours survives
-/// unchanged and a second round trip is byte-identical. On failure only the features that capture inventories (cleanup)
-/// are disabled.
+/// unchanged and a second round trip is byte-identical. On failure only the features that capture inventories (YAVSOS's
+/// own stash and cleanup) are disabled (B4.6).
 /// Instance metadata of real items, including EpicLoot data, is still round-tripped per item at every capture.
 /// Unity game thread only; touches no world inventory.
 /// </summary>
@@ -44,7 +44,7 @@ internal static class NativeInventoryProbe
         catch (Exception error) when (error is not (OutOfMemoryException or StackOverflowException))
         {
             Supported = false;
-            Status = "inventory reader unavailable (" + error.GetType().Name + ": " + error.Message + "); cleanup is disabled, everything else works";
+            Status = "inventory reader unavailable (" + error.GetType().Name + ": " + error.Message + "); YAVSOS's own stash and clean up are disabled, everything else works";
             warning(Status);
         }
         return true;

@@ -34,6 +34,8 @@ public sealed class PolicyLifecycle
     public bool PolicyReady => Mode != PolicyMode.Offline && Mode != PolicyMode.AwaitingServer && Effective != null
         && (Mode != PolicyMode.ManagedClient || remoteAccepted);
     public bool CanAutomate => PolicyReady && catalogReady;
+    /// <summary>B4.9: the server's policy arrived but was rejected, so no server policy applies (the mode is already managed).</summary>
+    public bool RemoteRejected => Mode == PolicyMode.ManagedClient && !remoteAccepted;
 
     public void BeginSession(PolicyMode mode)
     {

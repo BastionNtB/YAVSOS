@@ -1,7 +1,4 @@
 using System;
-using System.IO;
-using System.Linq;
-using BepInEx;
 using BepInEx.Bootstrap;
 using YAVSOS.Integrations;
 
@@ -9,35 +6,23 @@ namespace YAVSOS.Transfers;
 
 /// <summary>
 /// D088 (Q10): lab-only faults for runtime checks of failure paths a normal game can't produce (P8-09). Built only into
-/// the Lab configuration (D077 B09); the release DLL has no fault hooks. Runtime faults are called through the test
-/// bridge's debug/call_method. Startup faults are read once, at plugin start, from the file
-/// <c>BepInEx/config/com.bastionntb.yavsos.lab-faults</c>: one fault name per line (<c>epicloot-shim</c>).
+/// the Lab configuration (D077 B09); the release DLL has no fault hooks. Faults are called through the test bridge's
+/// debug/call_method.
 /// </summary>
 internal static class FaultLab
 {
-    internal const string StartupFile = "com.bastionntb.yavsos.lab-faults";
-    /// <summary>Startup: the EpicLoot recipe shim reports a failed install (D086 D1).</summary>
-    internal static bool EpicLootShim { get; private set; }
     /// <summary>Stacks of this prefab fail capture (D086 D16): the registration reads as unverified.</summary>
     internal static string Uncapturable { get; private set; } = "";
     /// <summary>A lower chest limit for the runners (D086 D9); 0 keeps the real one.</summary>
     internal static int ChestLimit { get; private set; }
-
-    internal static void LoadStartupFaults(Action<string> log)
-    {
-        try
-        {
-            var path = Path.Combine(Paths.ConfigPath, StartupFile);
-            if (!File.Exists(path)) return;
-            var faults = File.ReadAllLines(path).Select(x => x.Trim()).Where(x => x.Length != 0 && !x.StartsWith("#", StringComparison.Ordinal)).ToArray();
-            EpicLootShim = faults.Contains("epicloot-shim");
-            log("Lab faults at startup: " + (faults.Length == 0 ? "none" : string.Join(", ", faults)));
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { log("Lab faults file unreadable: " + error.Message); }
-    }
+    /// <summary>SF3: every chest the stash gathers fails to be read.</summary>
+    internal static bool UnreadableChests { get; private set; }
+    // SF1, SF4: the one-shot fault armed for the next frame that reaches that part ("panel", "explanations", "search").
+    private static string armed = "";
 
     public static string Status() =>
-        $"epiclootShim={EpicLootShim}; registration={Plugin.Instance?.EpicLootRegistration}; uncapturable={Uncapturable}; chestLimit={ChestLimit}; " +
+        $"uncapturable={Uncapturable}; chestLimit={ChestLimit}; armed={armed}; chestsUnbound={ChestRuleStore.LabUnbound}; unreadableChests={UnreadableChests}; " +
+        $"display={string.Join(",", Interface.DisplayFaults.Off)}; " +
         $"azuExclusions={AzuExclusions.State}; azuErrors={AzuExclusions.Errors}; azuPause={AzuExclusions.PauseState}; " +
         $"categoriesGaveUp={Plugin.Instance?.CategoriesGaveUp ?? "-"}";
 
@@ -46,6 +31,34 @@ internal static class FaultLab
 
     /// <summary>D086 D9: the runners handle at most <paramref name="chests"/> chests (0: the real 256).</summary>
     public static string SetChestLimit(int chests) { ChestLimit = Math.Max(0, chests); return "chestLimit=" + ChestLimit; }
+
+    /// <summary>
+    /// D087 silent-failure checks (SF1-SF4). One-shot: <c>panel</c> (the rule panel's drawing throws once, SF1),
+    /// <c>explanations</c> or <c>search</c> (that display part throws once, SF4). Until <c>none</c>: <c>chests</c> (every
+    /// chest reads as if Container.m_nview/CheckAccess were not bound, SF2), <c>unreadable</c> (every chest the stash
+    /// gathers fails to be read, SF3). A part turned off by a one-shot fault stays off until the game restarts, as in a
+    /// real failure.
+    /// </summary>
+    public static string Fault(string name)
+    {
+        switch (name)
+        {
+            case "panel": case "explanations": case "search": armed = name; break;
+            case "chests": ChestRuleStore.LabUnbound = true; break;
+            case "unreadable": UnreadableChests = true; break;
+            case "none": armed = ""; ChestRuleStore.LabUnbound = false; UnreadableChests = false; break;
+            default: return "unknown fault: " + name;
+        }
+        return Status();
+    }
+
+    /// <summary>Throws once where <paramref name="part"/>'s fault is armed (<see cref="Fault"/>).</summary>
+    internal static void Raise(string part)
+    {
+        if (armed != part) return;
+        armed = "";
+        throw new InvalidOperationException("Lab fault: " + part + " (D088)");
+    }
 
     /// <summary>
     /// D086 D2, M7, D088: <c>throw</c> (each check throws, retried), <c>limited</c> (Azu's check has another shape),

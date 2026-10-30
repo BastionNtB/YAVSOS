@@ -48,7 +48,6 @@ public sealed class Plugin : BaseUnityPlugin
     private ClassificationHost classification = null!;
     private LoadedSourceHost sources = null!;
     private AssignmentHost assignments = null!;
-    private OptionalEpicLootRegistrationHost? epicLootRegistration;
     private readonly ClassificationTaxonomy defaultTaxonomy = DefaultClassificationTaxonomy.Create();
     private CategoryPolicy? taxonomyPolicy;
     private ClassificationTaxonomy? policyTaxonomy;
@@ -96,11 +95,20 @@ public sealed class Plugin : BaseUnityPlugin
         publishSettings = () => broadcastSettings(0, sharedEntries);
         Instance = this;
         harmony = new Harmony(ProjectIdentity.Guid + ".policy-lifecycle");
-        harmony.PatchAll(typeof(NetPolicyPatches));
-        harmony.PatchAll(typeof(ServerPolicyRpcGuard));
-        harmony.PatchAll(typeof(ServerPolicyRoutedGuard));
-        harmony.PatchAll(typeof(ServerSettingsAcceptedPatch));
-        harmony.PatchAll(typeof(LocalSharedSettingsSavePatch));
+        // B1.19 (M8): the core session and settings hooks have no fallback, so if one can't attach YAVSOS turns off as a
+        // whole, says so once and leaves nothing half-patched, instead of running without its views and integrations.
+        foreach (var core in new[] { typeof(NetPolicyPatches), typeof(ServerPolicyRpcGuard), typeof(ServerPolicyRoutedGuard),
+                     typeof(ServerSettingsAcceptedPatch), typeof(LocalSharedSettingsSavePatch) })
+        {
+            try { harmony.PatchAll(core); }
+            catch (Exception error)
+            {
+                harmony.UnpatchSelf(); Instance = null; enabled = false;
+                Logger.LogError($"YAVSOS is off: its core hook {core.Name} could not attach to the game ({error.GetType().Name}: {error.Message}). " +
+                    "Chests and items work as without YAVSOS. Check for a YAVSOS update for this game version.");
+                return;
+            }
+        }
         // D086 B1.3: optional hooks turn off alone. Without the registry hook, the per-frame registry count check still
         // notices most item changes; without the console command, the key and button still clean up.
         PatchView(typeof(CatalogRegistryPatches), "Catalog refresh on ObjectDB.UpdateRegisters");
@@ -108,17 +116,16 @@ public sealed class Plugin : BaseUnityPlugin
         ContainerRegistry.Initialize(harmony, Logger);
         // Display-only patches (D058): a changed game method turns off that view alone.
         ChestLabels.Log = Logger;
-        PatchView(typeof(ChestLabels), "Chest labels");
+        PatchView(typeof(ChestLabels), "Chest labels", DisplayFaults.Labels);
         ItemTooltips.Log = Logger;
-        PatchView(typeof(ItemTooltips), "Item category tooltips");
-        PatchView(typeof(WhereTooltip), "\"Where would it go?\" in item tooltips");
+        PatchView(typeof(ItemTooltips), "Item category tooltips", DisplayFaults.Categories);
+        PatchView(typeof(WhereTooltip), "\"Where would it go?\" in item tooltips", DisplayFaults.Where);
+        GridHover.Log = Logger;
         // P6-21: the base game's item list, recorded before mods add theirs (Item origin "Vanilla"); off alone if it fails.
         PatchView(typeof(ItemOrigins), "Base-game item origin");
         PatchView(typeof(BaseGameCopy), "Base-game item origin (menu copy)");
-#if YAVSOS_LAB
-        FaultLab.LoadStartupFaults(Logger.LogWarning); // D088: lab-only startup faults.
-#endif
-        epicLootRegistration = new OptionalEpicLootRegistrationHost(InvalidateLoadedCatalog, Logger);
+        // SF2 (D087): no chest can be read; said here, since the AzuAutoStore check below runs only with it installed.
+        if (ChestRuleStore.BindingFailure.Length != 0) Logger.LogWarning(ChestRuleStore.BindingFailure);
         AzuAutoStoreIntegration.Initialize(Logger);
         RossItemDrawersIntegration.Initialize(Logger);
         Logger.LogInfo($"{ProjectIdentity.Name} {ProjectIdentity.Version} loaded. Policy synchronization enabled; chest rules: {AzuAutoStoreIntegration.Status}");
@@ -144,8 +151,7 @@ public sealed class Plugin : BaseUnityPlugin
     private void UpdateCore()
     {
         policy?.Update(Time.unscaledTime);
-        epicLootRegistration?.Update();
-        if (epicLootRegistration?.Pending != true) catalog?.Update();
+        catalog?.Update();
         sources?.Update(catalog?.Current);
         classification?.Update();
         assignments?.Update();
@@ -154,6 +160,8 @@ public sealed class Plugin : BaseUnityPlugin
         Cleanup?.Update();
         Stash?.Update();
         if (Cleanup != null && !Cleanup.Running && CleanupTriggers.Pressed(settings.CleanupShortcut)) Cleanup.Start();
+        else if (Cleanup != null && CleanupTriggers.PressedInInventory(settings.CleanupShortcut))
+            CleanupRunner.Say("Close the inventory to clean up, or use Clean up nearby in a chest's panel.", overInventory: true);
         else if (Stash != null && !Stash.Running) StashTriggers.Poll(settings, Stash);
         settingsBridge.Publish(IsManagedServer, ConfigSync.ProcessingServerUpdate,
             publishSettings);
@@ -161,10 +169,15 @@ public sealed class Plugin : BaseUnityPlugin
 
     // After the inventory screen's own Update, so the panel follows the chest window in the same frame.
     // Patches whose failure must turn off only their own feature (D058, D087: named in the log).
-    private void PatchView(Type patch, string name)
+    /// <param name="display">SF4: the display part the Display mark names when this patch fails; null for a non-display hook.</param>
+    private void PatchView(Type patch, string name, string? display = null)
     {
         try { harmony.PatchAll(patch); }
-        catch (Exception error) when (OptionalFailure.Recoverable(error)) { Logger.LogWarning(name + " turned off: " + error.GetType().Name + ": " + error.Message); }
+        catch (Exception error) when (OptionalFailure.Recoverable(error))
+        {
+            if (display != null) DisplayFaults.Add(display);
+            Logger.LogWarning(name + " turned off: " + error.GetType().Name + ": " + error.Message);
+        }
     }
 
     private void LateUpdate()
@@ -329,13 +342,15 @@ public sealed class Plugin : BaseUnityPlugin
     internal bool EpicLootRarityOffered => sources?.EpicLootRarityOffered == true;
     /// <summary>D071 status mark: EpicLoot's verified reader, or Absent before sources are captured.</summary>
     internal OptionalCapabilityState EpicLootState => sources?.EpicLootState ?? OptionalCapabilityState.Absent;
-    /// <summary>D086 D1 status mark: the EpicLoot recipe shim, which is off by itself when it fails.</summary>
-    internal EpicLootRegistrationState EpicLootRegistration => epicLootRegistration?.State ?? EpicLootRegistrationState.Absent;
     /// <summary>D086 B5.36, D087: a category stage that gave up for its current inputs, shown in the status; null otherwise.</summary>
     /// A managed client's own classification is not used (the server's answers are), so its failure is not shown (B4.24).
-    internal string? CategoriesGaveUp => catalog?.GaveUp ?? sources?.GaveUp ?? (PolicyFromServer ? null : classification?.GaveUp);
-    /// <summary>D071 status mark: the categories follow the server's settings (a client of a managed server).</summary>
-    internal bool PolicyFromServer => policy.State.Mode == PolicyMode.ManagedClient;
+    /// B4.26: on a managed client the sources feed only that unused classification, so their failure isn't shown either.
+    internal string? CategoriesGaveUp => catalog?.GaveUp ?? (ManagedClient ? null : sources?.GaveUp ?? classification?.GaveUp);
+    /// <summary>A client of a managed server: the server's settings are announced (accepted or not).</summary>
+    internal bool ManagedClient => policy.State.Mode == PolicyMode.ManagedClient;
+    /// <summary>D071 status mark, B4.9: the server's category settings apply: managed and accepted, not merely announced.</summary>
+    internal bool PolicyFromServer => ManagedClient && policy.State.PolicyReady;
+    internal bool ServerPolicyRejected => policy.State.RemoteRejected;
     internal int CategoryMemberCount(string category) => assignments?.CategoryMemberCount(category) ?? 0;
     internal bool CategoriesRebuilding => assignments?.CategoriesRebuilding == true;
     // Chest rules parse against the effective policy's category set, or the default set before the policy
@@ -378,7 +393,6 @@ public sealed class Plugin : BaseUnityPlugin
     private void OnDestroy()
     {
         Instance = null;
-        epicLootRegistration?.Dispose();
         policy?.Dispose();
         catalog?.Dispose();
         classification?.Dispose();

@@ -53,7 +53,8 @@ internal sealed class ClassificationHost : IDisposable
         var catalog = getCatalog();
         if (!ReferenceEquals(catalog, lastCatalog)) { lastCatalog = catalog; sources = null; }
         if (getSources != null) sources = getSources();
-        if (!policy.PolicyReady || catalog == null || requireSources && sources == null)
+        // D086 D14 (B5.6): a managed client uses the server's answers, so it doesn't build a classification it would discard.
+        if (!policy.PolicyReady || policy.Mode == PolicyMode.ManagedClient || catalog == null || requireSources && sources == null)
         {
             cache.SetInputs(null, null); cache.Tick(); return;
         }

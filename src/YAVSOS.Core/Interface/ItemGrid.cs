@@ -125,7 +125,8 @@ public static class ItemGrid
     /// <summary>
     /// Whether the rule's categories and filters take the item as a kind of item. No category and no filter takes
     /// nothing; filters alone take every item that passes them. A filter read from each stack passes when the item can
-    /// have that fact (<paramref name="canHave"/>; without it, when the classifier says the dimension is per instance).
+    /// have that fact (<paramref name="canHave"/>; without it, when the classifier says the dimension is per instance), and
+    /// an item that can't passes only when "unknown" is ticked, as sorting does (D110, F11).
     /// </summary>
     public static bool Takes(ClassificationResult item, IReadOnlyCollection<string> categories, IReadOnlyDictionary<string, IReadOnlyList<string>> filters,
         Func<ClassificationResult, string, bool>? canHave = null)
@@ -144,7 +145,10 @@ public static class ItemGrid
             }
             if (ClassificationFilters.InstanceDimensions.Contains(filter.Key, StringComparer.Ordinal))
             {
-                if (!(canHave?.Invoke(item, filter.Key) ?? ClassificationFilters.IsInstanceDimension(item, filter.Key))) return false;
+                // D110 (F11): an item that can have the fact passes (some stack may match); one that can't passes only when
+                // "unknown" is ticked, as sorting does ("damaged = no" never shows Wood; "not crafted" shows it).
+                if (!(canHave?.Invoke(item, filter.Key) ?? ClassificationFilters.IsInstanceDimension(item, filter.Key)) &&
+                    !filter.Value.Contains("unknown", StringComparer.Ordinal)) return false;
                 continue;
             }
             var observed = false; var matched = false;

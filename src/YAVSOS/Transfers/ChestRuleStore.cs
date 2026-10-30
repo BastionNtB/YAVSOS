@@ -42,9 +42,25 @@ internal sealed class ChestRuleStore
                 throw new MissingMethodException(nameof(Container), "CheckAccess");
             CheckAccess = AccessTools.MethodDelegate<Func<Container, long, bool>>(access);
         }
-        catch (Exception ex) { ViewField = null; CheckAccess = null; BindingFailure = "Chest rules unavailable: " + ex.GetType().Name; }
+        // SF2 (D087): Plugin logs this at load whether or not AzuAutoStore is installed.
+        catch (Exception ex)
+        {
+            ViewField = null; CheckAccess = null;
+            BindingFailure = "Chest rules, stashing and cleanup are off: the game's Container.m_nview or Container.CheckAccess(long) could not be bound (" +
+                ex.GetType().Name + ": " + ex.Message + "). Chests work as without YAVSOS.";
+        }
     }
-    internal static ZNetView? View(Container container) => container && ViewField != null ? ViewField(container) : null;
+#if YAVSOS_LAB
+    /// <summary>D088: lab-only, every chest reads as if the bindings had failed (SF2).</summary>
+    internal static bool LabUnbound;
+#endif
+    /// <summary>SF2: the game's chest members are bound; false leaves every container ineligible.</summary>
+    internal static bool Bound => ViewField != null && CheckAccess != null
+#if YAVSOS_LAB
+        && !LabUnbound
+#endif
+        ;
+    internal static ZNetView? View(Container container) => container && Bound ? ViewField!(container) : null;
     private readonly Func<ClassificationTaxonomy> taxonomy;
     private readonly Func<bool> policyReady;
 
@@ -103,7 +119,7 @@ internal sealed class ChestRuleStore
     internal const string CleanupOptOutKey = "com.bastionntb.yavsos.cleanup-optout";
     internal static bool CleanupOptOut(Container container) => View(container)?.GetZDO()?.GetBool(CleanupOptOutKey, false) == true;
 
-    internal static bool HasAccess(Container container, Player player) => CheckAccess != null && CheckAccess(container, player.GetPlayerID()) &&
+    internal static bool HasAccess(Container container, Player player) => Bound && CheckAccess!(container, player.GetPlayerID()) &&
         (!container.m_checkGuardStone || PrivateArea.CheckAccess(container.transform.position, 0f, false, false));
 
     internal ChestRuleResult TrySetCleanupOptOut(Container container, bool optOut)
@@ -139,12 +155,19 @@ internal sealed class ChestRuleStore
             return new ChestRuleResult(TransferRefusal.AccessDenied, "You do not have access to this chest.");
         var current = zdo.GetString(ContainerPolicyEnvelope.ZdoKey, "");
         var currentTaxonomy = taxonomy();
-        var refusal = ContainerPolicyEnvelope.TryEdit(current, expectedPayload, currentTaxonomy, edit, out var updated);
+        var refusal = ContainerPolicyEnvelope.TryEdit(current, expectedPayload, currentTaxonomy, edit, out var updated, out var problem);
         if (refusal == TransferRefusal.PolicyChanged)
             return new ChestRuleResult(refusal, "The rule changed since you opened it. Reopen it and try again.", ContainerPolicyEnvelope.Read(current, currentTaxonomy));
         if (refusal != TransferRefusal.None)
-            return new ChestRuleResult(refusal, "This chest has a rule from a different YAVSOS version or category set; it was left unchanged.",
-                ContainerPolicyEnvelope.Read(current, currentTaxonomy));
+            return new ChestRuleResult(refusal, problem switch
+            {
+                // B4.7: each cause in its own words; only an unreadable rule is about another version or category set.
+                ChestRuleEditProblem.UnknownCategory => "A chosen category is no longer in this game's category set; reopen the chest and choose again. The rule was left unchanged.",
+                ChestRuleEditProblem.TooLarge => "The rule is too large to store (too many items or filters); it was left unchanged.",
+                ChestRuleEditProblem.RevisionExhausted => "This chest's rule can't be edited any more; clear it and set it again.",
+                ChestRuleEditProblem.Invalid => "The rule could not be stored (an invalid filter or value); it was left unchanged.",
+                _ => "This chest has a rule from a different YAVSOS version or category set; it was left unchanged."
+            }, ContainerPolicyEnvelope.Read(current, currentTaxonomy));
         zdo.Set(ContainerPolicyEnvelope.ZdoKey, updated!);
         var written = zdo.GetString(ContainerPolicyEnvelope.ZdoKey, "");
         if (!view.IsOwner() || !StringComparer.Ordinal.Equals(written, updated))

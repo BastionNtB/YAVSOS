@@ -4,14 +4,16 @@ using UnityEngine;
 namespace YAVSOS.Interface;
 
 /// <summary>
-/// Small shapes drawn once in code (check, cross, dash, disc), so the grid marks and the status marks (D071) need no
+/// Small shapes drawn once in code (check, bang, cross, dash, disc), so the grid marks and the status marks (D071) need no
 /// game or Jotunn sprite, and no glyph the game's font may lack. Unity game thread only.
 /// </summary>
 internal static class PanelArt
 {
     private const int Size = 32;
-    private static Sprite? check, cross, dash, disc;
+    private static Sprite? check, bang, cross, dash, disc;
     internal static Sprite Check => check ??= Lines((5, 16, 13, 7), (13, 7, 27, 25));
+    /// <summary>"!" (X49, D107–D109, D114): an amber status mark, Caution or Limited; a stroke above a dot (y counts upwards).</summary>
+    internal static Sprite Bang => bang ??= Lines((16, 13, 16, 27), (16, 6, 16, 6));
     internal static Sprite Cross => cross ??= Lines((6, 6, 26, 26), (6, 26, 26, 6));
     internal static Sprite Dash => dash ??= Lines((8, 16, 24, 16));
     /// <summary>A filled circle with a soft edge: the status marks' backing.</summary>

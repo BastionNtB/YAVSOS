@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Xunit;
 using YAVSOS.Core.Interface;
@@ -66,19 +67,24 @@ public sealed class Phase6PanelTests
         Assert.Equal(MarkState.Limited, loading.State); Assert.Contains("Exact items (Always, Never) already work", loading.Tooltip);
         var gave = PanelMarks.Categories(false, 0, false, gaveUp: true)!;
         Assert.Equal(MarkState.Broken, gave.State); Assert.Contains("Exact items (Always, Never) still work", gave.Tooltip);
-        Assert.Equal(MarkState.Working, PanelMarks.Categories(true, 5, false, gaveUp: true)!.State);
+        // B4.26: with the previous answers kept (D086 D7) a stage that gave up is amber, not hidden.
+        var kept = PanelMarks.Categories(true, 5, false, gaveUp: true)!;
+        Assert.Equal(MarkState.Limited, kept.State); Assert.Contains("categories from before the latest mod or settings change", kept.Tooltip);
+        Assert.Equal(MarkState.Working, PanelMarks.Categories(true, 5, false)!.State);
+        // B4.9: a rejected server policy says so instead of "still loading".
+        var rejected = PanelMarks.Categories(false, 0, false, serverRejected: true);
+        Assert.Equal(MarkState.Broken, rejected.State); Assert.Contains("server's category settings could not be read", rejected.Tooltip);
     }
 
     // D086 D1: a failed optional part turns only itself off, shown amber ("partly working"), below a broken part.
     [Fact]
     public void Marks_AFailedOptionalPart_IsLimitedNotBroken()
     {
-        var epic = PanelMarks.EpicLoot(true, true, recipesFailed: true)!;
-        Assert.Equal(MarkState.Limited, epic.State);
-        Assert.EndsWith("Every other category works.", epic.Tooltip);
-        Assert.Contains("Partly working: crafted items:", epic.Tooltip);
+        var limited = new IntegrationMark("X", new[] { new MarkLine("a", MarkState.Working), new MarkLine("crafted items: b", MarkState.Limited) });
+        Assert.Equal(MarkState.Limited, limited.State);
+        Assert.Contains("Partly working: crafted items:", limited.Tooltip);
         Assert.Equal(MarkState.Working, PanelMarks.EpicLoot(true, true)!.State);
-        Assert.Equal(MarkState.Broken, PanelMarks.EpicLoot(true, false, recipesFailed: true)!.State);
+        Assert.Equal(MarkState.Broken, new IntegrationMark("X", new[] { new MarkLine("a", MarkState.Broken), new MarkLine("b", MarkState.Limited) }).State);
         Assert.Equal(MarkState.Caution, new IntegrationMark("X", new[] { new MarkLine("a", MarkState.Limited), new MarkLine("b", MarkState.Caution) }).State);
         Assert.Equal(MarkState.Limited, new IntegrationMark("X", new[] { new MarkLine("a", MarkState.Off), new MarkLine("b", MarkState.Limited) }).State);
     }
@@ -96,6 +102,9 @@ public sealed class Phase6PanelTests
         Assert.Equal(MarkState.Off, cleanup.State);
         Assert.Contains("Server.AllowCleanup", cleanup.Tooltip);
         Assert.Equal(MarkState.Broken, PanelMarks.Cleanup(false, false)!.State);
+        // B4.22: cleanup refused while Azu's exclusions can't be read shows on the Clean up mark itself.
+        var azuOff = PanelMarks.Cleanup(true, true, azuUnreadable: true)!;
+        Assert.Equal(MarkState.Broken, azuOff.State); Assert.Contains("clean up is off", azuOff.Tooltip);
 
         var categories = PanelMarks.Categories(true, 2311, true)!;
         Assert.Equal("On: ready: 2,311 items sorted\nOn: the server's category settings apply", categories.Tooltip);
@@ -106,6 +115,38 @@ public sealed class Phase6PanelTests
         var server = PanelMarks.Server(true)!;
         Assert.Equal(("Server", MarkState.Working), (server.Name, server.State));
         Assert.Equal("On: this server has no YAVSOS, so your own categories and settings apply", server.Tooltip);
+    }
+
+    [Fact]
+    public void Marks_ChestsUnbound_BreakStashingAndCleanup()
+    {
+        // SF2 (D087): without the game's chest members no chest can be read; that outranks the reader and the settings.
+        var stash = PanelMarks.Stashing(false, false, "L", "Shift + L", chests: false);
+        Assert.Equal(MarkState.Broken, stash.State);
+        Assert.Equal("Not working: stashing is off: YAVSOS can't read chests in this game version (see the log)", stash.Tooltip);
+        var cleanup = PanelMarks.Cleanup(true, true, chests: false)!;
+        Assert.Equal(("Clean up", MarkState.Broken), (cleanup.Name, cleanup.State));
+        Assert.Equal("Not working: clean up is off: YAVSOS can't read chests in this game version (see the log)", cleanup.Tooltip);
+        Assert.Equal(MarkState.Working, PanelMarks.Stashing(true, true, "L", "Shift + L", chests: true).State);
+        Assert.Null(PanelMarks.Cleanup(true, true, chests: true));
+    }
+
+    [Fact]
+    public void Marks_Display_NamesThePartsTurnedOff()
+    {
+        // SF4 (D087): no mark while every display part works.
+        Assert.Null(PanelMarks.Display(Array.Empty<string>()));
+        var one = PanelMarks.Display(new[] { "the panel's search" })!;
+        Assert.Equal(("Display", MarkState.Limited), (one.Name, one.State));
+        Assert.Equal("Partly working: the panel's search is off after an error (see the log); a game restart turns it back on. " +
+            "Chest rules, stashing and clean up still work.", one.Tooltip);
+        // In the order they failed, each once.
+        var three = PanelMarks.Display(new[] { "chest hover labels", "the panel's search", "chest hover labels", "categories in item tooltips" })!;
+        Assert.StartsWith("Partly working: chest hover labels, the panel's search and categories in item tooltips are off after an error", three.Tooltip);
+        Assert.Contains("turns them back on", three.Tooltip);
+        Assert.Single(three.Lines);
+        // A new part changes the key, so the panel redraws the marks.
+        Assert.NotEqual(PanelMarks.Key(PanelMarks.Shown(one)), PanelMarks.Key(PanelMarks.Shown(three)));
     }
 
     [Fact]

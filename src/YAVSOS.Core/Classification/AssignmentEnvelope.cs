@@ -12,19 +12,21 @@ public sealed class AssignmentEnvelopeReceiver
     private long sequence;
     public string Payload { get; private set; } = "";
     public string Diagnostic { get; private set; } = "Authoritative assignment delivery pending.";
-    public void Reset() { session = null; sequence = 0; Payload = ""; Diagnostic = "Authoritative assignment delivery pending."; }
+    /// <summary>The last envelope was malformed and withdrew the categories (B4.8); the host logs <see cref="Diagnostic"/>.</summary>
+    public bool Rejected { get; private set; }
+    public void Reset() { session = null; sequence = 0; Payload = ""; Rejected = false; Diagnostic = "Authoritative assignment delivery pending."; }
     public bool Receive(string envelope)
     {
         try
         {
             AssignmentEnvelope.Decode(envelope, out var nextSession, out var nextSequence, out var payload);
             if (session != null && (session != nextSession || nextSequence <= sequence)) return false;
-            session = nextSession; sequence = nextSequence; Payload = payload;
+            session = nextSession; sequence = nextSequence; Payload = payload; Rejected = false;
             Diagnostic = payload.Length == 0 ? "Server withdrew authoritative assignment evidence." : "Complete authoritative assignment delivery pending validation.";
             return true;
         }
         catch (InvalidDataException error)
-        { Payload = ""; Diagnostic = "Authoritative assignment envelope rejected: " + error.Message; return true; }
+        { Payload = ""; Rejected = true; Diagnostic = "Authoritative assignment envelope rejected: " + error.Message; return true; }
     }
 }
 

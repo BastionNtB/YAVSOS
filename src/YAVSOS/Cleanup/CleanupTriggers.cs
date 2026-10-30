@@ -22,22 +22,37 @@ internal static class CleanupTriggers
     /// Binds Azu's private store shortcut by shape; on any mismatch YAVSOS's own shortcut applies. Also Azu's "Store Single
     /// Item Shortcut", for the tooltip's label only (P8-17); unbound, the label carries no key.
     /// </summary>
-    internal static void BindAzuStoreKey(Assembly azu)
+    internal static void BindAzuStoreKey(Assembly azu, BepInEx.Logging.ManualLogSource? log = null)
     {
+        string? storeProblem = null, singleProblem = null;
         try
         {
             var plugin = azu.GetType("AzuAutoStore.AzuAutoStorePlugin", false);
-            azuStore = Shortcut(plugin, "_storeShortcut");
-            azuSingle = Shortcut(plugin, "SingleItemShortcut");
+            azuStore = Shortcut(plugin, "_storeShortcut", out storeProblem);
+            azuSingle = Shortcut(plugin, "SingleItemShortcut", out singleProblem);
         }
-        catch { azuStore = null; azuSingle = null; }
+        catch (Exception error)
+        {
+            azuStore = null; azuSingle = null;
+            storeProblem = singleProblem = error.GetType().Name + ": " + error.Message;
+        }
+        // SF7 (D087): what the player's keys do instead, once at load.
+        if (storeProblem != null)
+            log?.LogWarning("AzuAutoStore's store key could not be read (" + storeProblem + "); cleanup uses YAVSOS's own Cleanup shortcut" +
+                (Plugin.Instance is { } yavsos ? " (" + yavsos.Settings.CleanupShortcut.Value + ")" : "") + " instead of Ctrl plus AzuAutoStore's store key.");
+        if (singleProblem != null)
+            log?.LogWarning("AzuAutoStore's single-item store key could not be read (" + singleProblem + "); the \"Stash stack\" tooltip line shows no key.");
     }
 
-    private static ConfigEntry<KeyboardShortcut>? Shortcut(Type? plugin, string name)
+    private static ConfigEntry<KeyboardShortcut>? Shortcut(Type? plugin, string name, out string? problem)
     {
         var field = plugin == null ? null : AccessTools.DeclaredField(plugin, name);
-        return field != null && field.IsStatic && field.FieldType == typeof(ConfigEntry<KeyboardShortcut>)
-            ? field.GetValue(null) as ConfigEntry<KeyboardShortcut> : null;
+        problem = plugin == null ? "AzuAutoStorePlugin not found" : field == null ? name + " not found" : !field.IsStatic ? name + " is not static"
+            : field.FieldType != typeof(ConfigEntry<KeyboardShortcut>) ? name + " is " + field.FieldType.Name : null;
+        if (problem != null) return null;
+        var entry = field!.GetValue(null) as ConfigEntry<KeyboardShortcut>;
+        if (entry == null) problem = name + " is not set";
+        return entry;
     }
 
     internal static string Binding(ConfigEntry<KeyboardShortcut> own) =>
@@ -68,10 +83,15 @@ internal static class CleanupTriggers
         return own.Value is { } key && key.MainKey != KeyCode.None ? KeyNames.Format(key.MainKey.ToString(), key.Modifiers.Select(x => x.ToString())) : "";
     }
 
-    internal static bool Pressed(ConfigEntry<KeyboardShortcut> own)
+    internal static bool Pressed(ConfigEntry<KeyboardShortcut> own) => !InventoryGui.IsVisible() && Chord(own);
+
+    /// <summary>F7 (DOCS-CODE-COMPARISON U2): the cleanup key pressed with the inventory open, which runs nothing; the caller says so.</summary>
+    internal static bool PressedInInventory(ConfigEntry<KeyboardShortcut> own) => InventoryGui.IsVisible() && Chord(own);
+
+    private static bool Chord(ConfigEntry<KeyboardShortcut> own)
     {
         if (!Player.m_localPlayer || Console.IsVisible() || TextInput.IsVisible() || Menu.IsVisible() || Minimap.IsOpen() ||
-            Chat.instance && Chat.instance.HasFocus() || InventoryGui.IsVisible() || Interface.TypingBlock.Active) return false;
+            Chat.instance && Chat.instance.HasFocus() || Interface.TypingBlock.Active) return false;
         if (azuStore == null) return own.Value.IsDown();
         var shortcut = azuStore.Value;
         if (shortcut.MainKey == KeyCode.None || !UnityInput.Current.GetKeyDown(shortcut.MainKey)) return false;

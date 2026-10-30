@@ -81,11 +81,12 @@ internal static class AzuAutoStoreIntegration
         {
             var assembly = info.Instance.GetType().Assembly;
             AzuExclusions.Initialize(assembly, logger);
-            YAVSOS.Cleanup.CleanupTriggers.BindAzuStoreKey(assembly);
+            YAVSOS.Cleanup.CleanupTriggers.BindAzuStoreKey(assembly, logger);
             var members = Resolve(assembly, out var missing);
             if (!string.IsNullOrEmpty(ChestRuleStore.BindingFailure)) missing.Add(ChestRuleStore.BindingFailure);
             var shape = Gather(assembly, members, missing);
             var problems = AzuStoreCompatibility.Check(shape);
+            ReportUnread(logger, problems.Count == 0);
             if (problems.Count != 0) { Disable(version, problems); return; }
             harmony = new Harmony(HarmonyId);
             Apply(harmony, members);
@@ -98,6 +99,7 @@ internal static class AzuAutoStoreIntegration
             logger.LogInfo($"{Status} Compatibility checks passed in {clock.ElapsedMilliseconds} ms.");
             ReportOtherPatchers(members, logger);
             AzuStoreOrder.Initialize(assembly, logger, method => Shape(method as MethodInfo));
+            ReportUnread(logger, true); // The store-order checks read more methods; the integration is on.
         }
         catch (Exception ex) { Disable(version, new[] { "Integration failed: " + ex.GetType().Name + ": " + ex.Message }); }
     }
@@ -174,10 +176,28 @@ internal static class AzuAutoStoreIntegration
     {
         List<KeyValuePair<OpCode, object>> code;
         try { code = PatchProcessor.ReadMethodBody(method).ToList(); }
-        catch { yield break; }
+        catch (Exception error)
+        {
+            if (unread.Count < 64) unread.Add(Name(method) + " (" + error.GetType().Name + ")");
+            yield break;
+        }
         foreach (var instruction in code)
             if (instruction.Value is MethodBase callee && (instruction.Key == OpCodes.Call || instruction.Key == OpCodes.Callvirt || instruction.Key == OpCodes.Newobj))
                 yield return Name(callee);
+    }
+
+    // SF13 (D087, maintainer 2026-10-29): a method whose code can't be read counts as calling nothing, so it wasn't checked
+    // for other write paths. Named in the log; the integration stays on (no behaviour change).
+    private static readonly List<string> unread = new();
+    private static int unreadReported;
+    private static void ReportUnread(ManualLogSource logger, bool stayingOn)
+    {
+        if (unread.Count == unreadReported) return;
+        var names = unread.Skip(unreadReported).ToList(); unreadReported = unread.Count;
+        logger.LogWarning($"AzuAutoStore check: the code of {names.Count} method{(names.Count == 1 ? "" : "s")} could not be read, so " +
+            $"{(names.Count == 1 ? "it was" : "they were")} not checked for other ways AzuAutoStore puts items into chests: {string.Join(", ", names.Take(12))}" +
+            $"{(names.Count > 12 ? ", …" : "")}. " + (stayingOn ? "The integration stays on" : "The integration is off for the reasons logged next") +
+            "; please report this with your AzuAutoStore version.");
     }
 
     internal static string Name(MethodBase method) => (method.DeclaringType?.FullName ?? "?") + "::" + method.Name;
@@ -220,7 +240,18 @@ internal static class AzuAutoStoreIntegration
         try { return DecideUnguarded(chest, item); }
         catch (Exception ex)
         {
-            if (ReportedBackstops.Add("decide:" + ex.GetType().Name)) log?.LogWarning("Chest rule evaluation failed (" + ex.GetType().Name + "); the chest is treated as accepting nothing from AzuAutoStore.");
+            // SF10 (D087): the item, the chest and the cause, once per exception type and chest.
+            string id = "?", detail = "";
+            try
+            {
+                id = chest ? ChestRuleStore.View(chest!)?.GetZDO()?.m_uid.ToString() ?? "?" : "none";
+                detail = " for " + (item?.m_dropPrefab ? item!.m_dropPrefab.name : "an item") + " into " +
+                    (chest ? chest!.m_name + " at " + chest.transform.position + " (" + id + ")" : "no chest");
+            }
+            catch (Exception) { } // Naming is best effort; nothing may reach Azu's loop.
+            if (ReportedBackstops.Add("decide:" + ex.GetType().Name + ":" + id))
+                log?.LogWarning("Chest rule evaluation failed" + detail + " (" + ex.GetType().Name + ": " + ex.Message + Interface.RuleControls.Where(ex) +
+                    "); the chest is treated as accepting nothing from AzuAutoStore.");
             return ChestRuleDecision.RejectUnreadable;
         }
         finally { Decisions++; DecisionTicks += Stopwatch.GetTimestamp() - started; }

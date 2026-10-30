@@ -156,6 +156,10 @@ public sealed class ClassificationCacheTests
         host.InvalidateCatalog();Assert.Null(host.Current);host.Update();host.Update();
         Assert.Empty(host.Current!.Index.Items["Wood"].Facets);
         policy.BeginSession(PolicyMode.AwaitingServer);host.Update();Assert.Null(host.Current);Assert.False(policy.CanAutomate);
+        // D086 D14 (B5.6): with the server's policy accepted the client uses the server's answers and builds nothing itself.
+        Assert.Equal(PolicyUpdate.Accepted,policy.ApplyRemote(policy.Stamp.Session,CategoryPolicyCodec.EmptyDocument));
+        Assert.Equal(PolicyMode.ManagedClient,policy.Mode);Assert.True(policy.PolicyReady);
+        var before=builds;host.Update();host.Update();Assert.Null(host.Current);Assert.Equal(before,builds);
     }
 
     [Theory]

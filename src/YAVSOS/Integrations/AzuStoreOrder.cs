@@ -57,6 +57,7 @@ internal static class AzuStoreOrder
             var problems = new List<string>();
             T? Need<T>(T? member, string name) where T : class { if (member == null) problems.Add("Missing member: " + name); return member; }
             var store = Need(functions == null ? null : AccessTools.DeclaredMethod(functions, "TryStore", Type.EmptyTypes), "Functions.TryStore()");
+            Need(contract, "Interfaces.IContainer"); // B4.19: named as missing instead of failing later with a misleading reason.
             var storeThis = Need(functions == null ? null : AccessTools.DeclaredMethod(functions, "TryStoreThisItem", new[] { typeof(ItemDrop.ItemData), typeof(Inventory) }), "Functions.TryStoreThisItem");
             storeToContainer = Need(functions == null || contract == null ? null : AccessTools.DeclaredMethod(functions, "StoreToContainer", new[] { contract, typeof(ItemDrop.ItemData), typeof(Inventory) }), "Functions.StoreToContainer");
             storeSuccess = Need(functions == null ? null : AccessTools.DeclaredMethod(functions, "StoreSuccess", new[] { typeof(int) }), "Functions.StoreSuccess");
@@ -68,7 +69,7 @@ internal static class AzuStoreOrder
             shouldSkip = Need(vanillaType == null ? null : AccessTools.DeclaredMethod(vanillaType, "ShouldSkip", new[] { typeof(ItemDrop.ItemData), typeof(List<ItemDrop.ItemData>) }), "VanillaContainers.ShouldSkip");
             quickSlots = Need(vanillaType == null ? null : AccessTools.DeclaredMethod(vanillaType, "QuickSlots", Type.EmptyTypes), "VanillaContainers.QuickSlots");
             boxedContainer = Need(vanillaType == null ? null : AccessTools.GetDeclaredFields(vanillaType).SingleOrDefault(x => x.FieldType == typeof(Container)), "VanillaContainers container field");
-            if (getNearby != null && getNearby.ReturnType != typeof(List<>).MakeGenericType(contract!)) problems.Add("Boxes.GetNearbyContainers returns " + getNearby.ReturnType.Name + ".");
+            if (getNearby != null && contract != null && getNearby.ReturnType != typeof(List<>).MakeGenericType(contract)) problems.Add("Boxes.GetNearbyContainers returns " + getNearby.ReturnType.Name + ".");
             if (playerRange != null && playerRange.FieldType != typeof(BepInEx.Configuration.ConfigEntry<float>)) problems.Add("PlayerRange is " + playerRange.FieldType.Name + ".");
             if (storeToContainer != null && storeToContainer.ReturnType != typeof(int)) problems.Add("StoreToContainer returns " + storeToContainer.ReturnType.Name + ".");
             if (shouldSkip != null && shouldSkip.ReturnType != typeof(bool)) problems.Add("ShouldSkip returns " + shouldSkip.ReturnType.Name + ".");
@@ -140,8 +141,16 @@ internal static class AzuStoreOrder
     {
         if (!Active) return false;
         try { return (bool)shouldSkip!.Invoke(null, new[] { item, quickSlots!.Invoke(null, null) }); }
-        catch (Exception error) { log?.LogDebug("ShouldSkip failed: " + error.GetType().Name); return false; }
+        catch (Exception error)
+        {
+            // SF14 (D087): explanations only, once per exception type.
+            var cause = error is TargetInvocationException { InnerException: { } inner } ? inner : error;
+            if (skipFailures.Add(cause.GetType().Name))
+                log?.LogWarning($"AzuAutoStore's ShouldSkip failed ({cause.GetType().Name}: {cause.Message}); explanations may say where a stack would go that AzuAutoStore keeps in your inventory.");
+            return false;
+        }
     }
+    private static readonly HashSet<string> skipFailures = new(StringComparer.Ordinal);
 
     /// <summary>Containers the store key would consider, from Azu's own list: player chests in its range.</summary>
     internal static List<Container> Nearby(Player player)
@@ -172,10 +181,11 @@ internal static class AzuStoreOrder
 #if YAVSOS_LAB
         if (AzuAutoStoreIntegration.DiagnosticCategoriesPending) return false;
 #endif
-        var boxes = (IList)getNearby!.Invoke(null, new object[] { player, Range });
         var started = false;
         try
         {
+            // B1.11: Azu's container list and range are read inside the try, so a reflection fault turns only the order off.
+            var boxes = (IList)getNearby!.Invoke(null, new object[] { player, Range });
             ((IList)pingList!.GetValue(null)).Clear();
             clearPendingSends!.Invoke(null, null);
             started = true;

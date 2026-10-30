@@ -77,6 +77,14 @@ public sealed class ItemGridTests
         var canHave = ItemGrid.Build(Catalog(), new[] { "weapons" }, magic, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
             canHave: (item, dimension) => item.Prefab == "SwordBronze");
         Assert.Equal("Rule:SwordBronze", Show(canHave));
+        // D110 (F11): "damaged = no" passes only items that can be damaged; ticking "unknown" also passes the ones that can't, as sorting does.
+        bool Durable(ClassificationResult item, string dimension) => item.Prefab == "SwordBronze";
+        var undamaged = new Dictionary<string, IReadOnlyList<string>> { ["damaged"] = new[] { "no" } };
+        Assert.Equal("Rule:SwordBronze", Show(ItemGrid.Build(Catalog(), new[] { "weapons", "materials" }, undamaged, Array.Empty<string>(), Array.Empty<string>(),
+            Array.Empty<string>(), canHave: Durable)));
+        var unknown = new Dictionary<string, IReadOnlyList<string>> { ["damaged"] = new[] { "unknown" } };
+        Assert.Contains("Rule:Wood", Show(ItemGrid.Build(Catalog(), new[] { "weapons", "materials" }, unknown, Array.Empty<string>(), Array.Empty<string>(),
+            Array.Empty<string>(), canHave: Durable)));
     }
 
     [Fact]

@@ -41,7 +41,7 @@ public sealed class CleanupPlannerTests
         internal sealed class Slot
         {
             public Guid Handle = Guid.NewGuid(); public int X, Y, Quantity, Maximum = 50;
-            public TransferItemIdentity Identity = null!; public bool Protected;
+            public TransferItemIdentity Identity = null!; public bool Protected, Unsupported;
         }
         internal sealed class Chest
         {
@@ -54,7 +54,7 @@ public sealed class CleanupPlannerTests
         public Chest this[string id] => Chests.Single(x => x.Id == id);
         public IEnumerable<CleanupChest> Snapshot() => Chests.Select(chest => new CleanupChest(chest.Id, chest.Payload,
             new TransferInventorySnapshot(new TransferInventoryStamp("inv:" + chest.Id, Guid.Parse("18a499ef-25e2-4d38-bbb7-e7810bfe7671"), 0, 0, 1, 1, "p"),
-                chest.Width, chest.Height, chest.Slots.Select(s => new TransferStack(s.Handle, s.X, s.Y, s.Quantity, s.Maximum, s.Identity, s.Protected, mergeClass: s.Maximum > 1 ? s.Identity.Prefab : null)),
+                chest.Width, chest.Height, chest.Slots.Select(s => new TransferStack(s.Handle, s.X, s.Y, s.Quantity, s.Maximum, s.Identity, s.Protected, mergeClass: s.Maximum > 1 && !s.Unsupported ? s.Identity.Prefab : null, transferSupported: !s.Unsupported)),
                 chest.Blocked), chest.Local, chest.OptOut, chest.Distance));
         public void Apply(CleanupPlan plan)
         {
@@ -84,6 +84,30 @@ public sealed class CleanupPlannerTests
     private static CleanupPlan Plan(World world, Answers? answers = null, bool muc = false, Func<string, TransferItemIdentity, bool>? azu = null,
         IEnumerable<Guid>? held = null, Func<string, int>? size = null) =>
         CleanupPlanner.Plan(new CleanupInput(Taxonomy, answers ?? new Answers(), world.Snapshot(), size, muc, azu, held));
+
+    // F8 (D086 D16(a) for chests, B1.23): a stack the adapter couldn't capture stays where it is and holds its slot; the rest
+    // of its chest still takes part, as a source and as a destination.
+    [Fact]
+    public void UncapturableStack_StaysAndHoldsItsSlot_TheRestOfTheChestTakesPart()
+    {
+        var world = new World();
+        var wood = world.Add("wood", Rule(new[] { "materials.wood" }), width: 3);
+        var odd = Put(wood, "Copper", 5, x: 0); odd.Unsupported = true;
+        Put(wood, "Copper", 7, x: 1);
+        var metal = world.Add("metal", Rule(new[] { "materials.metal" }), width: 2);
+        var held = Put(metal, "Copper", 3, x: 0); held.Unsupported = true;
+        var before = world.Totals();
+        var plan = Plan(world);
+        var move = Assert.Single(plan.Moves);
+        Assert.NotEqual(odd.Handle, move.Handle);
+        Assert.Equal(7, move.Units);
+        Assert.Equal(1, move.DestinationX); // Not merged into, nor placed over, the uncapturable stack.
+        Assert.Null(move.MergeHandle); Assert.False(move.MergesPlanned);
+        Assert.Contains(plan.Remainders, x => x.Handle == odd.Handle && x.Reason == CleanupReason.Unsupported);
+        world.Apply(plan);
+        Assert.Contains(odd, wood.Slots); Assert.Contains(held, metal.Slots);
+        Assert.Equal(before.Values.Sum(), world.Totals().Values.Sum());
+    }
 
     [Fact]
     public void EmptyChests_DoNotUseUpTheSourceLimit()

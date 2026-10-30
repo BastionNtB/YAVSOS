@@ -7,7 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/YAVSOS/Integrations/OptionalReflection.cs" Link="Adapters/OptionalReflection.cs" />
-    <Compile Include="../../src/YAVSOS/Integrations/OptionalEpicLootRegistration.cs" Link="Adapters/OptionalEpicLootRegistration.cs" />
     <Compile Include="../../src/YAVSOS/Integrations/OptionalDefinitionWork.cs" Link="Adapters/OptionalDefinitionWork.cs" />
     <Compile Include="../../src/YAVSOS/Integrations/OptionalEpicLootSemanticsApi.cs" Link="Adapters/OptionalEpicLootSemanticsApi.cs" />
     <Compile Include="../../src/YAVSOS/Classification/ClassificationHost.cs" Link="Adapters/ClassificationHost.cs" />

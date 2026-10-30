@@ -20,6 +20,7 @@ internal sealed class AssignmentHost : IDisposable
     private readonly Func<ClassificationSourceSnapshot?> getSources;
     private readonly AssignmentExchange exchange = new AssignmentExchange();
     private readonly AssignmentEnvelopeReceiver receiver = new AssignmentEnvelopeReceiver();
+    private string? rejectedLogged;
     private readonly RetainedCategoryAnswers answers = new RetainedCategoryAnswers();
     private long session;
     private CatalogSnapshot? lastCatalog;
@@ -80,6 +81,13 @@ internal sealed class AssignmentHost : IDisposable
     {
         if (disposed || sync.IsSourceOfTruth || policy.Mode is PolicyMode.Offline or PolicyMode.Standalone or PolicyMode.ManagedServer) return;
         if (!receiver.Receive(value.Value)) return;
+        // B4.8, D087: a malformed server value withdraws every category; say why, once per distinct cause.
+        if (receiver.Rejected && receiver.Diagnostic != rejectedLogged)
+        {
+            rejectedLogged = receiver.Diagnostic;
+            log.LogWarning(receiver.Diagnostic + ". Categories are withdrawn until the server sends a valid value; a server and client on different YAVSOS versions can cause this.");
+        }
+        else if (!receiver.Rejected) rejectedLogged = null;
         identity = null; incoming = receiver.Payload; exchange.Invalidate(); policy.SetAssignmentEvidence(null, false);
         answers.Withdraw();
     }

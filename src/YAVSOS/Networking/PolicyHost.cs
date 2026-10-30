@@ -37,14 +37,19 @@ internal sealed class PolicyHost : IDisposable
         wirePolicy = new CustomSyncedValue<string>(sync, CategoryPolicyCodec.SyncIdentifier, "");
         sync.SourceOfTruthChanged += OnSourceChanged;
         wirePolicy.ValueChanged += OnRemoteChanged;
-        Directory.CreateDirectory(configDirectory);
         try
         {
+            Directory.CreateDirectory(configDirectory);
             using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
             var bytes = Encoding.UTF8.GetBytes(CategoryPolicyCodec.EmptyDocument);
             stream.Write(bytes, 0, bytes.Length);
         }
         catch (IOException) when (File.Exists(path)) { /* Preserve the user's existing file. */ }
+        // B1.4: a read-only config folder warns and continues with the built-in categories, as the rest of this class does.
+        catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
+        {
+            log.LogWarning($"Could not create the categories file {path} ({error.GetType().Name}: {error.Message}). Check the folder's permissions.");
+        }
         ReloadLocal();
         try
         {
@@ -60,7 +65,8 @@ internal sealed class PolicyHost : IDisposable
             watcher.Error += OnWatcherError;
             watcher.EnableRaisingEvents = true;
         }
-        catch (Exception error) when (error is IOException || error is UnauthorizedAccessException || error is PlatformNotSupportedException)
+        // ArgumentException: the folder doesn't exist because it could not be created (B1.4).
+        catch (Exception error) when (error is IOException || error is UnauthorizedAccessException || error is PlatformNotSupportedException || error is ArgumentException)
         {
             log.LogWarning($"Category watcher unavailable; using five-second file-stat polling: {error.Message}");
         }
@@ -147,17 +153,28 @@ internal sealed class PolicyHost : IDisposable
                 log.LogWarning($"Cannot reload {path}; last accepted policy retained: {diagnostic}");
                 return;
             }
-            var result = State.ApplyLocal(payload);
-            if (result == PolicyUpdate.Accepted && sync.IsSourceOfTruth && !ConfigSync.ProcessingServerUpdate)
-                wirePolicy.Value = State.Local!.CanonicalXml;
-            else if (result == PolicyUpdate.Accepted && !sync.IsSourceOfTruth)
-                wirePolicy.AssignLocalValue(State.Local!.CanonicalXml); // Restoration value only; no echo/broadcast.
-            Report(result, "Local");
+            ApplyLocal(payload);
         }
         catch (Exception error) when (error is IOException || error is UnauthorizedAccessException || error is DecoderFallbackException)
         {
-            log.LogWarning($"Cannot reload {path}; last accepted policy retained: {error.Message}");
+            // B1.4: with no file and nothing accepted yet (a read-only config folder), the built-in categories apply.
+            if (State.Local == null && !File.Exists(path))
+            {
+                log.LogWarning($"Cannot read {path} ({error.Message}); using the built-in categories.");
+                ApplyLocal(CategoryPolicyCodec.EmptyDocument);
+            }
+            else log.LogWarning($"Cannot reload {path}; last accepted policy retained: {error.Message}");
         }
+    }
+
+    private void ApplyLocal(string payload)
+    {
+        var result = State.ApplyLocal(payload);
+        if (result == PolicyUpdate.Accepted && sync.IsSourceOfTruth && !ConfigSync.ProcessingServerUpdate)
+            wirePolicy.Value = State.Local!.CanonicalXml;
+        else if (result == PolicyUpdate.Accepted && !sync.IsSourceOfTruth)
+            wirePolicy.AssignLocalValue(State.Local!.CanonicalXml); // Restoration value only; no echo/broadcast.
+        Report(result, "Local");
     }
 
     private void Report(PolicyUpdate result, string source)

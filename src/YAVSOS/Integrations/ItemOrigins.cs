@@ -30,6 +30,7 @@ internal static class ItemOrigins
 {
     internal const string ManagerAdapter = "item-manager", BaseAdapter = "base-game";
     private static HashSet<string>? baseGame;
+    private static string? noteFailure; // SF5: why the base game's list couldn't be recorded.
 
     [HarmonyPrefix, HarmonyPriority(Priority.First)]
     private static void Record(ObjectDB __instance) => Note(__instance);
@@ -38,7 +39,7 @@ internal static class ItemOrigins
     {
         if (baseGame != null || !db || db!.m_items == null || db.m_items.Count == 0) return;
         try { baseGame = new HashSet<string>(db.m_items.Where(x => x).Select(x => x.name), StringComparer.Ordinal); }
-        catch (Exception error) when (OptionalFailure.Recoverable(error)) { baseGame = null; }
+        catch (Exception error) when (OptionalFailure.Recoverable(error)) { baseGame = null; noteFailure = error.GetType().Name; }
     }
 
     /// <summary>Item registrations through each mod's own ItemManager copy, as (prefab, plugin GUID).</summary>
@@ -84,7 +85,8 @@ internal static class ItemOrigins
     {
         items = baseGame ?? (IReadOnlyCollection<string>)Array.Empty<string>();
         return baseGame == null || baseGame.Count == 0
-            ? OptionalCapability.Incompatible(BaseAdapter, "", "the game's item list was not recorded before mods added to it")
+            ? OptionalCapability.Incompatible(BaseAdapter, "", "the game's item list was not recorded before mods added to it" +
+                (noteFailure == null ? "" : " (reading it threw " + noteFailure + ")"))
             : new OptionalCapability(BaseAdapter, OptionalCapabilityState.Supported, "", "items=" + baseGame.Count + "; value=" + RuleText.Vanilla);
     }
 }

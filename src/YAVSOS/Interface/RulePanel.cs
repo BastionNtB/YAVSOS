@@ -245,7 +245,7 @@ internal sealed class HeaderSection : PanelSection
         rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f); rect.sizeDelta = new Vector2(15, 15);
         var image = symbol.GetComponent<Image>(); image.raycastTarget = false;
         // A caution is an amber tick: the integration works, with something to know about this chest.
-        image.sprite = mark.State switch { MarkState.Working or MarkState.Caution or MarkState.Limited => PanelArt.Check, MarkState.Broken => PanelArt.Cross, _ => PanelArt.Dash };
+        image.sprite = mark.State switch { MarkState.Working => PanelArt.Check, MarkState.Caution or MarkState.Limited => PanelArt.Bang, MarkState.Broken => PanelArt.Cross, _ => PanelArt.Dash };
         image.color = mark.State switch { MarkState.Working => Ok, MarkState.Broken => Bad, MarkState.Caution or MarkState.Limited => Caution, _ => Off };
         var text = string.Join("\n", mark.Lines.Select(x => "<color=" + (x.State switch { MarkState.Working => "#7FD47F", MarkState.Broken => "#EF6B5B", MarkState.Caution or MarkState.Limited => "#F0C050", _ => "#A0957F" }) + ">" +
             PanelMarks.Word(x.State).Trim() + "</color> " + Plain(x.Text)));

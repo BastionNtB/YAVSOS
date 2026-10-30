@@ -26,9 +26,14 @@ namespace YAVSOS.Cleanup;
 /// </summary>
 internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
 {
+    // SF6: why DragItem is null, for the load-time warning. Declared first: static initializers run in order.
+    private static string dragItemFailure = "";
     internal static readonly AccessTools.FieldRef<InventoryGui, ItemDrop.ItemData>? DragItem = Bind();
     internal static AccessTools.FieldRef<InventoryGui, ItemDrop.ItemData>? Bind()
-    { try { return AccessTools.FieldRefAccess<InventoryGui, ItemDrop.ItemData>("m_dragItem"); } catch { return null; } }
+    {
+        try { return AccessTools.FieldRefAccess<InventoryGui, ItemDrop.ItemData>("m_dragItem"); }
+        catch (Exception error) { dragItemFailure = error.GetType().Name + ": " + error.Message; return null; }
+    }
 
     private readonly PluginSettings settings;
 #if YAVSOS_LAB
@@ -43,10 +48,17 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         internal override IReadOnlyList<CleanupMove> Moves => Plan.Moves;
     }
 
-    internal CleanupRunner(PluginSettings settings, ManualLogSource log, RunResults results) : base(log, results) { this.settings = settings; }
+    internal CleanupRunner(PluginSettings settings, ManualLogSource log, RunResults results) : base(log, results)
+    {
+        this.settings = settings;
+        // SF6 (D087): log only; stash and cleanup run as before.
+        if (DragItem == null)
+            log.LogWarning("Held-stack protection off: InventoryGui.m_dragItem not found (" + dragItemFailure + "); a stack held on the cursor is not protected from stash or cleanup.");
+    }
 
     protected override float PollSeconds => 0.5f;
     protected override string Prefab(CleanupMove move) => move.Identity.Prefab;
+    protected override Guid Stack(CleanupMove move) => move.Handle;
     protected override CleanupRoute Route(CleanupMove move) => move.Route;
     protected override string PolicyStamp(Run run) => run.Plan.PolicyStamp;
 #if YAVSOS_LAB
@@ -86,11 +98,15 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         run.Plan = plan;
         foreach (var rest in plan.Remainders)
         {
-            run.Report.Remain(rest.Reason, rest.Identity.Prefab);
             if (rest.Reason == CleanupReason.AzuExcluded && rest.DestinationId != null && run.Chests.TryGetValue(rest.DestinationId, out var excluded))
-                log.LogInfo($"Cleanup: AzuAutoStore's config excludes {Name(rest.Identity.Prefab)} from {Localize(excluded.m_name)} chests; left in place.");
+            {
+                var type = Localize(excluded.m_name);
+                run.Report.Remain(rest.Reason, rest.Identity.Prefab, type);
+                log.LogInfo($"Cleanup: AzuAutoStore's config excludes {Name(rest.Identity.Prefab)} from {type}; left in place.");
+            }
+            else run.Report.Remain(rest.Reason, rest.Identity.Prefab);
         }
-        for (var i = 0; i < unreadable; i++) run.Report.Remain(CleanupReason.Unsupported);
+        for (var i = 0; i < unreadable; i++) run.Report.Remain(CleanupReason.ChestUnreadable);
         for (var i = 0; i < plan.SkippedChests; i++) run.Report.Remain(CleanupReason.ChestLimit);
         log.LogInfo($"Cleanup planned {plan.Moves.Count} moves over {input.Chests.Count} containers within {range:0.#} m in {run.Clock.Elapsed.TotalMilliseconds:0.0} ms" +
             (input.MucAvailable ? $"; other players' chests through {mucSource}." : "; no MultiUserChest, other players' chests are skipped."));
@@ -129,6 +145,9 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         try
         {
             var capture = Capture(run.Adapter, container, id);
+            foreach (var skipped in capture.Uncapturable)
+                if (LogLimit(id + "|" + skipped) is { } more)
+                    log.LogInfo($"Cleanup leaves {skipped} in {Localize(container.m_name)} at {container.transform.position}: YAVSOS can't move it without changing it." + more);
             var player = Player.m_localPlayer;
             chests.Add(new CleanupChest(id, ChestRuleStore.Payload(container), capture.Snapshot, view.IsOwner(), ChestRuleStore.CleanupOptOut(container),
                 player ? Vector3.Distance(player.transform.position, container.transform.position) : 0));
@@ -138,7 +157,9 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            log.LogInfo($"Cleanup skipped container {container.m_name} at {container.transform.position}: {error.GetType().Name}: {error.Message}");
+            if (LogLimit(id + "|" + error.GetType().Name) is { } more)
+                log.LogWarning($"Cleanup skipped container {Localize(container.m_name)} at {container.transform.position}: it could not be read " +
+                    $"({error.GetType().Name}: {error.Message}); its items stay and it takes nothing this run." + more);
             return false;
         }
     }
@@ -257,11 +278,16 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         if (run.PolicyChanged) { run.Report.Refuse(TransferRefusal.PolicyChanged, move.Identity.Prefab); return; }
         var refusal = Recheck(run, move, out var source, out var destination);
         if (refusal == TransferRefusal.PolicyChanged) { run.PolicyChanged = true; run.Report.Refuse(refusal, move.Identity.Prefab); return; }
-        if (refusal == TransferRefusal.Protected) { run.Report.Remain(CleanupReason.AzuExcluded, move.Identity.Prefab); return; }
+        // B4.5: a source opted out during the run keeps its items; that is the player's choice, not "rules changed".
+        if (refusal == TransferRefusal.RuleMismatch && source && ChestRuleStore.CleanupOptOut(source!))
+        { run.Report.Remain(CleanupReason.OptedOut, move.Identity.Prefab); return; }
+        if (refusal == TransferRefusal.Protected)
+        { run.Report.Remain(CleanupReason.AzuExcluded, move.Identity.Prefab, destination ? Localize(destination!.m_name) : null); return; }
         if (refusal != TransferRefusal.None) { run.Report.Refuse(refusal, move.Identity.Prefab); return; }
         GameInventoryCapture before, beforeDestination;
-        try { before = Capture(run.Adapter, source!, move.SourceId); beforeDestination = Capture(run.Adapter, destination!, move.DestinationId); }
-        catch (Exception error) when (error is not OutOfMemoryException) { run.Report.Refuse(TransferRefusal.UnsupportedCapability, move.Identity.Prefab); Log(move, "capture failed: " + error.GetType().Name); return; }
+        var side = "source"; // SF15: which capture failed, for the log only.
+        try { before = Capture(run.Adapter, source!, move.SourceId); side = "destination"; beforeDestination = Capture(run.Adapter, destination!, move.DestinationId); }
+        catch (Exception error) when (error is not OutOfMemoryException) { run.Report.Refuse(TransferRefusal.UnsupportedCapability, move.Identity.Prefab); Log(move, "capture of the " + side + " failed: " + Cause(error)); return; }
         var sourceInventory = source!.GetInventory(); var destinationInventory = destination!.GetInventory();
         if (!run.Adapter.TryResolve(sourceInventory, before.Snapshot.Stamp.InstanceGeneration, move.Handle, out var item) || item == null ||
             !before.Snapshot.Stacks.Any(x => x.Handle == move.Handle && x.Identity.Equals(move.Identity)))
@@ -297,7 +323,7 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         run.MayHaveWritten = true;
         try { destination.GetInventory().MoveItemToThis(source.GetInventory(), item, units, -1, -1); }
         catch (Exception error) when (error is not OutOfMemoryException)
-        { run.Report.Unconfirm(viaMuc: true, move.Identity.Prefab); Log(move, "the MultiUserChest request threw " + error.GetType().Name + "; result unconfirmed"); return; }
+        { run.Report.Unconfirm(viaMuc: true, move.Identity.Prefab); Log(move, "the MultiUserChest request threw " + Cause(error) + "; result unconfirmed"); return; }
         if (move.Route == CleanupRoute.MucAdd)
         {
             var after = Capture(run.Adapter, source, move.SourceId).Snapshot;
@@ -387,8 +413,10 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         var zdo = ChestRuleStore.View(container)!.GetZDO();
         // The native ZDO bytes may come from an older save format until the chest next changes, so freshness is
         // the owner, owner revision and the content fingerprint, rechecked at every write.
+        // F8 (D086 D16(a) for chests, B1.23): a stack that can't be captured stays in place, holding its cell, and the rest of
+        // the chest takes part. Every capture of a run uses the same mode, so the checks around each move compare like with like.
         return adapter.Capture(container.GetInventory(), id, zdo.GetOwner(), zdo.OwnerRevision, Registration,
-            _ => false, Array.Empty<int>(), () => NativeInventoryProbe.Supported);
+            _ => false, Array.Empty<int>(), () => NativeInventoryProbe.Supported, keepUncapturable: true);
     }
 
     // An item's registration is verified when the loaded catalog has it and ObjectDB maps its name to the same prefab.
@@ -409,10 +437,25 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
 
     protected override void Log(CleanupMove move, string text) => log.LogWarning($"Cleanup {Name(move.Identity.Prefab)} x{move.Units} ({move.SourceId} -> {move.DestinationId}): {text}");
 
-    internal static string Say(string text)
+    /// <param name="overInventory">A notice shown while the inventory is open: the top-left HUD line sits under the player's
+    /// inventory grid there, so it goes to the middle of the screen, which draws above it (P9-02 batch C).</param>
+    internal static string Say(string text, bool overInventory = false)
     {
-        if (Player.m_localPlayer) Player.m_localPlayer.Message(MessageHud.MessageType.TopLeft, "YAVSOS: " + text);
+        if (Player.m_localPlayer)
+            Player.m_localPlayer.Message(overInventory ? MessageHud.MessageType.Center : MessageHud.MessageType.TopLeft, "YAVSOS: " + text);
         return text;
+    }
+
+    // D112: a cause is logged at most three times per game run (counts are never cleared), the third saying so; a chest keeping an odd item would
+    // otherwise add a line on every press. Null: silenced. Bounded; past the bound new causes are not logged.
+    private static readonly Dictionary<string, int> logged = new(StringComparer.Ordinal);
+    internal const int LogRepeats = 3;
+    internal static string? LogLimit(string key)
+    {
+        logged.TryGetValue(key, out var count);
+        if (count >= LogRepeats || count == 0 && logged.Count >= 1024) return null;
+        logged[key] = ++count;
+        return count == LogRepeats ? " Further repeats of this are not logged until the game restarts." : "";
     }
 
     internal static string Localize(string token) => Localization.instance != null && !string.IsNullOrEmpty(token) ? Localization.instance.Localize(token) : token;

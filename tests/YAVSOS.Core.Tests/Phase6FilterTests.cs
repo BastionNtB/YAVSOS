@@ -163,8 +163,10 @@ public sealed class Phase6FilterTests
     {
         var sword = Build(new[] { Item("SwordIron", "OneHandedWeapon") }).Items["SwordIron"];
         var wood = Build(new[] { Item("Wood") }).Items["Wood"];
-        var worn = ClassificationFilters.Condition(2, true, 40f, 200f);
-        Assert.Equal(new[] { "upgraded:yes", "upgradable:no", "damaged:yes" }, worn.Select(x => x.Dimension + ":" + x.Value));
+        var worn = ClassificationFilters.Condition(2, true, 40f, 200f, upgradable: true);
+        Assert.Equal(new[] { "upgraded:yes", "upgradable:yes", "quality:2", "damaged:yes" }, worn.Select(x => x.Dimension + ":" + x.Value));
+        // D086 D14 (B3.6): quality 2 on an item no recipe upgrades (an egg) is not "upgraded".
+        Assert.Equal(new[] { "upgraded:no", "upgradable:no" }, ClassificationFilters.Condition(2, false, 0f, 0f).Select(x => x.Dimension + ":" + x.Value));
         Assert.Equal(new[] { "upgraded:no", "upgradable:no", "damaged:no" }, ClassificationFilters.Condition(1, true, 200f, 200f).Select(x => x.Dimension + ":" + x.Value));
         var material = ClassificationFilters.Condition(1, false, 0f, 0f);
         Assert.Equal(new[] { "upgraded:no", "upgradable:no" }, material.Select(x => x.Dimension + ":" + x.Value));

@@ -161,4 +161,22 @@ public sealed class ContainerPolicyEnvelopeTests
         var payload = Payload(ulong.MaxValue);
         Assert.Equal(TransferRefusal.UnsupportedCapability, ContainerPolicyEnvelope.TryEdit(payload, payload, Taxonomy, Exact("Stone"), out var updated)); Assert.Null(updated);
     }
+    // B4.7: a refused edit names its cause, so the player isn't told "another version" for a rule that is only too large.
+    [Fact]
+    public void Envelope_RefusedEdit_NamesItsCause()
+    {
+        ChestRuleEditProblem Problem(string stored, ChestRuleEdit edit)
+        {
+            Assert.Equal(TransferRefusal.UnsupportedCapability, ContainerPolicyEnvelope.TryEdit(stored, stored, Taxonomy, edit, out var updated, out var problem));
+            Assert.Null(updated);
+            return problem;
+        }
+        Assert.Equal(ChestRuleEditProblem.UnreadableRule, Problem("not-json", Exact("Wood")));
+        Assert.Equal(ChestRuleEditProblem.RevisionExhausted, Problem(Payload(ulong.MaxValue), Exact("Wood")));
+        Assert.Equal(ChestRuleEditProblem.UnknownCategory, Problem(Payload(), new ChestRuleEdit(new[] { "retired-category" }, null, null)));
+        var many = Enumerable.Range(0, 1000).Select(i => "Item" + new string('x', 90) + i);
+        Assert.Equal(ChestRuleEditProblem.TooLarge, Problem(Payload(), new ChestRuleEdit(null, many, null)));
+        Assert.Equal(TransferRefusal.None, ContainerPolicyEnvelope.TryEdit("", "", Taxonomy, Exact("Wood"), out _, out var none));
+        Assert.Equal(ChestRuleEditProblem.None, none);
+    }
 }

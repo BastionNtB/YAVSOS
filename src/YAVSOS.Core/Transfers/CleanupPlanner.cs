@@ -116,7 +116,11 @@ public enum CleanupReason
     /// <summary>More chests in range than one run reads; the same ones are left out on every run.</summary>
     ChestLimit,
     /// <summary>A category chest may take it once categories finish loading (D086 D4); try again shortly.</summary>
-    CategoriesPending
+    CategoriesPending,
+    /// <summary>Its chest was set to "cleanup leaves this alone" during the run (B4.5).</summary>
+    OptedOut,
+    /// <summary>A nearby chest couldn't be read, so it took part in nothing; counted per chest, not per stack (SF3).</summary>
+    ChestUnreadable
 }
 
 public sealed class CleanupMove

@@ -33,8 +33,12 @@ public sealed class PolicyLifecycleTests
         Assert.Equal(PolicyUpdate.Rejected, state.ApplyLocal(payload));
         Assert.Contains("bytes", state.Diagnostic); Assert.Equal(kept, state.Local!.Fingerprint);
         state.BeginSession(PolicyMode.AwaitingServer);
+        Assert.False(state.RemoteRejected);
         Assert.Equal(PolicyUpdate.Rejected, state.ApplyRemote(state.Stamp.Session, payload));
         Assert.False(state.PolicyReady);
+        Assert.True(state.RemoteRejected); // B4.9: managed, but no server policy applies.
+        Assert.Equal(PolicyUpdate.Accepted, state.ApplyRemote(state.Stamp.Session, CategoryPolicyCodec.EmptyDocument));
+        Assert.False(state.RemoteRejected);
     }
 
     [Fact]

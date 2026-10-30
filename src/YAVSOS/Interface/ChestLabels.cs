@@ -69,7 +69,7 @@ internal static class ChestLabels
         }
         catch (Exception error) when (OptionalFailure.Recoverable(error))
         {
-            failed = true; // Hover text runs every frame; one warning, then the game's text alone.
+            failed = true; DisplayFaults.Add(DisplayFaults.Labels); // Hover text runs every frame; one warning, then the game's text alone.
             Log?.LogWarning("Chest labels turned off: " + error.GetType().Name + ": " + error.Message);
         }
     }

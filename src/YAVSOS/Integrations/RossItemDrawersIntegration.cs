@@ -43,7 +43,9 @@ internal static class RossItemDrawersIntegration
     private static bool Wants(Container chest, ItemDrop.ItemData item)
     {
         if (!chest || !drawerType!.IsInstanceOfType(chest)) return false;
-        var assigned = itemName!.GetValue(snapshot!.GetValue(chest)) as string;
+        // B1.10: a drawer without a snapshot yet (just built) is not reserved; it must not turn the support off for all drawers.
+        if (snapshot!.GetValue(chest) is not { } state) return false;
+        var assigned = itemName!.GetValue(state) as string;
         return ReservedDrawer.Wants(assigned, item.m_dropPrefab ? item.m_dropPrefab.name : null);
     }
 }

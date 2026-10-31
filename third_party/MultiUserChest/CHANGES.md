@@ -17,8 +17,12 @@ Every change in `Upstream/` is marked `YAVSOS-LOCAL`. [local-changes.diff](local
    - writes each request in the receiving owner's format (`GamePatches.InvokeRPC`);
    - reads each request, and writes its response, in the sender's format (`ContainerRPCHandler`);
    - reads each response in the responder's format (`InventoryHandler`);
-   - refuses a move, consume or drop when the other owner's format is unknown, instead of sending a request it might misread (`InventoryPatch.InterceptAddItem`, `InventoryGuiPatch`).
+   - refuses a move, consume or drop when the other owner's format is unknown, instead of sending a request it might misread (`InventoryPatch.InterceptAddItem`, `InventoryGuiPatch`);
+   - **guards answers to a sender whose format is unknown** (D116, 1.0.2; `Bundle/UnknownFormatGuard.cs`, `ContainerRPCHandler`). Such a sender is a player with AzuAutoStore but not YAVSOS, on a server with neither mod. The copy answers in format 2, which AzuAutoStore 3.1.7's copy reads correctly only for a plain item (no cheated flag, no custom data). A remove, consume or drop of any other item is refused before anything leaves the chest, with upstream's failure answer: no item, or for a swap the sender's own switch item, as upstream's refusal of a swap does. A request that can't be read (every add and every swap from AzuAutoStore 3.1.7's copy) is dropped unanswered with nothing added or removed, as upstream's exception did; AzuAutoStore's copy gives its item back after about 30 seconds. Each cause is logged once per player instead of an exception per request. Without the guard, an item with custom data taken from such a chest was lost (X19 research §5.1).
+
    YAVSOS publishes every peer's format on its player object (`YAVSOS.Cleanup.MucRoute`).
+
+   **Removal condition** (D090, extended by the X19 research §7): MultiUserChest itself handles both formats with a format or version marker in each message, or every copy players still use writes the 0.6.2 format **and** YAVSOS has some other way to tell whether a peer has a working copy at all. An AzuAutoStore release with the 0.6.2 format is not enough on its own while older AzuAutoStore builds stay in use.
 
 ## Updating
 

@@ -1,14 +1,17 @@
 diff -ru --label upstream --label local upstream local
 --- upstream
 +++ local
-@@ -6,23 +6,38 @@
+@@ -6,23 +6,44 @@
  namespace YAVSOS.Vendor.MultiUserChest {
      public static class ContainerRPCHandler {
          public static void RPC_RequestItemAdd(long sender, ZDOID containerId, ZPackage package) {
 -            HandleRPC(containerId, sender, ContainerPatch.ItemAddResponseRPC, RequestItemAdd, new RequestChestAdd(package));
 +            // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
 +            using (PeerFormat.For(sender)) {
-+                HandleRPC(containerId, sender, ContainerPatch.ItemAddResponseRPC, RequestItemAdd, new RequestChestAdd(package));
++                // YAVSOS: an unreadable request from a sender of unknown format is dropped unanswered (YAVSOS-LOCAL, PeerFormat.TryRead).
++                if (PeerFormat.TryRead(package, p => new RequestChestAdd(p), out RequestChestAdd request)) {
++                    HandleRPC(containerId, sender, ContainerPatch.ItemAddResponseRPC, RequestItemAdd, request);
++                }
 +            }
          }
  
@@ -16,7 +19,10 @@ diff -ru --label upstream --label local upstream local
 -            HandleRPC(containerId, sender, ContainerPatch.ItemRemoveResponseRPC, RequestItemRemove, new RequestChestRemove(package));
 +            // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
 +            using (PeerFormat.For(sender)) {
-+                HandleRPC(containerId, sender, ContainerPatch.ItemRemoveResponseRPC, RequestItemRemove, new RequestChestRemove(package));
++                // YAVSOS: an unreadable request from a sender of unknown format is dropped unanswered (YAVSOS-LOCAL, PeerFormat.TryRead).
++                if (PeerFormat.TryRead(package, p => new RequestChestRemove(p), out RequestChestRemove request)) {
++                    HandleRPC(containerId, sender, ContainerPatch.ItemRemoveResponseRPC, RequestItemRemove, request);
++                }
 +            }
          }
  
@@ -45,6 +51,46 @@ diff -ru --label upstream --label local upstream local
          }
  
          private static void HandleRPC<TResponse, TInput>(ZDOID containerId, long target, string rpcInvoke, Func<Inventory, TInput, TResponse> message, TInput input) where TResponse : IResponse, new() where TInput : IPackage {
+@@ -168,6 +189,13 @@
+                 return new RequestChestRemoveResponse(request.RequestID, false, 0, false, null);
+             }
+ 
++            // YAVSOS: refuse before removing anything when a sender of unknown format might misread the item (YAVSOS-LOCAL, UnknownFormatGuard).
++            if (UnknownFormatGuard.Refuses(PeerFormat.PeerUnknown, from.m_cheated, from.m_customData.Count)) {
++                PeerFormat.WarnRefused();
++                bool returnSwitchItem = UnknownFormatGuard.ReturnsSwitchItem(switchItem != null, switchItem != null && InventoryHelper.CanStack(from, switchItem));
++                return new RequestChestRemoveResponse(request.RequestID, false, 0, false, returnSwitchItem ? request.switchItem : null);
++            }
++
+             int removedAmount = 0;
+             bool removed = false;
+             bool switched = false;
+@@ -205,6 +233,12 @@
+                 return new RequestConsumeResponse(null, false, 0);
+             }
+ 
++            // YAVSOS: refuse before removing anything when a sender of unknown format might misread the item (YAVSOS-LOCAL, UnknownFormatGuard).
++            if (UnknownFormatGuard.Refuses(PeerFormat.PeerUnknown, toConsume.m_cheated, toConsume.m_customData.Count)) {
++                PeerFormat.WarnRefused();
++                return new RequestConsumeResponse(null, false, 0);
++            }
++
+             inventory.RemoveOneItem(toConsume);
+             ItemDrop.ItemData returnItem = toConsume.Clone();
+             returnItem.m_stack = 1;
+@@ -237,6 +271,12 @@
+                 return new RequestDropResponse(null, request.sender, false, 0);
+             }
+ 
++            // YAVSOS: refuse before removing anything when a sender of unknown format might misread the item (YAVSOS-LOCAL, UnknownFormatGuard).
++            if (UnknownFormatGuard.Refuses(PeerFormat.PeerUnknown, from.m_cheated, from.m_customData.Count)) {
++                PeerFormat.WarnRefused();
++                return new RequestDropResponse(null, request.sender, false, 0);
++            }
++
+             int removedAmount = Mathf.Min(from.m_stack, request.amount);
+             inventory.RemoveItem(from, removedAmount);
+ 
 diff -ru --label upstream --label local upstream local
 --- upstream
 +++ local

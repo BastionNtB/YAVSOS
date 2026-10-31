@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 (2026-10-31)
+
+### Fixed
+
+- Items with extra data, such as EpicLoot magic items or items spawned with devcommands, no longer vanish when a player with AzuAutoStore but not YAVSOS takes them from your chest, on a server with neither mod. Those items now stay in the chest, and ordinary items move as before.
+
 ## 1.0.1 (2026-10-30)
 
 ### Fixed

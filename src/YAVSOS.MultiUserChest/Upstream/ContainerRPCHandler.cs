@@ -8,14 +8,20 @@ namespace YAVSOS.Vendor.MultiUserChest {
         public static void RPC_RequestItemAdd(long sender, ZDOID containerId, ZPackage package) {
             // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
             using (PeerFormat.For(sender)) {
-                HandleRPC(containerId, sender, ContainerPatch.ItemAddResponseRPC, RequestItemAdd, new RequestChestAdd(package));
+                // YAVSOS: an unreadable request from a sender of unknown format is dropped unanswered (YAVSOS-LOCAL, PeerFormat.TryRead).
+                if (PeerFormat.TryRead(package, p => new RequestChestAdd(p), out RequestChestAdd request)) {
+                    HandleRPC(containerId, sender, ContainerPatch.ItemAddResponseRPC, RequestItemAdd, request);
+                }
             }
         }
 
         public static void RPC_RequestItemRemove( long sender, ZDOID containerId,ZPackage package) {
             // YAVSOS: read and answer in the sender's format (YAVSOS-LOCAL, PeerFormat).
             using (PeerFormat.For(sender)) {
-                HandleRPC(containerId, sender, ContainerPatch.ItemRemoveResponseRPC, RequestItemRemove, new RequestChestRemove(package));
+                // YAVSOS: an unreadable request from a sender of unknown format is dropped unanswered (YAVSOS-LOCAL, PeerFormat.TryRead).
+                if (PeerFormat.TryRead(package, p => new RequestChestRemove(p), out RequestChestRemove request)) {
+                    HandleRPC(containerId, sender, ContainerPatch.ItemRemoveResponseRPC, RequestItemRemove, request);
+                }
             }
         }
 
@@ -183,6 +189,13 @@ namespace YAVSOS.Vendor.MultiUserChest {
                 return new RequestChestRemoveResponse(request.RequestID, false, 0, false, null);
             }
 
+            // YAVSOS: refuse before removing anything when a sender of unknown format might misread the item (YAVSOS-LOCAL, UnknownFormatGuard).
+            if (UnknownFormatGuard.Refuses(PeerFormat.PeerUnknown, from.m_cheated, from.m_customData.Count)) {
+                PeerFormat.WarnRefused();
+                bool returnSwitchItem = UnknownFormatGuard.ReturnsSwitchItem(switchItem != null, switchItem != null && InventoryHelper.CanStack(from, switchItem));
+                return new RequestChestRemoveResponse(request.RequestID, false, 0, false, returnSwitchItem ? request.switchItem : null);
+            }
+
             int removedAmount = 0;
             bool removed = false;
             bool switched = false;
@@ -220,6 +233,12 @@ namespace YAVSOS.Vendor.MultiUserChest {
                 return new RequestConsumeResponse(null, false, 0);
             }
 
+            // YAVSOS: refuse before removing anything when a sender of unknown format might misread the item (YAVSOS-LOCAL, UnknownFormatGuard).
+            if (UnknownFormatGuard.Refuses(PeerFormat.PeerUnknown, toConsume.m_cheated, toConsume.m_customData.Count)) {
+                PeerFormat.WarnRefused();
+                return new RequestConsumeResponse(null, false, 0);
+            }
+
             inventory.RemoveOneItem(toConsume);
             ItemDrop.ItemData returnItem = toConsume.Clone();
             returnItem.m_stack = 1;
@@ -249,6 +268,12 @@ namespace YAVSOS.Vendor.MultiUserChest {
             ItemDrop.ItemData from = inventory.GetItemAt(request.targetContainerSlot.x, request.targetContainerSlot.y);
 
             if (from == null) {
+                return new RequestDropResponse(null, request.sender, false, 0);
+            }
+
+            // YAVSOS: refuse before removing anything when a sender of unknown format might misread the item (YAVSOS-LOCAL, UnknownFormatGuard).
+            if (UnknownFormatGuard.Refuses(PeerFormat.PeerUnknown, from.m_cheated, from.m_customData.Count)) {
+                PeerFormat.WarnRefused();
                 return new RequestDropResponse(null, request.sender, false, 0);
             }
 

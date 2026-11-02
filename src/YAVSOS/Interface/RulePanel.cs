@@ -17,6 +17,7 @@ namespace YAVSOS.Interface;
 /// widgets and refreshes from <see cref="RuleControls"/>. Rows are rebuilt only when what they show changes.
 /// D101: while the panel is in use its height doesn't change: every area that shows changing text has a fixed size
 /// (chips two rows, one tab body height, message spots of two lines), and teaching text lives in tooltips on the controls.
+/// Folding (X2) changes the height only at its click.
 /// Unity game thread only.
 /// </summary>
 internal sealed class RulePanel
@@ -31,6 +32,8 @@ internal sealed class RulePanel
     private float next;
     private Vector2 drag;
     private PanelRect anchor, area, placed;
+    private bool? folded; // As the sections were last gated (X2).
+    private float unfoldedHeight;
     private Canvas? canvas; // The parent's canvas, found once: Place runs every frame.
     private readonly JotunnWidgets.ScaleWatch scale = new();
 
@@ -42,8 +45,9 @@ internal sealed class RulePanel
         // Display order, layout A (D071): header with status marks, problem banners, Rule, Edit (tabs, then the open
         // tab's picker or filters, in one body of fixed height, D101), This chest, Clean up nearby. Search (P6-06) lives in
         // the Categories tab; run results have their own panel (P6-04); "Where would it go?" is in the item tooltip (P6-23).
+        // Folded (X2), only the header, banners and the label line show.
         var header = new HeaderSection(); var picker = new PickerSection();
-        sections = new PanelSection[] { header, new BannerSection(), new RuleSection(), picker, new FilterSection(), new ChestSection(), new CleanupSection() };
+        sections = new PanelSection[] { header, new BannerSection(), new LabelSection(), new RuleSection(), picker, new FilterSection(), new ChestSection(), new CleanupSection() };
         try
         {
             foreach (var section in sections)
@@ -62,6 +66,13 @@ internal sealed class RulePanel
     internal void Show()
     {
         if (!root.gameObject.activeSelf) { root.gameObject.SetActive(true); root.SetAsLastSibling(); shown = -1; }
+        // X2 (S4): a fold or unfold gates the sections and rebuilds them, so the height changes only at the click.
+        var fold = rule.Folded.Value;
+        if (fold != folded)
+        {
+            folded = fold; shown = -1;
+            foreach (var section in sections) section.Open = PanelFold.Shows(section.Part, fold);
+        }
         var structural = shown != rule.Revision;
         if (structural || Time.unscaledTime >= next)
         {
@@ -105,7 +116,10 @@ internal sealed class RulePanel
         scale.Check(root.gameObject, canvas);
         area = canvas && canvas!.rootCanvas.transform is RectTransform screen ? Bounds(screen) : Rect(parent.rect);
         var size = root.rect.size;
-        placed = PanelPlacement.Beside(anchor, size.x, size.y, area, rule.OffsetX.Value + drag.x, rule.OffsetY.Value + drag.y);
+        if (folded == false) unfoldedHeight = size.y;
+        // X2: folded, placed by the unfolded height, so the header stays where it was and the panel just ends higher.
+        placed = PanelPlacement.Beside(anchor, size.x, PanelFold.PlacedHeight(folded == true, size.y, unfoldedHeight), area,
+            rule.OffsetX.Value + drag.x, rule.OffsetY.Value + drag.y);
         root.localPosition = new Vector3(placed.Left, placed.Top, 0);
     }
 
@@ -141,14 +155,24 @@ internal abstract class PanelSection
 {
     internal RectTransform Root = null!;
     internal abstract string Name { get; }
-    private bool changed;
+    /// <summary>Which part of the panel this is, for folding (X2).</summary>
+    internal abstract PanelPart Part { get; }
+    private bool changed, gated;
     internal abstract void Build(JotunnWidgets ui, RuleControls rule);
     protected abstract void Refresh(RuleControls rule, RulePanelMode mode, bool structural);
+
+    /// <summary>
+    /// S4 (audit D05): the panel's gate over the section, for folding (X2). While closed the section is hidden and not
+    /// refreshed; once open again its own <see cref="Refresh"/> decides, as before, whether it shows.
+    /// </summary>
+    internal bool Open { get; set; } = true;
 
     /// <summary>Returns whether anything shown changed, so the panel lays itself out again only then.</summary>
     internal bool Update(RuleControls rule, RulePanelMode mode, bool structural)
     {
         changed = false;
+        if (!Open) { gated = true; Show(Root, false); return changed; }
+        if (gated) { gated = false; Show(Root, true); structural = true; } // Reopened: rebuilt from scratch, then hidden again if Refresh says so.
         Refresh(rule, mode, structural);
         return changed;
     }
@@ -210,21 +234,40 @@ internal sealed class HeaderSection : PanelSection
     private JotunnWidgets ui = null!;
     private RectTransform row = null!;
     private string key = "\0";
+    private RectTransform arrow = null!;
+    private TipFill? foldTip;
     internal Text Title { get; private set; } = null!;
     internal override string Name => "Header";
+    internal override PanelPart Part => PanelPart.Header;
 
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {
         this.ui = ui;
         var line = ui.Row(Root, 6);
+        // X2 (D116): ▾ folds the panel, ▸ unfolds it; drawn, since the game's font may lack the glyphs.
+        var fold = ui.Button(line, "", rule.ToggleFold, 24);
+        var go = new GameObject("Arrow", typeof(RectTransform), typeof(Image));
+        arrow = (RectTransform)go.transform;
+        arrow.SetParent(fold.transform, false);
+        arrow.anchorMin = arrow.anchorMax = arrow.pivot = new Vector2(0.5f, 0.5f); arrow.sizeDelta = new Vector2(12, 12);
+        var image = go.GetComponent<Image>(); image.sprite = PanelArt.Down; image.color = ui.Beige; image.raycastTarget = false;
+        Tip(fold, () => (PanelFold.ButtonTopic(rule.Folded.Value), PanelFold.ButtonTooltip(rule.Folded.Value)));
+        foldTip = fold.GetComponent<TipFill>();
         Title = ui.Label(line, "YAVSOS", JotunnWidgets.TextSize + 4, ui.Orange);
-        Tip(Title, "YAVSOS " + ProjectIdentity.Version, "Drag to move the panel.");
+        Tip(Title, "YAVSOS " + ProjectIdentity.Version, ProjectIdentity.Name + "\nDrag to move the panel."); // X53: say what the name stands for.
         row = ui.Row(line, 4);
         row.GetComponent<HorizontalLayoutGroup>().childAlignment = TextAnchor.MiddleRight;
     }
 
     protected override void Refresh(RuleControls rule, RulePanelMode mode, bool structural)
     {
+        var turn = rule.Folded.Value ? 90f : 0f; // Turned anticlockwise from down: points right.
+        if (!Mathf.Approximately(arrow.localEulerAngles.z, turn))
+        {
+            arrow.localEulerAngles = new Vector3(0, 0, turn);
+            // The tooltip is filled when the pointer enters; after a click it names the new action at once (batch E, low).
+            foldTip?.Refresh();
+        }
         var marks = rule.Marks();
         var next = PanelMarks.Key(marks);
         if (next == key) return;
@@ -263,6 +306,7 @@ internal sealed class BannerSection : PanelSection
     private static readonly Color Tint = new Color(0.23f, 0.18f, 0.07f, 0.85f);
     private Text readOnly = null!, unreadable = null!;
     internal override string Name => "Banners";
+    internal override PanelPart Part => PanelPart.Banners;
 
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {
@@ -282,7 +326,42 @@ internal sealed class BannerSection : PanelSection
     private void Banner(Text text, bool on) => Show(text.transform.parent.gameObject, on);
 }
 
-// D071: what the chest takes, as chips, with Clear rule in the section's header. D101: the chips area is two rows high
+// X2 (D116, variant C): the folded panel's one line under the header: the chest's label in its hover colour, or a faint
+// "No rule". Cut with "…" to one line; the tooltip has it whole.
+internal sealed class LabelSection : PanelSection
+{
+    private static readonly Color LabelColor = new Color32(0xE8, 0xB0, 0x4A, 0xFF);
+    private JotunnWidgets ui = null!;
+    private Text line = null!;
+    internal override string Name => "Label";
+    internal override PanelPart Part => PanelPart.Label;
+
+    internal override void Build(JotunnWidgets ui, RuleControls rule)
+    {
+        this.ui = ui;
+        line = ui.Label(Root, "", JotunnWidgets.SmallSize, LabelColor);
+        // Overflow, not Truncate: one line's height is a little under the font's line, and Truncate then drew nothing
+        // (batch E, 2026-10-30). Fit already cuts the text to one line's width.
+        line.verticalOverflow = VerticalWrapMode.Overflow;
+        var layout = line.GetComponent<LayoutElement>();
+        layout.minHeight = layout.preferredHeight = JotunnWidgets.LinesHeight(line, 1);
+        Tip(line, () => (ChestLabelPreview.Topic, (PanelFold.Line(rule.Label(), rule.Mode == RulePanelMode.Unreadable) is { IsLabel: true } shown
+            ? "<color=" + ChestLabelPreview.Color + ">" + shown.Text + "</color>\n" : "") + PanelFold.LineTooltip));
+    }
+
+    protected override void Refresh(RuleControls rule, RulePanelMode mode, bool structural)
+    {
+        var shown = PanelFold.Line(rule.Label(), mode == RulePanelMode.Unreadable);
+        Show(Root, shown != null);
+        if (shown is not { } text) return;
+        var color = text.IsLabel ? LabelColor : ui.Faint;
+        if (line.color != color) line.color = color;
+        var width = line.rectTransform.rect.width;
+        Set(line, JotunnWidgets.Fit(line, text.Text, width > 0 ? width : RulePanel.Width - 28, 1));
+    }
+}
+
+// D071: what the chest takes, as chips, with Copy, Paste (X2) and Clear rule in the section's header. D101: the chips area is two rows high
 // with or without a rule; what doesn't fit folds into "+N more", and a chest without a rule says what stashing does with it.
 internal sealed class RuleSection : PanelSection
 {
@@ -291,28 +370,60 @@ internal sealed class RuleSection : PanelSection
         AlwaysMark = new Color(0.5f, 0.85f, 0.5f), NeverMark = new Color(0.94f, 0.42f, 0.36f), CautionBack = new Color(0.23f, 0.18f, 0.07f, 0.85f);
     private JotunnWidgets ui = null!;
     private Button clear = null!;
-    private CanvasGroup clearShown = null!;
+    private CanvasGroup clearShown = null!, copyShown = null!, pasteShown = null!;
     private Text spot = null!;
-    private RectTransform flow = null!;
+    private RectTransform flow = null!, area = null!;
     private string key = "\0";
     internal override string Name => "Rule";
+    internal override PanelPart Part => PanelPart.Rule;
 
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {
         this.ui = ui;
         var head = ui.Row(Root);
-        ui.Label(head, "Rule", JotunnWidgets.TextSize, ui.Orange, false);
+        // X2 (D116, variant C): the chest's hover label is in the tooltip of the heading and the chips.
+        Tip(ui.Label(head, "Rule", JotunnWidgets.TextSize, ui.Orange, false), rule.LabelTooltip);
         spot = Spot(ui, head, Whole(rule, MessageSpot.Clear));
         spot.alignment = TextAnchor.MiddleRight;
+        // X2 (variant A): Copy and Paste beside Clear rule; disabled, they keep their place and tooltip.
+        var copy = ui.Button(head, "Copy", rule.CopyRule, 64);
+        Tip(copy, () => (RuleCopy.CopyTopic, RuleCopy.CopyTooltip(rule.CanCopy, rule.HiddenParts)));
+        copyShown = copy.gameObject.AddComponent<CanvasGroup>();
+        var paste = ui.Button(head, "Paste", rule.PasteRule, 64);
+        Tip(paste, () => (RuleCopy.PasteTopic, RuleCopy.PasteTooltip(rule.Copied, rule.Mode == RulePanelMode.Edit, rule.Stored)));
+        pasteShown = paste.gameObject.AddComponent<CanvasGroup>();
         clear = ui.Button(head, "Clear rule", rule.ClearRule, 120);
         Tip(clear, "Clear rule", "Removes the whole rule, priority included. The chest goes back to working without a rule.");
         // Hidden without a rule, but keeping its place, so the row never changes.
         clearShown = clear.gameObject.AddComponent<CanvasGroup>();
         var go = new GameObject("Chips", typeof(RectTransform), typeof(LayoutElement));
         go.transform.SetParent(Root, false);
-        flow = (RectTransform)go.transform;
+        area = (RectTransform)go.transform;
         var size = go.GetComponent<LayoutElement>(); size.flexibleWidth = 1;
         size.minHeight = size.preferredHeight = RuleChips.Rows * JotunnWidgets.ChipHeight + (RuleChips.Rows - 1) * Gap;
+        // The label's tooltip sits behind the chips, not around them, so a chip's own tooltip still shows over it.
+        var back = new GameObject("Label tooltip", typeof(RectTransform), typeof(Image));
+        Stretch((RectTransform)back.transform, area);
+        var catcher = back.GetComponent<Image>(); catcher.color = Color.clear;
+        Tip(catcher, rule.LabelTooltip);
+        var chips = new GameObject("Flow", typeof(RectTransform));
+        flow = (RectTransform)chips.transform;
+        Stretch(flow, area);
+    }
+
+    private static void Stretch(RectTransform rect, Transform parent)
+    {
+        rect.SetParent(parent, false);
+        rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one; rect.offsetMin = rect.offsetMax = Vector2.zero;
+    }
+
+    // Shown or kept invisible in its place; a shown but disabled button is dimmed and keeps its tooltip.
+    private static void Enable(CanvasGroup group, bool shown, bool on)
+    {
+        var alpha = !shown ? 0 : on ? 1 : 0.45f;
+        if (group.alpha != alpha) group.alpha = alpha;
+        if (group.interactable != (shown && on)) group.interactable = shown && on;
+        if (group.blocksRaycasts != shown) group.blocksRaycasts = shown;
     }
 
     protected override void Refresh(RuleControls rule, RulePanelMode mode, bool structural)
@@ -324,8 +435,10 @@ internal sealed class RuleSection : PanelSection
         if (!viewing && !clearing) return;
         var on = clearing && (!edit || rule.Stored); // No rule: nothing to clear (runtime 2026-10-23, D086 B3.4).
         if (clearShown.interactable != on) { clearShown.alpha = on ? 1 : 0; clearShown.interactable = clearShown.blocksRaycasts = on; }
+        Enable(copyShown, viewing, rule.CanCopy);
+        Enable(pasteShown, viewing, edit && rule.Copied != null);
         Say(spot, rule, MessageSpot.Clear, Amber, ui.Orange);
-        Show(flow, viewing);
+        Show(area, viewing);
         var chips = viewing ? rule.Chips(Plugin.Instance!.RuleTaxonomy) : System.Array.Empty<RuleChip>();
         var next = string.Join("\n", chips.Select(x => x.Kind + ":" + x.Text));
         if (next != key) { key = next; Flow(chips); }
@@ -402,11 +515,14 @@ internal sealed class PickerSection : PanelSection
     private RectTransform unknown = null!, tree = null!, categoryPart = null!, itemPart = null!;
     private Text status = null!, gridEmpty = null!;
     private SearchBox search = null!, itemSearch = null!;
+    private readonly List<(Image Tag, TipFill? Tip)> takers = new();
+    private (bool On, Color Color)? takersShown;
     private ItemGridView grid = null!;
     private string unknownKey = "\0", treeKey = "\0";
     private int gridShown = -1;
     internal RectTransform Body { get; private set; } = null!;
     internal override string Name => "Picker";
+    internal override PanelPart Part => PanelPart.Edit;
 
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {
@@ -414,7 +530,7 @@ internal sealed class PickerSection : PanelSection
         ui.Label(Root, "Edit", JotunnWidgets.TextSize, ui.Orange);
         var tabs = ui.Row(Root);
         categories = ui.Button(tabs, "Categories", rule.ShowCategories);
-        Tip(categories, "Categories", "Tick the kinds of item this chest takes. Search finds categories and items, and lights up nearby chests that take them.");
+        Tip(categories, "Categories", "Tick the kinds of item this chest takes. Search finds categories and items, and lights up nearby chests that hold them.");
         items = ui.Button(tabs, "Items", rule.ShowItems);
         Tip(items, "Items", "Every item the rule takes. Click an icon to make it Always here, then Never here, then clear. Dimmed icons are not taken; " +
             "an amber one is taken by the rule, but AzuAutoStore's config keeps it out of this chest type. Search adds any item.");
@@ -426,13 +542,17 @@ internal sealed class PickerSection : PanelSection
         var size = Body.gameObject.AddComponent<LayoutElement>(); size.minHeight = size.preferredHeight = BodyHeight;
         // P6-06: search over category and item names; the tree shows what matches and lights up nearby chests.
         categoryPart = ui.Column(Body, "Categories", Spacing);
-        search = ui.Search(categoryPart, "Search categories and items…", rule.SearchFor);
-        Tip(search.Field, "Search", "Search category and item names. The tree shows only what matches; point at a row to light up the nearby chests that take it.");
+        var searchRow = ui.Row(categoryPart, 4);
+        search = ui.Search(searchRow, "Search categories and items…", rule.SearchFor);
+        Tip(search.Field, "Search", "Search category and item names. The tree shows only what matches; point at a row to light up the nearby chests that hold it.");
+        Takers(ui, rule, searchRow);
         tree = ui.ScrollList(categoryPart, Grid);
         // P6-18: every item the rule takes as icons; a click cycles Always → Never → clear.
         itemPart = ui.Column(Body, "Items", Spacing);
-        itemSearch = ui.Search(itemPart, "Search all items…", rule.SearchItems);
-        Tip(itemSearch.Field, "Search", "Search every item. Matching items show in the grid; the nearby chests that take them light up.");
+        var itemRow = ui.Row(itemPart, 4);
+        itemSearch = ui.Search(itemRow, "Search all items…", rule.SearchItems);
+        Tip(itemSearch.Field, "Search", "Search every item. Matching items show in the grid; the nearby chests that hold them light up.");
+        Takers(ui, rule, itemRow);
         grid = new ItemGridView(ui, itemPart, Grid, rule.CycleMark, rule.GridIcon, rule.GridTooltip, rule.KeptOut);
         // Drawn inside the grid, so the empty grid keeps its size.
         gridEmpty = ui.Label(grid.Frame, "Nothing here yet: tick categories, or search to add items.", JotunnWidgets.SmallSize, ui.Faint);
@@ -441,6 +561,19 @@ internal sealed class PickerSection : PanelSection
         // The status line's tooltip: the whole refusal, or the chests the search lit with their distances (C7).
         status = Spot(ui, Root, () => Whole(rule, MessageSpot.Tab)() ?? rule.HighlightTooltip());
         status.color = ui.Faint;
+    }
+
+    // D122: the rule-tag button at the end of a search box; on, the search also lights the chests that would take a match.
+    private void Takers(JotunnWidgets ui, RuleControls rule, Transform row)
+    {
+        var button = ui.Button(row, "", rule.ToggleTakers, JotunnWidgets.RowHeight + 4);
+        var go = new GameObject("Rule tag", typeof(RectTransform), typeof(Image));
+        var rect = (RectTransform)go.transform;
+        rect.SetParent(button.transform, false);
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f); rect.sizeDelta = new Vector2(16, 16);
+        var image = go.GetComponent<Image>(); image.sprite = PanelArt.Tag; image.color = ui.Faint; image.raycastTarget = false;
+        Tip(button, () => HighlightText.TakesToggle(rule.ShowsTakers));
+        takers.Add((image, button.GetComponent<TipFill>()));
     }
 
     protected override void Refresh(RuleControls rule, RulePanelMode mode, bool structural)
@@ -453,6 +586,12 @@ internal sealed class PickerSection : PanelSection
         if (key != unknownKey) { unknownKey = key; Unknown(rule); }
         Show(categoryPart, rule.PickingCategories);
         Show(itemPart, rule.PickingItems);
+        var takersNow = (rule.ShowsTakers, ChestHighlight.ColorOf(ChestHighlight.Kind.Takes));
+        if (takersShown != takersNow)
+        {
+            takersShown = takersNow;
+            foreach (var (tag, tip) in takers) { tag.color = rule.ShowsTakers ? ChestHighlight.ColorOf(ChestHighlight.Kind.Takes) : ui.Faint; tip?.Refresh(); }
+        }
         var plugin = Plugin.Instance!;
         var line = "";
         if (rule.PickingCategories)
@@ -528,7 +667,7 @@ internal sealed class PickerSection : PanelSection
     }
 
     // A ticked umbrella is stored as itself, so it also takes subcategories added later. D101 (C9): while searching, a row
-    // names the items found in it, faintly, on one line; pointing at a row lights the chests that take it.
+    // names the items found in it, faintly, on one line; pointing at a row lights the chests that hold it (D122).
     private void Tree(RuleControls rule, ClassificationTaxonomy taxonomy)
     {
         JotunnWidgets.Clear(tree); Rebuilt();
@@ -560,7 +699,7 @@ internal sealed class PickerSection : PanelSection
                 label.text = Plain(row.Name) + "<color=#A0957F>" + Plain(note) + "</color>";
             }
             Tip(check.Root.GetComponent<Toggle>(), row.Name, (names.Count != 0 ? "Has " + string.Join(", ", names) + ".\n" : hit ? "" : "Shown because something under it matches.\n") +
-                "Tick to take the whole category. Point at a row to light up the nearby chests that take it.");
+                "Tick to take the whole category. Point at a row to light up the nearby chests that hold it.");
             var report = check.Root.AddComponent<PointerReport>();
             report.Changed = on => rule.RowPointer(id, on);
         }
@@ -579,6 +718,7 @@ internal sealed class FilterSection : PanelSection
     private RectTransform list = null!;
     private string key = "\0";
     internal override string Name => "Filters";
+    internal override PanelPart Part => PanelPart.Filters;
 
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {
@@ -672,6 +812,7 @@ internal sealed class ChestSection : PanelSection
     private int shownLevel = -1;
     private bool shownRuled;
     internal override string Name => "This chest";
+    internal override PanelPart Part => PanelPart.Chest;
 
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {
@@ -726,6 +867,7 @@ internal sealed class CleanupSection : PanelSection
     private Text spot = null!;
     private TriStateToggle optOut = null!;
     internal override string Name => "Cleanup";
+    internal override PanelPart Part => PanelPart.Cleanup;
 
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {

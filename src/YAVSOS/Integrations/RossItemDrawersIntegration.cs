@@ -17,7 +17,7 @@ internal static class RossItemDrawersIntegration
     internal const string RossGuid = "com.rossdwest.itemdrawers";
     private static Type? drawerType;
     private static PropertyInfo? snapshot;
-    private static FieldInfo? itemName;
+    private static FieldInfo? itemName, amount;
 
     internal static void Initialize(ManualLogSource log)
     {
@@ -36,8 +36,27 @@ internal static class RossItemDrawersIntegration
             { log.LogWarning($"RossItemDrawers {version} changed shape; reserved empty drawers are not filled by AzuAutoStore. Chest rules are unaffected."); return; }
             AzuAutoStoreIntegration.ReservedDrawerWants = Wants;
             log.LogInfo($"RossItemDrawers {version}: AzuAutoStore fills reserved empty drawers.");
+            // X14: the store key's result reads a drawer's count from the same public snapshot; without it, drawer stores are unconfirmed.
+            amount = snapshotType == null ? null : AccessTools.DeclaredField(snapshotType, "Amount");
+            if (amount?.FieldType != typeof(int)) { amount = null; log.LogWarning($"RossItemDrawers {version}: a drawer's count can't be read; the store key's result shows drawer stores as unconfirmed."); }
         }
         catch (Exception ex) { log.LogWarning($"RossItemDrawers {version} support disabled: {ex.GetType().Name}. Chest rules are unaffected."); }
+    }
+
+    /// <summary>Whether <paramref name="chest"/> is a RossItemDrawers drawer (false when drawer support is off).</summary>
+    internal static bool IsDrawer(Container chest) => drawerType != null && chest && drawerType.IsInstanceOfType(chest);
+
+    /// <summary>
+    /// X14: a drawer's item and count from Ross's public snapshot, which its synced object data backs, so it reads the
+    /// same whichever game runs the drawer. False when <paramref name="chest"/> is no drawer or the count can't be read.
+    /// </summary>
+    internal static bool TryRead(Container chest, out string item, out int count)
+    {
+        item = ""; count = 0;
+        if (amount == null || !IsDrawer(chest) || snapshot!.GetValue(chest) is not { } state) return false;
+        item = itemName!.GetValue(state) as string ?? "";
+        count = (int)amount.GetValue(state);
+        return true;
     }
 
     private static bool Wants(Container chest, ItemDrop.ItemData item)

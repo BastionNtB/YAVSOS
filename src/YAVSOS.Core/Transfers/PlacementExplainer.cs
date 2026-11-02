@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
@@ -29,6 +30,23 @@ public enum PlacementOutcome
     Skipped
 }
 
+/// <summary>X1: what made the chosen chest take the stack, for "because it counts as Metals".</summary>
+public enum PlacementBasis
+{
+    /// <summary>No chest was chosen.</summary>
+    None,
+    /// <summary>A rule category takes it: <see cref="PlacementExplanation.Category"/> names the deciding one.</summary>
+    Category,
+    /// <summary>The chest lists the item under "Always".</summary>
+    Always,
+    /// <summary>The chest already holds the item (no rule, or the rule's existing-item fallback).</summary>
+    Holds,
+    /// <summary>A rule that takes anything.</summary>
+    Anything,
+    /// <summary>A rule of filters alone, without a category.</summary>
+    Filters
+}
+
 /// <summary>One chest's part in the answer.</summary>
 public enum ChestVerdict
 {
@@ -51,6 +69,12 @@ public enum ChestVerdict
     RuleCleared,
     OtherOwnerNoMuc,
     OtherOwnerFormatUnknown,
+    /// <summary>The owner's MultiUserChest can't take requests (F3).</summary>
+    OtherOwnerMucUnusable,
+    /// <summary>No MultiUserChest answered the owner's probe (F3).</summary>
+    OtherOwnerMucSilent,
+    /// <summary>The owner's MultiUserChest is still being checked (F3).</summary>
+    OtherOwnerMucChecking,
     BothRemote,
     AzuExcluded,
     CategoriesPending,
@@ -80,13 +104,82 @@ public sealed class PlacementExplanation
     public string? ChosenId { get; }
     /// <summary>For <see cref="PlacementOutcome.Blocked"/>: the first gate that closed an accepting chest, as the run reports it.</summary>
     public CleanupReason? Blocked { get; }
+    /// <summary>X1: why <see cref="ChosenId"/> takes it; <see cref="PlacementBasis.None"/> when nothing was chosen.</summary>
+    public PlacementBasis Basis { get; }
+    /// <summary>For <see cref="PlacementBasis.Category"/>: the deciding category's display name, such as "Metals".</summary>
+    public string? Category { get; }
     /// <summary>One line, e.g. "Copper → Metals chest: category Metals, priority 4 (Normal)".</summary>
     public string Summary { get; }
     /// <summary>Every chest passed in, in run order, then those out of range.</summary>
     public IReadOnlyList<ChestExplanation> Chests { get; }
-    internal PlacementExplanation(string prefab, PlacementOutcome outcome, string? chosen, CleanupReason? blocked, string summary, List<ChestExplanation> chests)
-    { Prefab = prefab; Outcome = outcome; ChosenId = chosen; Blocked = blocked; Summary = summary; Chests = chests.AsReadOnly(); }
+    internal PlacementExplanation(string prefab, PlacementOutcome outcome, string? chosen, CleanupReason? blocked, string summary, List<ChestExplanation> chests,
+        PlacementBasis basis = PlacementBasis.None, string? category = null)
+    {
+        Prefab = prefab; Outcome = outcome; ChosenId = chosen; Blocked = blocked; Summary = summary; Chests = chests.AsReadOnly();
+        Basis = chosen == null ? PlacementBasis.None : basis; Category = Basis == PlacementBasis.Category ? category : null;
+    }
     public ChestExplanation? For(string chestId) => Chests.FirstOrDefault(x => StringComparer.Ordinal.Equals(x.ChestId, chestId));
+}
+
+/// <summary>
+/// X16: the stack-independent part of <c>PlacementExplainer.Stash</c>
+/// (the run's chest limit and <see cref="StashPlanner.Receivers"/>), prepared once per gathered input so each stack
+/// asked about costs only its routes. The answers equal the one-shot ones for the same input. Read only.
+/// </summary>
+public sealed class StashExplainContext
+{
+    public StashInput Input { get; }
+    internal ChestRuleEvaluator Evaluator { get; }
+    internal List<StashChest> Chests { get; }
+    internal List<(StashChest Chest, DestinationCandidate Candidate)> Ruled { get; }
+    internal List<StashChest> Unruled { get; }
+
+    public StashExplainContext(StashInput input, ChestRuleEvaluator? evaluator = null)
+    {
+        Input = input ?? throw new ArgumentNullException(nameof(input));
+        Evaluator = evaluator ?? new ChestRuleEvaluator();
+        Chests = input.Chests.Take(StashPlanner.MaximumChests).ToList();
+        (Ruled, Unruled) = StashPlanner.Receivers(Chests, Evaluator, input.Taxonomy);
+    }
+
+    /// <summary>Whether <paramref name="handle"/> is one of the player's stacks in this input.</summary>
+    public bool Has(Guid handle) => Input.Player.Stacks.Any(x => x.Handle == handle);
+
+    /// <summary>As <c>PlacementExplainer.Stash</c>; <paramref name="timed"/> gets "routes" only.</summary>
+    public PlacementExplanation Explain(Guid handle, Func<string, string>? chestName = null, Func<string, string>? itemName = null, IEnumerable<string>? outOfRange = null,
+        Func<string, string, string>? openName = null, bool detail = true, Action<string, double>? timed = null) =>
+        PlacementExplainer.Stash(this, handle, chestName, itemName, outOfRange, openName, detail, timed, timed == null ? null : Stopwatch.StartNew());
+}
+
+/// <summary>
+/// X16: the stack-independent part of a cleanup explanation (the planner's chest and source limits and
+/// <see cref="CleanupPlanner.Receivers"/>), prepared once per gathered input. The answers equal the one-shot ones. Read only.
+/// </summary>
+public sealed class CleanupExplainContext
+{
+    public CleanupInput Input { get; }
+    internal ChestRuleEvaluator Evaluator { get; }
+    internal List<CleanupChest> Ordered { get; }
+    internal HashSet<string> Sources { get; }
+    internal List<(CleanupChest Chest, DestinationCandidate Candidate)> Ruled { get; }
+
+    public CleanupExplainContext(CleanupInput input, ChestRuleEvaluator? evaluator = null)
+    {
+        Input = input ?? throw new ArgumentNullException(nameof(input));
+        Evaluator = evaluator ?? new ChestRuleEvaluator();
+        Ordered = CleanupPlanner.Considered(input.Chests);
+        Sources = CleanupPlanner.Sources(Ordered);
+        Ruled = CleanupPlanner.Receivers(Ordered, Evaluator, input.Taxonomy);
+    }
+
+    /// <summary>Whether <paramref name="handle"/> is a stack of chest <paramref name="sourceId"/> in this input.</summary>
+    public bool Has(string sourceId, Guid handle) =>
+        Input.Chests.Any(x => StringComparer.Ordinal.Equals(x.Id, sourceId) && x.Inventory.Stacks.Any(s => s.Handle == handle));
+
+    /// <summary>As <c>PlacementExplainer.Cleanup</c>; <paramref name="timed"/> gets "routes" only.</summary>
+    public PlacementExplanation Explain(string sourceId, Guid handle, Func<string, string>? chestName = null, Func<string, string>? itemName = null,
+        IEnumerable<string>? outOfRange = null, Func<string, string, string>? openName = null, bool detail = true, Action<string, double>? timed = null) =>
+        PlacementExplainer.Cleanup(this, sourceId, handle, chestName, itemName, outOfRange, openName, detail, timed, timed == null ? null : Stopwatch.StartNew());
 }
 
 /// <summary>
@@ -98,27 +191,40 @@ public sealed class PlacementExplanation
 public static class PlacementExplainer
 {
     /// <summary>Where the stash key would put the player's stack <paramref name="handle"/>. Without <paramref name="detail"/>, no per-chest rows.</summary>
+    /// <param name="timed">X16 cost check (Lab only): gets the milliseconds of the stack-independent "receivers" step and the per-stack "routes" step.</param>
     public static PlacementExplanation Stash(StashInput input, Guid handle, ChestRuleEvaluator? evaluator = null,
         Func<string, string>? chestName = null, Func<string, string>? itemName = null, IEnumerable<string>? outOfRange = null,
-        Func<string, string, string>? openName = null, bool detail = true)
+        Func<string, string, string>? openName = null, bool detail = true, Action<string, double>? timed = null)
     {
         if (input == null) throw new ArgumentNullException(nameof(input));
+        if (input.Player.Stacks.All(x => x.Handle != handle)) throw new ArgumentException("Unknown player stack.", nameof(handle));
+        var clock = timed == null ? null : Stopwatch.StartNew();
+        var context = new StashExplainContext(input, evaluator);
+        Lap(timed, clock, "receivers");
+        return Stash(context, handle, chestName, itemName, outOfRange, openName, detail, timed, clock);
+    }
+
+    // The per-stack part of Stash, against receivers prepared once (X16).
+    internal static PlacementExplanation Stash(StashExplainContext context, Guid handle, Func<string, string>? chestName, Func<string, string>? itemName,
+        IEnumerable<string>? outOfRange, Func<string, string, string>? openName, bool detail, Action<string, double>? timed, Stopwatch? clock)
+    {
+        var input = context.Input; var evaluator = context.Evaluator;
         var stack = input.Player.Stacks.FirstOrDefault(x => x.Handle == handle) ?? throw new ArgumentException("Unknown player stack.", nameof(handle));
-        evaluator ??= new ChestRuleEvaluator();
         var names = new Names(input.Taxonomy, chestName, itemName, openName);
         var prefab = stack.Identity.Prefab; var item = names.Item(prefab);
         var rows = new List<ChestExplanation>();
-        PlacementExplanation Done(PlacementOutcome outcome, string summary, string? chosen = null, CleanupReason? blocked = null)
+        PlacementExplanation Done(PlacementOutcome outcome, string summary, string? chosen = null, CleanupReason? blocked = null,
+            (PlacementBasis Basis, string? Category) basis = default)
         {
             if (!detail) rows.Clear();
             else foreach (var id in outOfRange ?? Array.Empty<string>()) rows.Add(new ChestExplanation(id, ChestVerdict.OutOfRange, "out of range", null));
-            return new PlacementExplanation(prefab, outcome, chosen, blocked, summary, rows);
+            return new PlacementExplanation(prefab, outcome, chosen, blocked, summary, rows, basis.Basis, basis.Category);
         }
-        var chests = input.Chests.Take(StashPlanner.MaximumChests).ToList();
-        var (ruled, unruled) = StashPlanner.Receivers(chests, evaluator, input.Taxonomy);
+        var chests = context.Chests; var ruled = context.Ruled; var unruled = context.Unruled;
         var unselected = input.Only != null && !input.Only.Contains(stack.Handle);
         var kept = unselected || StashPlanner.Kept(input, stack);
         var routes = kept ? new List<StashPlanner.Route>() : StashPlanner.Routes(input, evaluator, ruled, unruled, stack);
+        Lap(timed, clock, "routes");
         // While categories load, only Always rules and holders route (D086 D4); with neither, the item waits.
         if (!input.Answers.CategoriesReady && routes.Count == 0 && !kept)
         {
@@ -166,26 +272,42 @@ public static class PlacementExplainer
             if (evaluator.Unruled(chest.RulePayload, input.Taxonomy)) { rows.Add(new ChestExplanation(chest.Id, ChestVerdict.NoRule, "no rule, and it holds no " + item, null)); continue; }
             rows.Add(Refusal(chest.Id, chest.RulePayload, prefab, resolved, input.Taxonomy, input.Answers, evaluator, raw, openName));
         }
-        return Done(outcome, summary, chosen?.Chest.Id, blocked);
+        var basis = chosen == null ? default : chosen.Tier == StashTier.Holder ? (PlacementBasis.Holds, null) : names.Basis(chosen.Ranked!, resolved, facets);
+        return Done(outcome, summary, chosen?.Chest.Id, blocked, basis);
     }
 
     /// <summary>Where "Clean up nearby" would move stack <paramref name="handle"/> of chest <paramref name="sourceId"/>. Without <paramref name="detail"/>, no per-chest rows.</summary>
+    /// <param name="timed">X16 cost check (Lab only), as for <see cref="Stash"/>: "receivers", then "routes" (the stack's assessment).</param>
     public static PlacementExplanation Cleanup(CleanupInput input, string sourceId, Guid handle, ChestRuleEvaluator? evaluator = null,
         Func<string, string>? chestName = null, Func<string, string>? itemName = null, IEnumerable<string>? outOfRange = null,
-        Func<string, string, string>? openName = null, bool detail = true)
+        Func<string, string, string>? openName = null, bool detail = true, Action<string, double>? timed = null)
     {
         if (input == null) throw new ArgumentNullException(nameof(input));
         var source = input.Chests.FirstOrDefault(x => StringComparer.Ordinal.Equals(x.Id, sourceId)) ?? throw new ArgumentException("Unknown source chest.", nameof(sourceId));
+        if (source.Inventory.Stacks.All(x => x.Handle != handle)) throw new ArgumentException("Unknown source stack.", nameof(handle));
+        var clock = timed == null ? null : Stopwatch.StartNew();
+        var context = new CleanupExplainContext(input, evaluator);
+        Lap(timed, clock, "receivers");
+        return Cleanup(context, sourceId, handle, chestName, itemName, outOfRange, openName, detail, timed, clock);
+    }
+
+    // The per-stack part of Cleanup, against the chest limits and receivers prepared once (X16).
+    internal static PlacementExplanation Cleanup(CleanupExplainContext context, string sourceId, Guid handle, Func<string, string>? chestName,
+        Func<string, string>? itemName, IEnumerable<string>? outOfRange, Func<string, string, string>? openName, bool detail, Action<string, double>? timed,
+        Stopwatch? clock)
+    {
+        var input = context.Input; var evaluator = context.Evaluator;
+        var source = input.Chests.FirstOrDefault(x => StringComparer.Ordinal.Equals(x.Id, sourceId)) ?? throw new ArgumentException("Unknown source chest.", nameof(sourceId));
         var stack = source.Inventory.Stacks.FirstOrDefault(x => x.Handle == handle) ?? throw new ArgumentException("Unknown source stack.", nameof(handle));
-        evaluator ??= new ChestRuleEvaluator();
         var names = new Names(input.Taxonomy, chestName, itemName, openName);
         var prefab = stack.Identity.Prefab; var item = names.Item(prefab);
         var rows = new List<ChestExplanation>();
-        PlacementExplanation Done(PlacementOutcome outcome, string summary, string? chosen = null, CleanupReason? blocked = null)
+        PlacementExplanation Done(PlacementOutcome outcome, string summary, string? chosen = null, CleanupReason? blocked = null,
+            (PlacementBasis Basis, string? Category) basis = default)
         {
             if (!detail) rows.Clear();
             else foreach (var id in outOfRange ?? Array.Empty<string>()) rows.Add(new ChestExplanation(id, ChestVerdict.OutOfRange, "out of range", null));
-            return new PlacementExplanation(prefab, outcome, chosen, blocked, summary, rows);
+            return new PlacementExplanation(prefab, outcome, chosen, blocked, summary, rows, basis.Basis, basis.Category);
         }
         void Rest(ChestVerdict verdict, string text)
         { foreach (var chest in input.Chests) rows.Add(new ChestExplanation(chest.Id, ReferenceEquals(chest, source) ? ChestVerdict.Current : verdict, ReferenceEquals(chest, source) ? "where it is" : text, null)); }
@@ -194,12 +316,13 @@ public static class PlacementExplainer
         if (source.OptOut)
         { Rest(ChestVerdict.NotConsidered, "not considered"); return Done(PlacementOutcome.OptedOut, item + " stays: its chest is set to \"Don't clean up\""); }
         // The planner's own limits (D086 D9): the nearest chests, then the nearest sources that are not opted out and hold items.
-        var ordered = CleanupPlanner.Considered(input.Chests);
-        if (!ordered.Contains(source) || !CleanupPlanner.Sources(ordered).Contains(source.Id))
+        var ordered = context.Ordered;
+        if (!ordered.Contains(source) || !context.Sources.Contains(source.Id))
         { Rest(ChestVerdict.NotConsidered, "not considered"); return Done(PlacementOutcome.Skipped, item + " stays: " + CleanupReport.Describe(CleanupReason.ChestLimit)); }
 
-        var ruled = CleanupPlanner.Receivers(ordered, evaluator, input.Taxonomy);
+        var ruled = context.Ruled;
         var assessed = CleanupPlanner.Assess(input, evaluator, ruled, source, stack);
+        Lap(timed, clock, "routes");
         var resolved = assessed.Item;
         var facets = resolved == null ? null : ClassificationFilters.InstanceFacets(resolved, input.InstanceFacets?.Invoke(stack));
         var usable = assessed.Destinations.Where(x => x.Gate == CleanupGate.Usable).ToList();
@@ -272,7 +395,7 @@ public static class PlacementExplainer
             if (evaluator.Unruled(chest.RulePayload, input.Taxonomy)) { rows.Add(new ChestExplanation(chest.Id, ChestVerdict.NoRule, "no rule; cleanup only fills ruled chests", null)); continue; }
             rows.Add(Refusal(chest.Id, chest.RulePayload, prefab, resolved, input.Taxonomy, input.Answers, evaluator, input.InstanceFacets?.Invoke(stack), openName));
         }
-        return Done(outcome, summary, chosen?.Chest.Id, blocked);
+        return Done(outcome, summary, chosen?.Chest.Id, blocked, chosen == null ? default : names.Basis(chosen.Ranked, resolved, facets));
     }
 
     private static ChestExplanation Routed(string id, CleanupReason? blocked, bool chosen, bool backup, string why, RankedDestination? rank)
@@ -281,6 +404,8 @@ public static class PlacementExplainer
             return new ChestExplanation(id, blocked switch
             {
                 CleanupReason.OtherOwnerNoMuc => ChestVerdict.OtherOwnerNoMuc, CleanupReason.OtherOwnerFormatUnknown => ChestVerdict.OtherOwnerFormatUnknown,
+                CleanupReason.OtherOwnerMucUnusable => ChestVerdict.OtherOwnerMucUnusable, CleanupReason.OtherOwnerMucSilent => ChestVerdict.OtherOwnerMucSilent,
+                CleanupReason.OtherOwnerMucChecking => ChestVerdict.OtherOwnerMucChecking,
                 CleanupReason.BothRemote => ChestVerdict.BothRemote, CleanupReason.AzuExcluded => ChestVerdict.AzuExcluded,
                 _ => ChestVerdict.RuleRejects
             }, why + "; but " + CleanupReport.Describe(blocked.Value), rank);
@@ -323,6 +448,12 @@ public static class PlacementExplainer
         return "its rule doesn't take it";
     }
 
+    private static void Lap(Action<string, double>? timed, Stopwatch? clock, string step)
+    {
+        if (timed == null || clock == null) return;
+        timed(step, clock.Elapsed.TotalMilliseconds); clock.Restart();
+    }
+
     // The planners' own capacity test, on the chest as it is now.
     private static bool Room(TransferInventorySnapshot inventory, TransferStack stack) =>
         new TransferGrid(inventory).TryFind(stack.MergeKey, stack.MaximumStack, out _, out _, out _, out _);
@@ -349,6 +480,25 @@ public static class PlacementExplainer
             if (string.IsNullOrWhiteSpace(text)) return fallback;
             return text!.Length <= 64 ? text : text.Substring(0, 63) + "…";
         }
+        /// <summary>The rule alternative and category that took the item, as <see cref="Why"/> names them.</summary>
+        private static (ClassificationFilterRule? Rule, string? Category) Decider(RankedDestination rank, ClassificationResult? item, FacetEvidence[]? facets)
+        {
+            if (item == null || facets == null) return (rank.Rule, rank.Category);
+            var rule = rank.Rule ?? rank.Candidate.Rules.Acceptance.Rules.FirstOrDefault(x => x.Categories.Count == 0 && ClassificationFilters.MatchesValidated(item, x, facets)
+                || rank.Match is AcceptanceMatch.Category or AcceptanceMatch.FilteredCategory && x.Categories.Count != 0 && ClassificationFilters.MatchesValidated(item, x, facets));
+            return (rule, rank.Category ?? rule?.Categories.FirstOrDefault(c => item.Memberships.Any(m => m.Category == c)));
+        }
+
+        /// <summary>X1: the basis of <see cref="Why"/> without its detail, for the tooltip's "counts as Metals".</summary>
+        internal (PlacementBasis, string?) Basis(RankedDestination rank, ClassificationResult? item, FacetEvidence[]? facets)
+        {
+            if (rank.ExistingItemFallback) return (PlacementBasis.Holds, null);
+            if (rank.Match == AcceptanceMatch.ExactItem) return (PlacementBasis.Always, null);
+            var category = Decider(rank, item, facets).Category;
+            if (category != null) return (PlacementBasis.Category, Category(category));
+            return (rank.Match == AcceptanceMatch.Any ? PlacementBasis.Anything : PlacementBasis.Filters, null);
+        }
+
         /// <summary>The rule part that took the item, its specificity and the chest's priority.</summary>
         internal string Why(RankedDestination rank, ClassificationResult item, FacetEvidence[] facets)
         {
@@ -357,9 +507,7 @@ public static class PlacementExplainer
             else if (rank.Match == AcceptanceMatch.ExactItem) part = "lists it under Always";
             else
             {
-                var rule = rank.Rule ?? rules.Acceptance.Rules.FirstOrDefault(x => x.Categories.Count == 0 && ClassificationFilters.MatchesValidated(item, x, facets)
-                    || rank.Match is AcceptanceMatch.Category or AcceptanceMatch.FilteredCategory && x.Categories.Count != 0 && ClassificationFilters.MatchesValidated(item, x, facets));
-                var category = rank.Category ?? rule?.Categories.FirstOrDefault(c => item.Memberships.Any(m => m.Category == c));
+                var (rule, category) = Decider(rank, item, facets);
                 part = category != null ? "category " + Category(category) : rank.Match == AcceptanceMatch.Any ? "takes anything" : "its filters";
                 // The chest label's words ("eaten by Boar or Lox", "crafted by me"), not raw tokens (runtime 2026-10-21).
                 var filters = rule == null ? "" : RuleText.Short(rule.Filters, open);

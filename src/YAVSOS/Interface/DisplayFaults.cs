@@ -10,7 +10,7 @@ namespace YAVSOS.Interface;
 internal static class DisplayFaults
 {
     internal const string Where = "\"where it would go\" in item tooltips", Search = "the panel's search", Categories = "categories in item tooltips",
-        Labels = "chest hover labels", Results = "the result panel (results still show as a message)";
+        Labels = "chest hover labels", Glow = "the chest glow after a stash or cleanup", Results = "the result panel (results still show as a message)";
     private static readonly List<string> off = new();
     internal static IReadOnlyList<string> Off => off;
     internal static void Add(string part) { if (!off.Contains(part)) off.Add(part); }

@@ -229,13 +229,13 @@ public sealed class StoreOrderTests
         var bread = input.Player.Stacks.First(x => x.Identity.Prefab == "Bread").Handle;
         var blocked = PlacementExplainer.Stash(input, copper, detail: false);
         Assert.Equal(PlacementOutcome.Blocked, blocked.Outcome);
-        Assert.Equal("No ruled chest can take Copper (AzuAutoStore's config excludes it), so AzuAutoStore's own settings decide where the store key puts it.",
-            ExplanationView.Sentence(blocked, false, azuStores: true));
-        Assert.Equal("No chest rule nearby takes Bread, so AzuAutoStore's own settings decide where the store key puts it.",
-            ExplanationView.Sentence(PlacementExplainer.Stash(input, bread, detail: false), false, azuStores: true));
+        Assert.Equal("Stash stack: AzuAutoStore's own settings decide (AzuAutoStore's config excludes it)",
+            ExplanationView.Tooltip(blocked, false, azuStores: true));
+        Assert.Equal("Stash stack: AzuAutoStore's own settings decide (no chest rule nearby takes it)",
+            ExplanationView.Tooltip(PlacementExplainer.Stash(input, bread, detail: false), false, azuStores: true));
         var goes = world.Stash(azu: true);
-        Assert.Equal("The store key would put Copper in the a-metal.",
-            ExplanationView.Sentence(PlacementExplainer.Stash(goes, goes.Player.Stacks.First(x => x.Identity.Prefab == "Copper").Handle, detail: false), false,
+        Assert.Equal("Stash stack: a-metal (counts as Metals)",
+            ExplanationView.Tooltip(PlacementExplainer.Stash(goes, goes.Player.Stacks.First(x => x.Identity.Prefab == "Copper").Handle, detail: false), false,
                 id => id, azuStores: true));
     }
 }

@@ -151,12 +151,13 @@ internal static class StashLab
         return "published " + format;
     }
 
-    /// <summary>Diagnostics: every other player in range, their peer id and published format.</summary>
+    /// <summary>Diagnostics: every other player in range, their peer id, published format ("none" without a key) and probe state (D116).</summary>
     public static string Peers() => string.Join("; ", Player.GetAllPlayers().Where(x => x && x != Player.m_localPlayer).Select(x =>
     {
         var zdo = x.GetComponent<ZNetView>()?.GetZDO();
         return zdo == null ? x.GetPlayerName() + ": no zdo"
-            : $"{x.GetPlayerName()}: peer {zdo.GetOwner()}, format {zdo.GetInt(MucRoute.FormatKeyName.GetStableHashCode())}, known {PeerFormat.Known(zdo.GetOwner())}";
+            : $"{x.GetPlayerName()}: peer {zdo.GetOwner()}, format {(zdo.GetInt(MucRoute.FormatKeyName.GetStableHashCode(), out var format) ? format.ToString() : "none")}, " +
+              $"probe {PeerProbe.Describe(zdo.GetOwner())}, known {PeerFormat.Known(zdo.GetOwner())}";
     }));
 
     private static ItemDrop.ItemData? Find(string prefab) => Player.m_localPlayer

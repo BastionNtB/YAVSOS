@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
+using BepInEx;
 using BepInEx.Bootstrap;
 using YAVSOS.Integrations;
 
@@ -17,7 +20,7 @@ internal static class FaultLab
     internal static int ChestLimit { get; private set; }
     /// <summary>SF3: every chest the stash gathers fails to be read.</summary>
     internal static bool UnreadableChests { get; private set; }
-    // SF1, SF4: the one-shot fault armed for the next frame that reaches that part ("panel", "explanations", "search").
+    // SF1, SF4: the one-shot fault armed for the next frame that reaches that part ("panel", "explanations", "search", "highlight", "glow").
     private static string armed = "";
 
     public static string Status() =>
@@ -25,6 +28,23 @@ internal static class FaultLab
         $"display={string.Join(",", Interface.DisplayFaults.Off)}; " +
         $"azuExclusions={AzuExclusions.State}; azuErrors={AzuExclusions.Errors}; azuPause={AzuExclusions.PauseState}; " +
         $"categoriesGaveUp={Plugin.Instance?.CategoriesGaveUp ?? "-"}";
+
+    private static HashSet<string>? startup;
+    /// <summary>
+    /// D088: startup checks forced to fail, one name per line in <c>BepInEx/config/yavsos-lab-faults.txt</c>, read once
+    /// when the first check asks (<c>azu-store-order</c>: AzuAutoStore's store-key order). Delete the file and restart to
+    /// end them. Used for the <c>panel-compatibilitychecks.png</c> capture.
+    /// </summary>
+    internal static bool StartupFault(string name)
+    {
+        if (startup == null)
+        {
+            startup = new HashSet<string>(StringComparer.Ordinal);
+            var file = Path.Combine(Paths.ConfigPath, "yavsos-lab-faults.txt");
+            if (File.Exists(file)) foreach (var line in File.ReadAllLines(file)) if (line.Trim().Length != 0) startup.Add(line.Trim());
+        }
+        return startup.Contains(name);
+    }
 
     /// <summary>D086 D16: stacks of <paramref name="prefab"/> can't be captured; "" turns it off.</summary>
     public static string SetUncapturable(string prefab) { Uncapturable = prefab ?? ""; return "uncapturable=" + Uncapturable; }
@@ -43,7 +63,7 @@ internal static class FaultLab
     {
         switch (name)
         {
-            case "panel": case "explanations": case "search": armed = name; break;
+            case "panel": case "explanations": case "search": case "highlight": case "glow": armed = name; break;
             case "chests": ChestRuleStore.LabUnbound = true; break;
             case "unreadable": UnreadableChests = true; break;
             case "none": armed = ""; ChestRuleStore.LabUnbound = false; UnreadableChests = false; break;

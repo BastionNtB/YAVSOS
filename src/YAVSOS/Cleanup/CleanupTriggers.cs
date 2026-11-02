@@ -10,38 +10,51 @@ using YAVSOS.Core.Interface;
 namespace YAVSOS.Cleanup;
 
 /// <summary>
-/// D057 O7: area cleanup on Ctrl plus AzuAutoStore's own store key (Ctrl+. by default), following the player's Azu
-/// binding; without Azu, YAVSOS's own shortcut. Also the console command <c>yavsos cleanup [radius]</c> for testing.
-/// Unity game thread only.
+/// D057 O7, D125, D126: area cleanup on the modifiers of <c>Cleanup.Shortcut</c> (Ctrl by default) plus AzuAutoStore's
+/// own store key (Ctrl + . by default), following the player's Azu binding; without Azu, YAVSOS's own shortcut. Also the
+/// console command <c>yavsos cleanup [radius]</c> for testing. Unity game thread only.
 /// </summary>
 internal static class CleanupTriggers
 {
-    private static ConfigEntry<KeyboardShortcut>? azuStore, azuSingle;
+    private static ConfigEntry<KeyboardShortcut>? azuStore, azuSingle, azuPause;
+    private static ConfigEntry<KeyboardShortcut>? watchedOwn;
+    private static BepInEx.Logging.ManualLogSource? log;
+    private static bool pauseWarned;
 
     /// <summary>
     /// Binds Azu's private store shortcut by shape; on any mismatch YAVSOS's own shortcut applies. Also Azu's "Store Single
-    /// Item Shortcut", for the tooltip's label only (P8-17); unbound, the label carries no key.
+    /// Item Shortcut", for the tooltip's label only (P8-17); unbound, the label carries no key. And Azu's "Pause Shortcut",
+    /// only to warn when it is also the cleanup key (D125); unread, there is no check.
     /// </summary>
     internal static void BindAzuStoreKey(Assembly azu, BepInEx.Logging.ManualLogSource? log = null)
     {
+        CleanupTriggers.log = log;
         string? storeProblem = null, singleProblem = null;
         try
         {
             var plugin = azu.GetType("AzuAutoStore.AzuAutoStorePlugin", false);
             azuStore = Shortcut(plugin, "_storeShortcut", out storeProblem);
             azuSingle = Shortcut(plugin, "SingleItemShortcut", out singleProblem);
+            azuPause = Shortcut(plugin, "_pauseShortcut", out _);
         }
         catch (Exception error)
         {
-            azuStore = null; azuSingle = null;
+            azuStore = null; azuSingle = null; azuPause = null;
             storeProblem = singleProblem = error.GetType().Name + ": " + error.Message;
         }
         // SF7 (D087): what the player's keys do instead, once at load.
+        var own = Plugin.Instance?.Settings.CleanupShortcut;
         if (storeProblem != null)
             log?.LogWarning("AzuAutoStore's store key could not be read (" + storeProblem + "); cleanup uses YAVSOS's own Cleanup shortcut" +
-                (Plugin.Instance is { } yavsos ? " (" + yavsos.Settings.CleanupShortcut.Value + ")" : "") + " instead of Ctrl plus AzuAutoStore's store key.");
+                (own != null ? " (" + own.Value + ")" : "") + " instead of its modifier plus AzuAutoStore's store key.");
         if (singleProblem != null)
             log?.LogWarning("AzuAutoStore's single-item store key could not be read (" + singleProblem + "); the \"Stash stack\" tooltip line shows no key.");
+        if (azuStore == null || azuPause == null || own == null) return;
+        watchedOwn = own;
+        own.SettingChanged += (_, _) => WarnIfPause();
+        azuStore.SettingChanged += (_, _) => WarnIfPause();
+        azuPause.SettingChanged += (_, _) => WarnIfPause();
+        WarnIfPause();
     }
 
     private static ConfigEntry<KeyboardShortcut>? Shortcut(Type? plugin, string name, out string? problem)
@@ -55,8 +68,27 @@ internal static class CleanupTriggers
         return entry;
     }
 
-    internal static string Binding(ConfigEntry<KeyboardShortcut> own) =>
-        azuStore != null ? "Ctrl+" + azuStore.Value : own.Value.ToString();
+    /// <summary>
+    /// D125, D126: when the cleanup chord is also Azu's Pause Shortcut (Shift + . by default, so a Shift modifier in
+    /// <c>Cleanup.Shortcut</c>), each cleanup would also pause or resume Azu's storing. Said once per session, at load or
+    /// when one of the keys changes to match.
+    /// </summary>
+    private static void WarnIfPause()
+    {
+        if (pauseWarned || azuStore == null || azuPause == null || watchedOwn == null) return;
+        var chord = CleanupKey.WithAzu(Chord(watchedOwn.Value), Chord(azuStore.Value));
+        if (!CleanupKey.Same(chord, Chord(azuPause.Value))) return;
+        pauseWarned = true;
+        log?.LogWarning("YAVSOS's cleanup key (" + chord + ") is also AzuAutoStore's Pause Shortcut, so each cleanup also pauses or resumes " +
+            "AzuAutoStore's storing. Change AzuAutoStore's Pause Shortcut, or the modifier in YAVSOS's Cleanup Shortcut.");
+    }
+
+    private static KeyChord Chord(KeyboardShortcut shortcut) =>
+        new KeyChord(shortcut.MainKey.ToString(), shortcut.Modifiers.Select(x => x.ToString()));
+
+    /// <summary>The cleanup chord while Azu's store key is bound (D125), else null: YAVSOS's own shortcut applies.</summary>
+    private static KeyChord? AzuChord(ConfigEntry<KeyboardShortcut> own) =>
+        azuStore == null ? null : CleanupKey.WithAzu(Chord(own.Value), Chord(azuStore.Value));
 
     /// <summary>
     /// P8-17 (Q12, revised 2026-10-28): the single-stack key as a player reads it ("Middle mouse"): Azu's "Store Single
@@ -70,35 +102,32 @@ internal static class CleanupTriggers
     }
 
     /// <summary>
-    /// The cleanup key as a player reads it ("Ctrl + ."), for the Clean up nearby tooltip (D101): Ctrl plus Azu's store key
-    /// while it is bound, as <see cref="Pressed"/> checks, else YAVSOS's own; "" when unset.
+    /// The cleanup key as a player reads it ("Ctrl + ."), for the Clean up nearby tooltip (D101): the chord
+    /// <see cref="Pressed"/> checks, with Azu's store key while it is bound, else YAVSOS's own; "" when unset.
     /// </summary>
-    internal static string KeyName(ConfigEntry<KeyboardShortcut> own)
-    {
-        if (azuStore != null)
-        {
-            var azu = azuStore.Value;
-            return azu.MainKey == KeyCode.None ? "" : KeyNames.Format(azu.MainKey.ToString(), new[] { "LeftControl" }.Concat(azu.Modifiers.Select(x => x.ToString())));
-        }
-        return own.Value is { } key && key.MainKey != KeyCode.None ? KeyNames.Format(key.MainKey.ToString(), key.Modifiers.Select(x => x.ToString())) : "";
-    }
+    internal static string KeyName(ConfigEntry<KeyboardShortcut> own) =>
+        azuStore != null ? AzuChord(own)?.ToString() ?? "" : Chord(own.Value).ToString();
 
-    internal static bool Pressed(ConfigEntry<KeyboardShortcut> own) => !InventoryGui.IsVisible() && Chord(own);
+    internal static bool Pressed(ConfigEntry<KeyboardShortcut> own) => !InventoryGui.IsVisible() && Down(own);
 
     /// <summary>F7 (DOCS-CODE-COMPARISON U2): the cleanup key pressed with the inventory open, which runs nothing; the caller says so.</summary>
-    internal static bool PressedInInventory(ConfigEntry<KeyboardShortcut> own) => InventoryGui.IsVisible() && Chord(own);
+    internal static bool PressedInInventory(ConfigEntry<KeyboardShortcut> own) => InventoryGui.IsVisible() && Down(own);
 
-    private static bool Chord(ConfigEntry<KeyboardShortcut> own)
+    private static bool Down(ConfigEntry<KeyboardShortcut> own)
     {
         if (!Player.m_localPlayer || Console.IsVisible() || TextInput.IsVisible() || Menu.IsVisible() || Minimap.IsOpen() ||
             Chat.instance && Chat.instance.HasFocus() || Interface.TypingBlock.Active) return false;
         if (azuStore == null) return own.Value.IsDown();
-        var shortcut = azuStore.Value;
-        if (shortcut.MainKey == KeyCode.None || !UnityInput.Current.GetKeyDown(shortcut.MainKey)) return false;
-        if (!UnityInput.Current.GetKey(KeyCode.LeftControl) && !UnityInput.Current.GetKey(KeyCode.RightControl)) return false;
-        foreach (var modifier in shortcut.Modifiers) if (!UnityInput.Current.GetKey(modifier)) return false;
+        // Every frame: the chord's main key is Azu's, so the chord is built only on the frame it goes down. Extra held keys
+        // don't block the chord; Azu's own store key (BepInEx IsDown) doesn't fire while a modifier is held.
+        var main = azuStore.Value.MainKey;
+        if (main == KeyCode.None || !UnityInput.Current.GetKeyDown(main) || AzuChord(own) is not { } chord) return false;
+        foreach (var modifier in chord.Modifiers)
+            if (!Held(modifier) && !(CleanupKey.OtherSide(modifier) is { } other && Held(other))) return false;
         return true;
     }
+
+    private static bool Held(string key) => Enum.TryParse<KeyCode>(key, out var code) && UnityInput.Current.GetKey(code);
 }
 
 [HarmonyPatch(typeof(Terminal), "InitTerminal")]

@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.0 (2026-11-02)
+
+### Changed
+
+- With AzuAutoStore installed, the cleanup key is now the modifier from the Cleanup `Shortcut` setting (Ctrl by default) plus AzuAutoStore's store key, instead of always Ctrl. Set `Shortcut` to None to turn the cleanup key off.
+- Chests now glow and give off a small puff when YAVSOS's stash or cleanup puts items in them (AzuAutoStore's store key keeps its own effect). Choose the effect, or None, with `ChestArrivalEffect`, and set how long chests stay lit with `HighlightSecondsAfterClose`.
+- When you search in the YAVSOS panel, chests holding a matching item glow gold, and with the toggle right of the search bar on, other chests whose rule takes it glow blue. Point at a lit chest to see why, such as "holds Copper ×57".
+- After a cleanup, a chest glows red-orange if it kept items that no chest takes or that only full chests take. Point at it to see what stayed and why.
+- Change the gold, blue and red-orange glows with the `HoldsColor`, `TakesColor` and `StaysColor` settings, which have a colour picker in the configuration manager.
+- New **Copy** and **Paste** buttons beside **Clear rule** copy a chest's rule to another chest: its categories, Always and Never items, filters and priority. Paste replaces the other chest's rule.
+- A new arrow left of the panel's title folds the panel down to its title, status marks and the chest's label. The panel stays folded on every chest, even after you restart the game, until you unfold it.
+- With AzuAutoStore installed, pressing its store key now shows YAVSOS's result panel, listing what AzuAutoStore stored and where, including other players' chests and RossItemDrawers drawers.
+- The result panel now closes by itself 10 seconds after a stash or cleanup, even with your inventory open. Set how long it stays up with `ResultPanelSeconds`, or turn on `ResultPanelHoldInInventory` to keep it up while your inventory is open.
+- The "Stash stack" line in item tooltips now says why the item goes to that chest, such as "(counts as Metals)". The line appears as soon as the tooltip opens and updates as you walk.
+- On a server without YAVSOS, stashing and cleanup can now put items in a chest another player has open or is standing near, if that player has AzuAutoStore or MultiUserChest. Before, that player needed YAVSOS too.
+- When stashing or cleanup skips another player's chest, the result panel gives each reason on its own line, such as "no MultiUserChest answered".
+- Pointing at the panel's Rule heading shows the chest's label as other players see it. Pointing at the YAVSOS title shows the mod's full name.
+
+### Fixed
+
+- Tankards and mead horns now count as Equipment (under Equipment · Other) instead of Swords, so stashing and cleanup no longer send them to a chest that takes Swords.
+- The cleanup button's tooltip no longer names another player's chest that cleanup then skips.
+- When middle-clicking stores a whole stack, its tooltip now closes instead of staying over the empty slot. (With AzuAutoStore installed, its single-item key works as before.)
+
 ## 1.0.2 (2026-10-31)
 
 ### Fixed

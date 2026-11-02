@@ -15,7 +15,7 @@ Single-player and client-only games use your own file for all of them.
 **With AzuAutoStore.** AzuAutoStore does the stashing with its own keys, range and hotbar
 settings, so the **Stash** settings are read-only and kept for when it's removed, and
 `AllowStashing` has no effect. `MaximumRange` and `MaximumChests` then limit cleanup only.
-Cleanup is Ctrl plus AzuAutoStore's store key.
+Cleanup is the cleanup key's modifier (Ctrl by default) plus AzuAutoStore's store key.
 
 ## Server
 
@@ -36,7 +36,7 @@ Your own.
 | Setting | Default | Allowed | What it does |
 | --- | --- | --- | --- |
 | `Range` | 10 m | 1–100 m | How far from you, in metres, cleanup looks for chests. Capped by the server's MaximumRange. |
-| `Shortcut` | Ctrl + . | — | Runs cleanup of nearby chests when AzuAutoStore is not installed. With AzuAutoStore, cleanup is Ctrl plus AzuAutoStore's own store key. |
+| `Shortcut` | Ctrl + . | — | Runs cleanup of nearby chests. With AzuAutoStore installed, only this shortcut's modifier counts: cleanup is that modifier (Ctrl if there is none) plus AzuAutoStore's own store key. Set it to None for no cleanup key; the Clean up nearby button still works. |
 
 ## Stash
 
@@ -56,10 +56,18 @@ Your own.
 
 | Setting | Default | Allowed | What it does |
 | --- | --- | --- | --- |
-| `HighlightSecondsAfterClose` | 20 | 0–60 | After you close a chest, how many seconds the chests lit by its search stay lit, so you can walk to them. 0 turns them off when the chest closes. While the search is active they stay lit. |
+| `ChestArrivalEffect` | small-item puff | None, small-item puff, smelter puff, fermenter puff, loot sparkle, pick sparkle, auto-pickup shimmer | The small effect a chest plays when your stash or cleanup puts items into it. None turns it off. With AzuAutoStore installed, its store key shows AzuAutoStore's own effect instead; cleanup still shows this one. |
+| `HighlightSecondsAfterClose` | 20 | 0–60 | How many seconds chests stay lit. After you close a chest, the chests lit by its search stay lit this long, so you can walk to them (while the search is active they stay lit). After your stash or cleanup, the chests it put items into, or left something in, light up this long. 0 turns the light off: search lights end when the chest closes, and stash and cleanup only play the ChestArrivalEffect. |
+| `HoldsColor` | gold (`FFC740`) | any colour | The colour of chests that hold what you searched for, and of chests your stash or cleanup just put items into. Alpha is ignored. |
+| `PanelFolded` | off | — | Show the rule panel folded: only its title, status marks and the chest's label. The arrow left of the panel's title folds and unfolds it. |
 | `PanelOffsetX` | 0 | — | Rule panel offset to the right of its place beside the chest window, in the game's UI units (1080p-scaled); negative moves it left. Drag the panel's title to change it, for example if it overlaps another mod's window. |
 | `PanelOffsetY` | 0 | — | Rule panel offset downwards from the top of the chest window, in the game's UI units (1080p-scaled); negative moves it up. |
-| `ShowChestLabels` | on | — | Add the chest's rule to its hover text, such as "Food › eaten by Boar · priority 2 (Urgent)". Only chests with a rule that you can open. |
+| `ResultPanelHoldInInventory` | off | — | Keep the result panel up while your inventory is open; its time counts down only while the inventory is closed. When off, it closes after ResultPanelSeconds whether the inventory is open or not. |
+| `ResultPanelSeconds` | 10 | 3–60 | How many seconds the result panel stays up before it closes by itself. Its Close button closes it sooner. |
+| `SearchShowsTakers` | off | — | Also light the chests whose rule would take what you search for, not only the chests that hold it. The rule-tag button beside the search box turns this on and off. |
+| `ShowChestLabels` | on | — | Add the chest's rule to its hover text, such as "Food › eaten by Boar · priority 2 (Urgent)". Only chests with a rule that you can open. A chest lit by your search or cleanup says why either way. |
 | `ShowItemCategories` | on | — | Add an item's categories to its tooltip, such as "Raw food, Animal feed · eaten by Boar, Hen". |
-| `ShowResultPanel` | on | — | After a cleanup, or a stash with YAVSOS's own store keys (without AzuAutoStore), show a short result panel with what moved and what stayed, with item names and reasons. |
+| `ShowResultPanel` | on | — | After a cleanup or a stash, show a short result panel with what moved and what stayed, with item names and reasons. With AzuAutoStore installed, it shows after AzuAutoStore's store key. |
 | `ShowRuleControls` | on | — | Show the chest rule panel while a chest is open. |
+| `StaysColor` | red-orange (`FF6B33`) | any colour | The colour of chests your cleanup left something in because no chest takes it or the chests that take it are full. Alpha is ignored. |
+| `TakesColor` | cool blue (`80B8FF`) | any colour | The colour of chests whose rule would take what you searched for, shown while the rule-tag button beside the search box is on. Alpha is ignored. |

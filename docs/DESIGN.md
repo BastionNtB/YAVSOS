@@ -285,8 +285,11 @@ upstream.
 
 MultiUserChest copies differ in one field of the item data they send. Every YAVSOS player
 publishes which format their copy uses, and YAVSOS's copy reads and writes each request in
-the other player's format. When the format is unknown, the move is refused and the item
-stays put. Requiring everyone to match one copy was rejected: the server is rarely part of
+the other player's format. For a player who publishes none (AzuAutoStore without YAVSOS),
+YAVSOS's copy sends their copy a request for a chest that doesn't exist. Every copy answers
+it without touching an inventory, echoing a test item in its own format, and the echo's
+length gives the format (D116). When the format is still unknown, the move is refused and
+the item stays put. Requiring everyone to match one copy was rejected: the server is rarely part of
 these requests, and it would block players over a fixable difference.
 
 **No waiting in line.** Only a move that conflicts with a pending request (the same other

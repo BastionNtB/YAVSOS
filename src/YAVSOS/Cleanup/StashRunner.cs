@@ -35,6 +35,10 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         internal StashPlan Plan = null!;
         /// <summary>Stack key of each planned stack, from the inventory the plan was made from (A02).</summary>
         internal Dictionary<Guid, string> Keys = new();
+        /// <summary>The stack the single-item key stashes; null for the store key.</summary>
+        internal ItemDrop.ItemData? Single;
+        /// <summary>The game's tooltip shown when the key was pressed: the only one the run may close.</summary>
+        internal object? Tooltip;
         internal Run() { Report = CleanupReport.ForStash(); }
         internal override IReadOnlyList<StashMove> Moves => Plan.Moves;
     }
@@ -102,7 +106,8 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         var answers = Answers(plugin);
         if (answers == null) return CleanupRunner.Say("YAVSOS categories are still loading. Try again shortly.");
         var range = Math.Min(radius ?? settings.EffectiveStashRange, settings.MaximumRange.Value);
-        var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal) };
+        var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal), Single = single,
+            Tooltip = single == null ? null : ShownTooltip() };
         var input = Gather(plugin, answers, player!, run, single, out var unreadable, out var mucSource, out var failure);
         if (input == null) { run.Adapter.Dispose(); return CleanupRunner.Say(failure); }
         var plan = StashPlanner.Plan(input, plugin.RuleEvaluator);
@@ -121,6 +126,34 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         active = run;
         if (plan.Moves.Count == 0) { Finish(); return LastSummary; }
         return "Stash started.";
+    }
+
+    /// <summary>
+    /// P9-14 capture find (2026-11-02): the single-item key moved the whole stack, so its tooltip goes, as the game hides it when a drag starts. The
+    /// game clears an emptied slot's tooltip text but leaves the open tooltip until the pointer leaves the slot. Only the
+    /// tooltip of that stack (<see cref="WhereTooltip"/>) closes; a stack partly stored keeps its tooltip.
+    /// </summary>
+    protected override void Finished(Run run)
+    {
+        var stack = run.Single; var player = Player.m_localPlayer;
+        if (stack == null || run.Tooltip == null || !player || player.GetInventory().GetAllItems().Contains(stack) || !ReferenceEquals(WhereTooltip.Item, stack)) return;
+        // The pointer may have moved to another tooltip while the run took (a MultiUserChest move takes longer).
+        if (!ReferenceEquals(ShownTooltip(), run.Tooltip)) return;
+        try { UITooltip.HideTooltip(); }
+        catch (Exception error) when (OptionalFailure.Recoverable(error))
+        {
+            if (!tooltipFailed) log.LogWarning("Closing the stored stack's tooltip failed (" + error.GetType().Name + ": " + error.Message + "); it closes when the pointer moves.");
+            tooltipFailed = true;
+        }
+    }
+    private bool tooltipFailed;
+    // The game's current tooltip (UITooltip's private static m_current), bound once by name; missing: the tooltip
+    // closes when the pointer moves, as in the game (D058).
+    private static readonly System.Reflection.FieldInfo? CurrentTooltip = AccessTools.DeclaredField(typeof(UITooltip), "m_current");
+    private static object? ShownTooltip()
+    {
+        try { return CurrentTooltip?.GetValue(null); }
+        catch (Exception error) when (OptionalFailure.Recoverable(error)) { return null; }
     }
 
     // The planner's live inputs, shared by Start and Explain (P6-05), so an explanation sees what a run would see.
@@ -175,7 +208,7 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
             foreach (var skipped in capture.Uncapturable)
                 if (CleanupRunner.LogLimit(id + "|" + skipped) is { } more)
                     log.LogInfo($"Stash: {skipped} in {CleanupRunner.Localize(container.m_name)} at {container.transform.position} can't be read exactly; it stays and holds its slot." + more);
-            chests.Add(new StashChest(id, ChestRuleStore.Payload(container), capture.Snapshot, view.IsOwner(), MucRoute.OwnerFormatKnown(zdo.GetOwner())));
+            chests.Add(new StashChest(id, ChestRuleStore.Payload(container), capture.Snapshot, view.IsOwner(), MucRoute.OwnerState(zdo.GetOwner())));
             run.Chests.Add(id, container);
             return true;
         }
@@ -209,29 +242,46 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
     }
 
     /// <summary>
-    /// P6-05: what the stash key would do with the player's stack <paramref name="item"/> now, from the inputs a run
-    /// gathers (<see cref="PlacementExplainer.Stash"/>). With AzuAutoStore it is Azu's store key in YAVSOS's chest order
-    /// (D070): Azu's nearby chests, skips and exclusions, and Azu's own settings for what no ruled chest takes. Read only: it captures and plans nothing it acts on. Advance one
-    /// step per frame; <paramref name="done"/> gets the lines, or null with a note saying why it cannot be explained (the
-    /// note may also qualify an answer). Chests are read a few per frame, so the answer may be a few frames older than a run's.
+    /// X16 (P9-13): what <see cref="Prepare"/> gathered for the stash explanations of one open inventory: the run's chests
+    /// and snapshot adapter (alive with it, disposed with it), the prepared receivers, and the note that qualifies every
+    /// answer, or explains why there is none. Read only.
     /// </summary>
-    internal IEnumerator<bool> Explain(ItemDrop.ItemData item, Container? open, Action<string?, string> done)
+    internal sealed class Prepared : IDisposable
+    {
+        internal readonly Run? Run; internal readonly StashExplainContext? Context; internal readonly string Note;
+        internal readonly bool Azu; internal readonly Func<string, string>? Names;
+        internal Prepared(Run? run, StashExplainContext? context, string note, bool azu = false, Func<string, string>? names = null)
+        { Run = run; Context = context; Note = note; Azu = azu; Names = names; }
+        internal static Prepared Without(string note) => new(null, null, note);
+        public void Dispose() => Run?.Adapter.Dispose();
+    }
+
+    /// <summary>
+    /// P6-05, X16: gathers what the stash key would work from now, once per open inventory: the inputs a run gathers and
+    /// the stack-independent receivers (<see cref="StashExplainContext"/>). With AzuAutoStore it is Azu's store key in
+    /// YAVSOS's chest order (D070): Azu's nearby chests, skips and exclusions, and Azu's own settings for what no ruled
+    /// chest takes. Read only: it captures and plans nothing it acts on. Advance one step per frame; <paramref name="done"/>
+    /// gets the result, which then owns the snapshot adapter; stopped early, the adapter is disposed here. Chests are read
+    /// a few per frame, so the context may be a few frames older than a run's.
+    /// </summary>
+    internal IEnumerator<bool> Prepare(Container? open, Action<Prepared> done)
     {
         var plugin = Plugin.Instance; var player = Player.m_localPlayer;
         var note = "";
         var azu = !Enabled;
         if (azu && !AzuStoreOrder.Active)
-        { done(null, "The store key (AzuAutoStore) is not following chest priority in this game: YAVSOS could not line it up with this AzuAutoStore version."); yield break; }
-        if (plugin == null || !player || player.IsDead() || !ZNet.instance) { done(null, note); yield break; }
-        if (!NativeInventoryProbe.Supported) { done(null, "Stashing is unavailable: " + NativeInventoryProbe.Status + "."); yield break; }
+        { done(Prepared.Without("The store key (AzuAutoStore) is not following chest priority in this game: YAVSOS could not line it up with this AzuAutoStore version.")); yield break; }
+        if (plugin == null || !player || player.IsDead() || !ZNet.instance) { done(Prepared.Without(note)); yield break; }
+        if (!NativeInventoryProbe.Supported) { done(Prepared.Without("Stashing is unavailable: " + NativeInventoryProbe.Status + ".")); yield break; }
         var answers = Answers(plugin);
-        if (answers == null) { done(null, "YAVSOS categories are still loading."); yield break; }
+        if (answers == null) { done(Prepared.Without("YAVSOS categories are still loading.")); yield break; }
         if (!azu && !settings.AllowStashing.Value) note = "Stashing is turned off on this server; this is what it would do.";
         var range = Math.Min(settings.EffectiveStashRange, settings.MaximumRange.Value);
         var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal) };
+        var handed = false;
         try
         {
-            // Spread over frames (P6-11 cost check): one scene search, then a few chests per step, then the plan.
+            // Spread over frames (P6-11 cost check): one scene search, then a few chests per step, then the receivers.
             var timed = UiCost.Start();
             var near = (azu ? AzuStoreOrder.Nearby(player!).Where(x => ChestRuleStore.Payload(x).Length != 0 && ChestRuleStore.HasAccess(x, player!))
                 : CleanupRunner.Nearby(player, range, CleanupRunner.Scene())).Take(azu ? StashPlanner.MaximumChests : settings.EffectiveMaximumChests).ToList();
@@ -240,15 +290,15 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
             for (var at = 0; at < near.Count; at++)
             {
                 if (at != 0 && at % CleanupRunner.ExplainBatch == 0) yield return true;
-                if (!player) { done(null, ""); yield break; }
+                if (!player) { done(Prepared.Without("")); yield break; }
                 if (near[at]) GatherChest(run, near[at], chests); // One removed since the search is left out.
             }
             yield return true;
-            if (!player || player.IsDead()) { done(null, ""); yield break; }
+            if (!player || player.IsDead()) { done(Prepared.Without("")); yield break; }
             GameInventoryCapture own;
             timed = UiCost.Start();
             try { own = CapturePlayer(run, player!, azu); }
-            catch (Exception error) when (error is not OutOfMemoryException) { done(null, "Stashing is unavailable: your inventory could not be read exactly."); yield break; }
+            catch (Exception error) when (error is not OutOfMemoryException) { done(Prepared.Without("Stashing is unavailable: your inventory could not be read exactly.")); yield break; }
             var held = new List<Guid>();
             var drag = CleanupRunner.DragItem != null && InventoryGui.instance ? CleanupRunner.DragItem(InventoryGui.instance) : null;
             if (drag != null && run.Adapter.TryHandle(player!.GetInventory(), drag, out var dragHandle)) held.Add(dragHandle);
@@ -257,16 +307,34 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
             var input = Input(plugin, answers, player!, run, own, chests, held, null, out _);
             UiCost.Stop("stash explain input", timed);
             yield return true;
-            if (!player || player.IsDead()) { done(null, ""); yield break; }
-            if (!run.Adapter.TryHandle(player!.GetInventory(), item, out var handle) || input.Player.Stacks.All(x => x.Handle != handle))
-            { done(null, "That item cannot be stashed."); yield break; }
-            var names = CleanupRunner.ChestNamer(player!, open, run.Chests);
+            if (!player || player.IsDead()) { done(Prepared.Without("")); yield break; }
             timed = UiCost.Start();
-            var answer = PlacementExplainer.Stash(input, handle, plugin.RuleEvaluator, names, CleanupRunner.Name, openName: RuleControls.OpenValueName, detail: false);
-            UiCost.Stop("stash explain plan", timed);
-            done(ExplanationView.Tooltip(answer, false, names, azuStores: azu, stackKey: CleanupTriggers.StackKey(azu, settings.StashItemShortcut)), note);
+            var context = new StashExplainContext(input, plugin.RuleEvaluator);
+            UiCost.Stop("stash explain receivers", timed); // X16: once per context; each stack's "routes" is timed in Answer.
+            handed = true;
+            done(new Prepared(run, context, note, azu, CleanupRunner.ChestNamer(player!, open, run.Chests)));
         }
-        finally { run.Adapter.Dispose(); }
+        finally { if (!handed) run.Adapter.Dispose(); }
+    }
+
+    /// <summary>
+    /// P6-05, X16: what the stash key would do with the player's stack <paramref name="item"/>, against the prepared
+    /// context (<see cref="StashExplainContext.Explain"/>): the typed answer (S2), or none with a note saying why.
+    /// The answer's chest names read the player's position each time its line is built. Read only.
+    /// </summary>
+    internal ExplanationAnswer Answer(Prepared prepared, ItemDrop.ItemData item)
+    {
+        if (prepared.Context == null || prepared.Run == null) return ExplanationAnswer.Without(prepared.Note);
+        var player = Player.m_localPlayer;
+        if (!player || player.IsDead()) return ExplanationAnswer.Without("");
+        if (!prepared.Run.Adapter.TryHandle(player.GetInventory(), item, out var handle) || !prepared.Context.Has(handle))
+            return ExplanationAnswer.Without("That item cannot be stashed.");
+        var timed = UiCost.Start();
+        var answer = prepared.Context.Explain(handle, prepared.Names, CleanupRunner.Name, openName: RuleControls.OpenValueName, detail: false,
+            timed: UiCost.Timer("stash explain ")); // X16: this stack's routes.
+        UiCost.Stop("stash explain plan", timed);
+        return new ExplanationAnswer(answer, false, prepared.Note, prepared.Names, azuStores: prepared.Azu,
+            stackKey: CleanupTriggers.StackKey(prepared.Azu, settings.StashItemShortcut));
     }
 
     protected override void ExecuteChecked(Run run, StashMove move)
@@ -306,7 +374,10 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
             else if (result.Outcome == DirectMoveOutcome.Unconfirmed) pending.Observer.SourceUnknown();
         }
         if (Report(run, move, result))
+        {
+            Arrived(destination);
             log.LogInfo($"Stash stored {result.Units} {CleanupRunner.Name(move.Identity.Prefab)} in {CleanupRunner.Localize(destination.m_name)} ({move.Tier}).");
+        }
     }
 
     // MultiUserChest takes the request from here (D043); its windows (refund after 30 s) are inherited.
@@ -317,7 +388,7 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         if (!MucRoute.Available(out _)) { run.Report.Remain(CleanupReason.OtherOwnerNoMuc, move.Identity.Prefab); return; }
         var zdo = ChestRuleStore.View(destination)!.GetZDO();
         if (!zdo.HasOwner()) { run.Report.Refuse(TransferRefusal.OwnerChanged, move.Identity.Prefab); return; }
-        if (!MucRoute.OwnerFormatKnown(zdo.GetOwner())) { run.Report.Remain(CleanupReason.OtherOwnerFormatUnknown, move.Identity.Prefab); return; }
+        if (MucRoute.OwnerState(zdo.GetOwner()).Skip() is { } skip) { run.Report.Remain(skip, move.Identity.Prefab); return; }
         var units = Math.Min(move.Units, item.m_stack);
         if (units < 1) { run.Report.Refuse(TransferRefusal.InventoryChanged, move.Identity.Prefab); return; }
         var baseline = MoveVerification.Counts(before.Snapshot, beforeDestination.Snapshot, key);
@@ -433,7 +504,7 @@ internal static class QuickSlots
 
 /// <summary>
 /// D061 Q1/Q5: YAVSOS's store key (default <c>.</c>) and single-item key (default middle mouse on an inventory stack),
-/// only when AzuAutoStore is not installed. Ctrl+<c>.</c> stays cleanup. Unity game thread only.
+/// only when AzuAutoStore is not installed. The cleanup key (Ctrl + <c>.</c> by default, D126) stays cleanup. Unity game thread only.
 /// </summary>
 internal static class StashTriggers
 {

@@ -4,7 +4,7 @@
 Writes artifacts/package/<version>/:
   YAVSOS-<version>-thunderstore.zip  Thunderstore and Hexium (manifest, icon, README, CHANGELOG, plugins/)
   YAVSOS-<version>-nexus.zip         Nexus Mods (BepInEx/plugins/YAVSOS/)
-  README.md                          the store text: docs/PLAYER-GUIDE.md with its media slots as images
+  README.md                          the store text: docs/PLAYER-GUIDE.md with its media and art slots as images
   nexus-description.bbcode.txt       the same text in Nexus BBCode
 
 The guide is the store description on every store (maintainer, 2026-10-27, D099) and the
@@ -14,6 +14,11 @@ the repository root) turned into links to the public repository at the release t
 whose file is missing, or with no --media-url, stays as its text; a repository link with no
 --repo-url stays relative. Both are reported as unresolved; --strict (used when publishing)
 refuses them. A link to a file that doesn't exist always fails. Nothing is published here.
+
+The guide art (P9-19, D113) comes from assets/art, beside the media folder: a line
+"> **Art: `name.png`** — alt text" is a block piece (banner, divider, ornament), and an inline
+image `![alt](assets/art/name.png)` is a small one, such as a status mark in a list. Art is
+committed, so a missing art file always fails; with no --media-url, art stays unresolved.
 """
 import argparse
 import json
@@ -30,10 +35,13 @@ ROOT = Path(__file__).resolve().parent.parent
 # The guide; in the public repository it is the README itself (D102), its slots already images.
 GUIDE = ROOT / "docs/PLAYER-GUIDE.md" if (ROOT / "docs/PLAYER-GUIDE.md").is_file() else ROOT / "README.md"
 MEDIA = ROOT / "assets/media"
+ART = ROOT / "assets/art"
 ICON = ROOT / "assets/icon/icon.png"
 CONFIG = ROOT / "packaging/package.json"
 SLOT = re.compile(r"^> \*\*(Picture|Animation): `([^`]+)`\*\* — (.*)$")
 REPO_IMAGE = re.compile(r"^!\[(.*)\]\(assets/media/([^)]+)\)$")
+ART_SLOT = re.compile(r"^> \*\*Art: `([^`]+)`\*\* — (.*)$")
+ART_IMAGE = re.compile(r"!\[([^\]]*)\]\(assets/art/([^)\s]+)\)")
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 # A fixed timestamp makes the zips byte-identical for the same inputs.
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)
@@ -50,10 +58,43 @@ def project_version():
     return found.group(1)
 
 
+def alt_text(caption):
+    return caption.replace("]", ")").replace("[", "(")
+
+
+def art_url(media_url):
+    """The art folder beside the media folder: ".../assets/media" gives ".../assets/art"; None otherwise."""
+    base = media_url.rstrip("/")
+    return base[: -len("media")] + "art" if base == "assets/media" or base.endswith("/media") else None
+
+
+def resolve_art(markdown, media_url):
+    """Art slot lines and inline assets/art images as image links under the art folder; return the text and
+    the pieces left unresolved (no media_url). A piece whose file is missing fails."""
+    names = [m.group(1) for m in map(ART_SLOT.match, markdown.split("\n")) if m]
+    names += [name for _, name in ART_IMAGE.findall(markdown)]
+    missing = sorted({name for name in names if not (ART / name).is_file()})
+    if missing:
+        fail(f"the guide uses art that isn't in assets/art: {', '.join(missing)}")
+    if not media_url:
+        return markdown, sorted(set(names))
+    url = art_url(media_url)
+    if url is None:
+        fail(f"--media-url must end in /media, so the art folder beside it can be found: {media_url}")
+    lines = []
+    for line in markdown.split("\n"):
+        slot = ART_SLOT.match(line)
+        if slot:
+            line = f"![{alt_text(slot.group(2))}]({url}/{slot.group(1)})"
+        lines.append(ART_IMAGE.sub(lambda m: f"![{m.group(1)}]({url}/{m.group(2)})", line))
+    return "\n".join(lines), []
+
+
 def resolve_media(markdown, media_url):
     """Turn each slot line, or an image already pointing at assets/media, into an image link under
-    media_url; return the text and the slots left unresolved."""
-    lines, unresolved = [], []
+    media_url; return the text and the slots left unresolved. Art is resolved first (resolve_art)."""
+    markdown, unresolved = resolve_art(markdown, media_url)
+    lines = []
     for line in markdown.split("\n"):
         slot, image = SLOT.match(line), REPO_IMAGE.match(line)
         if slot is None and image is None:
@@ -61,7 +102,7 @@ def resolve_media(markdown, media_url):
             continue
         name, caption = (slot.group(2), slot.group(3)) if slot else (image.group(2), image.group(1))
         if media_url and (MEDIA / name).is_file():
-            lines.append(f"![{caption.replace(']', ')').replace('[', '(')}]({media_url.rstrip('/')}/{name})")
+            lines.append(f"![{alt_text(caption)}]({media_url.rstrip('/')}/{name})")
         else:
             lines.append(line)
             unresolved.append(name)
@@ -112,7 +153,7 @@ def repository_readme():
     repository_links(text)
     text, slots = resolve_media(text, "assets/media")
     if slots:
-        fail(f"media slots without their file: {', '.join(slots)}")
+        fail(f"media or art slots without their file: {', '.join(slots)}")
     return text
 
 
@@ -269,7 +310,7 @@ def build(media_url=None, strict=False, configuration="Release", repo_url=None):
     readme, unresolved, relative = store_readme(media_url, repo_url, f"v{version}")
     changes, unreleased = changelog(version)
     if strict and unresolved:
-        fail(f"media slots unresolved: {', '.join(unresolved)}")
+        fail(f"media or art slots unresolved: {', '.join(unresolved)}")
     if strict and relative:
         fail(f"links left relative (no --repo-url): {', '.join(relative)}")
     if strict and version in unreleased:
@@ -304,14 +345,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--media-url", help="URL of the folder holding the media files (the public repository's assets/media at the release tag)")
     parser.add_argument("--repo-url", help="the public repository (https://github.com/<owner>/<name>); the guide's links point into it at tag v<version>")
-    parser.add_argument("--strict", action="store_true", help="refuse unresolved media slots, relative links and an unreleased CHANGELOG entry")
+    parser.add_argument("--strict", action="store_true", help="refuse unresolved media and art slots, relative links and an unreleased CHANGELOG entry")
     args = parser.parse_args()
     result = build(args.media_url, args.strict, repo_url=args.repo_url)
     for key in ("thunderstore", "nexus"):
         print(f"{result[key].relative_to(ROOT)}: {result[key].stat().st_size:,} bytes")
     print(f"description: {result['manifest']['description']}")
     if result["unresolved"]:
-        print(f"unresolved media slots ({len(result['unresolved'])}): {', '.join(result['unresolved'])}", file=sys.stderr)
+        print(f"unresolved media and art slots ({len(result['unresolved'])}): {', '.join(result['unresolved'])}", file=sys.stderr)
     if result["relative"]:
         print(f"links left relative, no --repo-url ({len(result['relative'])}): {', '.join(result['relative'])}", file=sys.stderr)
     if result["unreleased"]:

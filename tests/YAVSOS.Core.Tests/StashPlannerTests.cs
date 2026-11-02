@@ -47,7 +47,7 @@ public sealed class StashPlannerTests
         internal sealed class Box
         {
             public string Id = ""; public string Payload = ""; public int Width = 4, Height = 1;
-            public bool Local = true, FormatKnown = true; public List<Slot> Slots = new(); public List<int> Blocked = new();
+            public bool Local = true; public OwnerMucState OwnerMuc; public List<Slot> Slots = new(); public List<int> Blocked = new();
             public TransferInventorySnapshot Snapshot() => new(new TransferInventoryStamp("inv:" + Id, Guid.Parse("18a499ef-25e2-4d38-bbb7-e7810bfe7671"), 0, 0, 1, 1, "p"),
                 Width, Height, Slots.Select(s => new TransferStack(s.Handle, s.X, s.Y, s.Quantity, s.Maximum, s.Identity, s.Protected, mergeClass: s.Maximum > 1 ? s.Identity.Prefab : null)), Blocked);
         }
@@ -56,7 +56,7 @@ public sealed class StashPlannerTests
         public Box Add(string id, string payload = "", int width = 4, bool local = true)
         { var chest = new Box { Id = id, Payload = payload, Width = width, Local = local }; Chests.Add(chest); return chest; }
         public Box this[string id] => Chests.Single(x => x.Id == id);
-        public IEnumerable<StashChest> Snapshot() => Chests.Select(x => new StashChest(x.Id, x.Payload, x.Snapshot(), x.Local, x.FormatKnown));
+        public IEnumerable<StashChest> Snapshot() => Chests.Select(x => new StashChest(x.Id, x.Payload, x.Snapshot(), x.Local, x.OwnerMuc));
         public void Apply(StashPlan plan)
         {
             foreach (var move in plan.Moves)
@@ -255,11 +255,31 @@ public sealed class StashPlannerTests
         Assert.Equal(CleanupReason.OtherOwnerNoMuc, Assert.Single(Plan(world).Remainders).Reason);
         var move = Assert.Single(Plan(world, muc: true).Moves);
         Assert.Equal(CleanupRoute.MucAdd, move.Route);
-        world["metal"].FormatKnown = false;
+        world["metal"].OwnerMuc = OwnerMucState.FormatUnknown;
         Assert.Equal(CleanupReason.OtherOwnerFormatUnknown, Assert.Single(Plan(world, muc: true).Remainders).Reason);
         // A local chest further down the ranking still takes it.
         world.Add("crafting", Rule(new[] { "materials.crafting" }));
         Assert.Equal("crafting", Assert.Single(Plan(world, muc: true).Moves).DestinationId);
+    }
+
+    // F3: every state but Usable skips the chest as before; each names its own cause.
+    [Theory]
+    [InlineData(OwnerMucState.CantTakeRequests, CleanupReason.OtherOwnerMucUnusable)]
+    [InlineData(OwnerMucState.NoAnswer, CleanupReason.OtherOwnerMucSilent)]
+    [InlineData(OwnerMucState.Checking, CleanupReason.OtherOwnerMucChecking)]
+    [InlineData(OwnerMucState.FormatUnknown, CleanupReason.OtherOwnerFormatUnknown)]
+    public void OtherPlayersChest_UnusableMultiUserChest_SkipsWithItsCause(OwnerMucState state, CleanupReason reason)
+    {
+        var world = new World();
+        Put(world.Player, "Copper", 10, y: 1);
+        world.Add("metal", Rule(new[] { "materials.metal" }), local: false).OwnerMuc = state;
+        var plan = Plan(world, muc: true);
+        Assert.Empty(plan.Moves);
+        Assert.Equal(reason, Assert.Single(plan.Remainders).Reason);
+        // Without a MultiUserChest of one's own, the cause stays "no MultiUserChest", and one's own chest needs none.
+        Assert.Equal(CleanupReason.OtherOwnerNoMuc, Assert.Single(Plan(world).Remainders).Reason);
+        world["metal"].Local = true;
+        Assert.Single(Plan(world, muc: true).Moves);
     }
 
     [Fact]
@@ -292,7 +312,7 @@ public sealed class StashPlannerTests
         var report = CleanupReport.ForStash();
         report.Moved(20); report.Moved(5, viaMuc: true); report.Remain(CleanupReason.NoCapacity); report.Remain(CleanupReason.OtherOwnerFormatUnknown);
         Assert.Equal("Stash: stored 2 stacks (25 items), 1 via MultiUserChest · 1 left in your inventory (1 no room) · " +
-            "1 skipped (another player's chest, their MultiUserChest format is unknown)", report.Summary());
+            "1 skipped (another player's chest; their MultiUserChest format is unknown)", report.Summary());
         Assert.StartsWith("Cleanup: moved 0 stacks", new CleanupReport().Summary());
     }
 
@@ -365,7 +385,7 @@ public sealed class StashPlannerTests
             var payload = random.Next(3) == 0 ? "" : Rule(RuleChoices[random.Next(RuleChoices.Length)],
                 random.Next(6) == 0 ? new[] { Prefabs[random.Next(Prefabs.Length)] } : null, priority: random.Next(3));
             var chest = world.Add("c" + index, payload, width: random.Next(1, 6), local: random.Next(4) != 0);
-            chest.FormatKnown = random.Next(5) != 0;
+            chest.OwnerMuc = random.Next(5) == 0 ? (OwnerMucState)random.Next(1, 5) : OwnerMucState.Usable;
             Fill(chest, 3, false);
         }
         return world;

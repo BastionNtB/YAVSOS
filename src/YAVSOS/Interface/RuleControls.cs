@@ -32,25 +32,28 @@ internal sealed class RuleControls
     private readonly ConfigEntry<bool> enabled;
     internal ConfigEntry<float> OffsetX { get; }
     internal ConfigEntry<float> OffsetY { get; }
+    /// <summary>X2 (D116): the panel is folded, for every chest and across sessions.</summary>
+    internal ConfigEntry<bool> Folded { get; }
     private readonly ManualLogSource log;
     internal Container? Chest { get; private set; }
     internal string Observed { get; private set; } = "";
-    internal readonly SortedSet<string> Categories = new SortedSet<string>(StringComparer.Ordinal);
-    internal readonly SortedSet<string> Includes = new SortedSet<string>(StringComparer.Ordinal);
-    internal readonly SortedSet<string> Excludes = new SortedSet<string>(StringComparer.Ordinal);
-    internal readonly SortedSet<string> Unknown = new SortedSet<string>(StringComparer.Ordinal);
+    /// <summary>S1 (audit D01): the rule as edited; the members below show it to the panel's sections.</summary>
+    private readonly RuleEditState edit = new RuleEditState();
+    internal SortedSet<string> Categories => edit.Categories;
+    internal SortedSet<string> Includes => edit.Includes;
+    internal SortedSet<string> Excludes => edit.Excludes;
+    internal SortedSet<string> Unknown => edit.Unknown;
     private readonly HashSet<string> expanded = new HashSet<string>(StringComparer.Ordinal), collapsed = new HashSet<string>(StringComparer.Ordinal);
     internal bool Unreadable { get; private set; }
-    internal bool Stored { get; private set; }
+    internal bool Stored => edit.Stored;
     internal bool PickingCategories { get; private set; }
     internal bool PickingItems { get; private set; }
     internal bool PickingFilters { get; private set; }
     /// <summary>Filters of the edited alternative (P6-07b): values within a dimension are OR, dimensions AND.</summary>
-    internal readonly SortedDictionary<string, SortedSet<string>> Filters = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
-    private IReadOnlyDictionary<string, IReadOnlyList<string>> editedFilters = new Dictionary<string, IReadOnlyList<string>>();
+    internal SortedDictionary<string, SortedSet<string>> Filters => edit.Filters;
     /// <summary>D101: a refusal or summary next to the control that was clicked; successes say nothing.</summary>
     internal PanelMessages Messages { get; } = new PanelMessages();
-    internal int Priority { get; private set; }
+    internal int Priority => edit.Priority;
     /// <summary>Bumped on every change to what the panel shows, so sections rebuild their rows only then.</summary>
     internal int Revision { get; private set; }
     private Action? pending; // Clicks queue here and run in LateUpdate, outside the UI's event dispatch.
@@ -60,16 +63,17 @@ internal sealed class RuleControls
     // D058, per feature: the capability probe turns off both panels; a runtime failure turns off only the panel, the
     // result view, the search or the explanations that failed, so one broken view never removes the rule editor.
     private bool styled = true, resultStyled = true, capable = true, probed, searchOff, explainOff, eligible;
-    private readonly ConfigEntry<bool> showResults;
+    private readonly ConfigEntry<bool> showResults, holdResults;
+    private readonly ConfigEntry<int> resultSeconds;
     private readonly RunResults results;
     private readonly StashRunner stash;
     internal ChestHighlight Highlight { get; }
 
     internal CleanupRunner Cleanup { get; }
-    internal RuleControls(ConfigEntry<bool> enabled, ConfigEntry<bool> showResults, ConfigEntry<float> offsetX, ConfigEntry<float> offsetY,
-        CleanupRunner cleanup, StashRunner stash, RunResults results, ChestHighlight highlight, ManualLogSource log)
+    internal RuleControls(ConfigEntry<bool> enabled, ConfigEntry<bool> showResults, ConfigEntry<int> resultSeconds, ConfigEntry<bool> holdResults,
+        ConfigEntry<float> offsetX, ConfigEntry<float> offsetY, ConfigEntry<bool> folded, CleanupRunner cleanup, StashRunner stash, RunResults results, ChestHighlight highlight, ManualLogSource log)
     {
-        this.enabled = enabled; this.showResults = showResults; OffsetX = offsetX; OffsetY = offsetY; Cleanup = cleanup; this.stash = stash;
+        this.enabled = enabled; this.showResults = showResults; this.resultSeconds = resultSeconds; this.holdResults = holdResults; OffsetX = offsetX; OffsetY = offsetY; Folded = folded; Cleanup = cleanup; this.stash = stash;
         this.results = results; Highlight = highlight; this.log = log;
         // B1.17: without the game's open-chest field the panel can never open; say so once instead of staying silent.
         if (CurrentContainer == null)
@@ -82,14 +86,31 @@ internal sealed class RuleControls
         catch { return null; }
     }
 
+    private void SearchFailed(Exception error)
+    {
+        searchOff = true; DisplayFaults.Add(DisplayFaults.Search); Search = CategorySearchResult.None; SearchRevision++; rowHover = rowLit = "";
+        try { Highlight.Clear(); } catch (Exception again) when (OptionalFailure.Recoverable(again)) { }
+        log.LogWarning($"Category search turned off after {error.GetType().Name}: {error.Message}; the rule panel keeps working.");
+    }
+
     internal void LateUpdate()
     {
         var plugin = Plugin.Instance;
         var gui = InventoryGui.instance;
+        if (Copied != null && !ZNet.instance) Copied = null; // X2: a copied rule lasts until leaving the world.
         Results();
-        var lit = UiCost.Start();
-        Highlight.Update(); // Runs on with the inventory closed, so the lit chests can be seen.
-        UiCost.Stop("highlight frame", lit);
+        if (!searchOff)
+            try
+            {
+#if YAVSOS_LAB
+                FaultLab.Raise("highlight"); // D088: lab-only display fault (X51 B2-01).
+#endif
+                var lit = UiCost.Start();
+                Highlight.Update(); // Runs on with the inventory closed, so the lit chests can be seen.
+                UiCost.Stop("highlight frame", lit);
+            }
+            // X51 B2-01: the highlight reads chests and rules (D122); a fault turns off the search, never the panel (D058).
+            catch (Exception error) when (OptionalFailure.Recoverable(error)) { SearchFailed(error); }
         var shown = plugin != null && CurrentContainer != null && gui && InventoryGui.IsVisible() ? CurrentContainer(gui) : null;
         if (shown) Notice();
         var open = enabled.Value && styled ? shown : null;
@@ -144,12 +165,7 @@ internal sealed class RuleControls
 #endif
                 Searching(); Lighting();
             }
-            catch (Exception error) when (OptionalFailure.Recoverable(error))
-            {
-                searchOff = true; DisplayFaults.Add(DisplayFaults.Search); Search = CategorySearchResult.None; SearchRevision++; rowHover = rowLit = "";
-                try { Highlight.Clear(); } catch (Exception again) when (OptionalFailure.Recoverable(again)) { }
-                log.LogWarning($"Category search turned off after {error.GetType().Name}: {error.Message}; the rule panel keeps working.");
-            }
+            catch (Exception error) when (OptionalFailure.Recoverable(error)) { SearchFailed(error); }
         try
         {
 #if YAVSOS_LAB
@@ -179,10 +195,11 @@ internal sealed class RuleControls
         }
     }
 
-    // P6-04: the result panel, on Jotunn's overlay canvas, so it shows with or without the inventory screen.
+    // P6-04: the result panel, on Jotunn's overlay canvas, so it shows with or without the inventory screen. P9-23: it
+    // closes after the player's seconds, also with the inventory open unless they hold it there.
     private void Results()
     {
-        var visible = results.Visible(InventoryGui.IsVisible(), Time.unscaledDeltaTime);
+        var visible = results.Visible(Time.unscaledDeltaTime, resultSeconds.Value, InventoryGui.IsVisible(), holdResults.Value);
         if (!visible || !showResults.Value || !resultStyled || !Probe()) { resultPanel?.Hide(); return; }
         try
         {
@@ -286,33 +303,18 @@ internal sealed class RuleControls
             typed = ""; typedAt = float.NegativeInfinity; gridQuery = ""; gridLit = ""; rowHover = rowLit = "";
             opened++; // P8-18: a newly opened chest decides the highlight afresh.
         }
-        Chest = container; Observed = ChestRuleStore.Payload(container); Unreadable = false; Stored = false;
+        Chest = container; Observed = ChestRuleStore.Payload(container); Unreadable = false;
         eligible = ChestRuleStore.Eligibility(container) == RuleEligibility.Eligible;
         loadedTaxonomy = Plugin.Instance!.RuleTaxonomy; Revision++; ruleRevision++;
         // D071: one tab is always open; a chest with a rule opens on its items, one without on the categories to pick.
         if (fresh) { PickingItems = Readable(container); PickingCategories = !PickingItems; PickingFilters = false; }
-        Categories.Clear(); Includes.Clear(); Excludes.Clear(); Unknown.Clear(); Filters.Clear(); Priority = 0; HiddenParts = 0;
-        editedFilters = new Dictionary<string, IReadOnlyList<string>>();
+        edit.Clear();
         var read = Plugin.Instance!.ChestRules.Read(container).Policy;
         if (read == null) return;
         if (read.State == ContainerPolicyReadState.Unsupported) { Unreadable = true; return; }
         if (!read.HasRule) return;
-        Stored = true;
         // P6-07b: the editor shows one alternative with its filters and saves the filter set it replaces.
-        var view = ChestRuleEdit.From(read.Rules!, withFilters: true);
-        Categories.UnionWith(view.Categories); Includes.UnionWith(view.Includes); Excludes.UnionWith(view.Excludes);
-        foreach (var pair in view.Filters) Filters.Add(pair.Key, new SortedSet<string>(pair.Value, StringComparer.Ordinal));
-        // P6-21: a saved "upgraded" (yes/no) shows, and saves on the next edit, as upgrade levels (yes: 2 and up, no: 1).
-        if (Filters.TryGetValue("upgraded", out var upgraded))
-        {
-            Filters.Remove("upgraded");
-            if (!Filters.TryGetValue("quality", out var levels)) Filters.Add("quality", levels = new SortedSet<string>(StringComparer.Ordinal));
-            levels.UnionWith(ClassificationFilters.LevelsFor(upgraded));
-            if (levels.Count == 0) Filters.Remove("quality");
-        }
-        editedFilters = view.EditedFilters;
-        Priority = view.Priority ?? 0; HiddenParts = view.HiddenParts;
-        Unknown.UnionWith(view.UnknownCategories);
+        edit.Load(read.Rules!);
     }
 
     private static bool Readable(Container container) => Plugin.Instance!.ChestRules.Read(container).Policy is { HasRule: true };
@@ -334,46 +336,62 @@ internal sealed class RuleControls
     internal void ShowCategories() => Queue(() => { PickingCategories = true; PickingItems = PickingFilters = false; Revision++; });
     internal void ShowItems() => Queue(() => { PickingItems = true; PickingCategories = PickingFilters = false; Revision++; });
     internal void ShowFilters() => Queue(() => { PickingFilters = true; PickingCategories = PickingItems = false; Revision++; });
-    internal void ToggleFilter(string dimension, string value) => Apply(() =>
-    {
-        if (!Filters.TryGetValue(dimension, out var values)) Filters.Add(dimension, values = new SortedSet<string>(StringComparer.Ordinal));
-        if (!values.Remove(value)) values.Add(value);
-        if (values.Count == 0) Filters.Remove(dimension);
-    });
+    internal void ToggleFilter(string dimension, string value) => Apply(() => edit.ToggleFilter(dimension, value));
     internal void ClearRule() => Queue(() => Save(null, MessageSpot.Clear));
-    internal void RemoveUnknown(string id) => Apply(() => Unknown.Remove(id));
-    /// <summary>Filters of the edited alternative this version doesn't know (D077 B01); kept on save unless removed.</summary>
-    internal IReadOnlyList<string> UnknownFilters => Filters.Keys.Where(x => !ClassificationFilters.IsKnown(x)).ToArray();
-    internal void RemoveFilter(string dimension) => Apply(() => Filters.Remove(dimension));
-    /// <summary>Values of known filters this version doesn't know (D086 D6): kept on save, match nothing, until removed.</summary>
-    internal IReadOnlyList<(string Dimension, string Value)> UnknownFilterValues => Filters
-        .Where(x => ClassificationFilters.IsKnown(x.Key)).SelectMany(x => x.Value.Where(v => !ClassificationFilters.IsKnownRuleValue(x.Key, v)).Select(v => (x.Key, v)))
-        .ToArray();
-    internal void RemoveFilterValue(string dimension, string value) => Apply(() =>
+
+    // ---- X2 (D116): copy and paste a rule, the chest's label, folding the panel.
+    /// <summary>The copied rule, in this game only; nothing is sent until it is pasted.</summary>
+    internal RuleCopy? Copied { get; private set; }
+    internal bool CanCopy => RuleCopy.CanCopy(edit);
+    internal void CopyRule() => Queue(() =>
     {
-        if (Filters.TryGetValue(dimension, out var values) && values.Remove(value) && values.Count == 0) Filters.Remove(dimension);
+        if (RuleCopy.Of(edit, Label()) is not { } copy) return;
+        Copied = copy; Revision++;
     });
+    /// <summary>Replaces the open chest's rule at once, saved like any edit: compare-and-set, refused while another player uses the chest.</summary>
+    internal void PasteRule() => Queue(() =>
+    {
+        if (Copied == null || Mode != RulePanelMode.Edit) return;
+        edit.Paste(Copied, Plugin.Instance!.RuleTaxonomy);
+        Save(edit.Edit(), MessageSpot.Clear);
+    });
+    internal void ToggleFold() => Queue(() => { Folded.Value = !Folded.Value; Revision++; });
+
+    private string? labelPayload, label;
+    private object? labelTaxonomy;
+    /// <summary>The chest's hover label (S3), plain text, as other players see it; null without a rule. Built once per rule.</summary>
+    internal string? Label()
+    {
+        var plugin = Plugin.Instance!; var taxonomy = plugin.RuleTaxonomy;
+        if (labelPayload != null && ReferenceEquals(labelTaxonomy, taxonomy) && StringComparer.Ordinal.Equals(labelPayload, Observed)) return label;
+        labelPayload = Observed; labelTaxonomy = taxonomy;
+        return label = Observed.Length == 0 ? null : ChestLabels.Label(plugin, Observed, taxonomy);
+    }
+    /// <summary>The Rule heading's and chips' tooltip: the label (variant C).</summary>
+    internal (string Topic, string Text)? LabelTooltip() =>
+        (ChestLabelPreview.Topic, ChestLabelPreview.Tooltip(Label(), Plugin.Instance?.Settings.ShowChestLabels.Value != false));
+    internal void RemoveUnknown(string id) => Apply(() => edit.RemoveUnknown(id));
+    /// <summary>Filters of the edited alternative this version doesn't know (D077 B01); kept on save unless removed.</summary>
+    internal IReadOnlyList<string> UnknownFilters => edit.UnknownFilters;
+    internal void RemoveFilter(string dimension) => Apply(() => edit.RemoveFilter(dimension));
+    /// <summary>Values of known filters this version doesn't know (D086 D6): kept on save, match nothing, until removed.</summary>
+    internal IReadOnlyList<(string Dimension, string Value)> UnknownFilterValues => edit.UnknownFilterValues;
+    internal void RemoveFilterValue(string dimension, string value) => Apply(() => edit.RemoveFilterValue(dimension, value));
     /// <summary>Stored parts of the rule the panel can't show or edit (D086 D5); kept on save, removed by Clear rule.</summary>
-    internal int HiddenParts { get; private set; }
-    internal void ToggleCategory(ClassificationTaxonomy taxonomy, string id) =>
-        Apply(() => { var next = CategorySelection.Toggle(taxonomy, Categories, id); Categories.Clear(); Categories.UnionWith(next); });
+    internal int HiddenParts => edit.HiddenParts;
+    internal void ToggleCategory(ClassificationTaxonomy taxonomy, string id) => Apply(() => edit.ToggleCategory(taxonomy, id));
     internal void Fold(string id, bool open) => Queue(() =>
     {
         if (open) { collapsed.Add(id); expanded.Remove(id); }
         else { expanded.Add(id); collapsed.Remove(id); }
         Revision++;
     });
-    internal void Choose(string prefab, bool always)
-    {
-        var list = always ? Includes : Excludes; var other = always ? Excludes : Includes;
-        var on = list.Contains(prefab);
-        Apply(() => { if (on) list.Remove(prefab); else { list.Add(prefab); other.Remove(prefab); } });
-    }
+    internal void Choose(string prefab, bool always) => Apply(() => edit.Choose(prefab, always));
     // D057, D061: priority orders chests (specificity breaks ties), shown as levels 1-10 (D069); the opt-out keeps cleanup from taking items out.
     internal void ChangeLevel(int step)
     {
         if (ChestPriority.Step(Priority, step) is not int next) return;
-        Apply(() => Priority = next, MessageSpot.Chest);
+        Apply(() => edit.Priority = next, MessageSpot.Chest);
     }
     /// <summary>A click on the 1–10 bar (D071).</summary>
     internal void SetLevel(int level)
@@ -381,7 +399,7 @@ internal sealed class RuleControls
         var rank = ChestPriority.Rank(level);
         // D101: the bar is shown without a rule too, faint; priority belongs to the rule, so there it does nothing.
         if (!Stored || ChestPriority.Level(Priority) == ChestPriority.Level(rank)) return;
-        Apply(() => Priority = rank, MessageSpot.Chest);
+        Apply(() => edit.Priority = rank, MessageSpot.Chest);
     }
     internal void ToggleCleanupOptOut()
     {
@@ -403,14 +421,11 @@ internal sealed class RuleControls
         Revision++;
     });
 
-    // D051: each change is written at once. An edit that leaves no part of the rule removes it rather than leaving
-    // "accepts nothing"; parts the panel can't show stay (D086 D5), so the edit, not the panel, decides that.
+    // D051: each change is written at once (RuleEditState.Edit says what an emptied rule becomes).
     private void Apply(Action change, MessageSpot spot = MessageSpot.Tab) => Queue(() =>
     {
         change();
-        Save(new ChestRuleEdit(Categories, Includes, Excludes, Unknown, Priority,
-            Filters.Select(x => new KeyValuePair<string, IEnumerable<string>>(x.Key, x.Value)).ToArray(),
-            editedFilters.Select(x => new KeyValuePair<string, IEnumerable<string>>(x.Key, x.Value)).ToArray()), spot);
+        Save(edit.Edit(), spot);
     });
 
     // D101: a saved edit says nothing (the chips and ticks change at the click); a refusal stays where it was asked.
@@ -423,12 +438,26 @@ internal sealed class RuleControls
 
     // ---- P6-05: where a stack would go and why, for the stack under the mouse or one picked in the item list. Read only:
     // the runners gather the same live inputs a run would and hand them to the Core explainer; nothing is planned to act on.
+    // X16 (P9-13): the inputs are gathered once per open inventory (TooltipContext), spread over frames, and each
+    // stack pointed at is answered against them at once. Until the first context is ready, a stack is answered only once
+    // pointed at for HoverDelay, as before X16, so sweeping the mouse asks nothing.
     private const float HoverDelay = 0.5f, HoverPoll = 0.1f;
+    /// <summary>X16: the line follows the player once they have moved this far since it was built, at most every <see cref="FollowEvery"/>.</summary>
+    private const float FollowStep = 1f, FollowEvery = 1f;
     private ItemDrop.ItemData? hovered, subject;
     private float hoveredSince, nextHover;
     // ruleRevision changes only with what an answer depends on (a loaded or saved rule, the opt-out), never with
-    // folding or tabs, since each explanation captures every chest in range.
-    private int explainedResults, explainedRevision, ruleRevision;
+    // folding or tabs, since each context captures every chest in range.
+    private int ruleRevision;
+    /// <summary>X16: the context answers are read from, the one being gathered (it replaces the first when ready), and its gather.</summary>
+    private TooltipContext? context, building;
+    private IEnumerator<bool>? gather;
+    private double gatherWork;
+    private long gatherStarted;
+    private float lineAt;
+    private Vector3 lineFrom;
+    /// <summary>S2: the typed answer the line was built from, with its chosen chest; null before the first and after forgetting.</summary>
+    internal ExplanationAnswer? Answer { get; private set; }
     /// <summary>One short line (P6-23): what the stash key or "Clean up nearby" would do with the stack, "Stash stack [Middle mouse]: …".</summary>
     internal string? Explanation { get; private set; }
     /// <summary>Why there is no answer, or a qualifier ("turned off on this server").</summary>
@@ -436,17 +465,18 @@ internal sealed class RuleControls
     /// <summary>Bumped when the explanation changes, so its section rebuilds its lines only then.</summary>
     internal int ExplanationRevision { get; private set; }
 
-    // A stack pointed at for HoverDelay is explained once; the answer is refreshed after a run or a rule change.
+    // Polled every HoverPoll: rebuilds the context when it is stale, answers the stack pointed at, and lets the line follow the player.
     private void Hover(InventoryGui gui, bool inventoryOnly = false)
     {
         var now = Time.unscaledTime;
         if (now < nextHover) return;
         nextHover = now + HoverPoll;
         if (!inventoryOnly && Mode is not (RulePanelMode.Edit or RulePanelMode.ReadOnly)) return;
+        Freshen(now);
         var item = inventoryOnly ? GridHover.Item(gui.m_playerGrid) : GridHover.Item(gui.m_playerGrid) ?? GridHover.Item(gui.ContainerGrid);
         if (!ReferenceEquals(item, hovered)) { hovered = item; hoveredSince = now; }
-        if (item != null && !ReferenceEquals(item, subject) && now - hoveredSince >= HoverDelay) Explain(item);
-        else if (subject != null && (explainedResults != results.Revision || explainedRevision != ruleRevision)) Explain(subject);
+        if (item != null && !ReferenceEquals(item, subject) && (context != null || now - hoveredSince >= HoverDelay)) Explain(item);
+        Follow(now);
     }
 
     internal void ExplainItem(string prefab) => Queue(() =>
@@ -458,46 +488,100 @@ internal sealed class RuleControls
         if (item != null) Explain(item);
     });
 
+    // A new subject: answered at once against a current context, otherwise when the context being gathered is ready.
     private void Explain(ItemDrop.ItemData item)
     {
-        Cancel();
-        subject = item; explainedResults = results.Revision; explainedRevision = ruleRevision; ExplanationRevision++;
-        Explanation = null; ExplanationContext = "";
-        var player = Player.m_localPlayer;
-        if (player && player.GetInventory().ContainsItem(item)) job = stash.Explain(item, Chest, Done);
-        else if (Chest && Chest!.GetInventory()?.ContainsItem(item) == true) job = Cleanup.Explain(Chest!, item, Done);
-        else { subject = null; return; } // Moved or used up since.
-        Step();
+        subject = item; ExplanationRevision++;
+        Answer = null; Explanation = null; ExplanationContext = "";
+        if (gather == null && context != null) Answered(context);
     }
 
-    // P6-11 cost check: an explanation reads every chest in range, so it runs a few chests per frame within StepBudget.
-    private const double StepBudget = 2.0;
-    private IEnumerator<bool>? job;
-
-    private void Step()
+    // The subject's answer from ctx. The shown line is replaced only once the new one is there, so it never blinks out.
+    private void Answered(TooltipContext ctx)
     {
-        if (job == null) return;
-        var started = UiCost.Start(); var clock = Stopwatch.StartNew();
+        var item = subject!; ExplanationAnswer answer;
+        var player = Player.m_localPlayer;
         try
         {
-            var more = true;
-            while (job != null && (more = job.MoveNext())) if (clock.Elapsed.TotalMilliseconds >= StepBudget) break;
-            if (!more) Cancel(); // Finished: Done has the answer.
+            if (player && player.GetInventory().ContainsItem(item)) answer = ctx.Stash(stash, item);
+            else if (Chest && ReferenceEquals(ctx.Open, Chest) && Chest!.GetInventory()?.ContainsItem(item) == true) answer = ctx.Cleanup(Cleanup, item);
+            else { subject = null; Answer = null; Explanation = null; ExplanationContext = ""; ExplanationRevision++; return; } // Moved or used up since.
         }
         catch (Exception error) when (OptionalFailure.Recoverable(error))
         {
-            Cancel();
-            ExplanationContext = RuleControls.ItemName(subject!) + " can't be explained right now."; ExplanationRevision++;
-            log.LogWarning($"Explanation failed for {subject?.m_dropPrefab?.name}: {error.GetType().Name}: {error.Message}");
+            answer = ExplanationAnswer.Without(ItemName(item) + " can't be explained right now.");
+            log.LogWarning($"Explanation failed for {item.m_dropPrefab?.name}: {error.GetType().Name}: {error.Message}");
         }
+        var line = answer.Line;
+        lineAt = Time.unscaledTime; lineFrom = player ? player.transform.position : lineFrom;
+        if (Answer != null && line == Explanation && answer.Note == ExplanationContext) { Answer = answer; return; } // Same text: no redraw.
+        Answer = answer; Explanation = line; ExplanationContext = answer.Note; ExplanationRevision++;
+    }
+
+    // X16: text only, no re-plan; the answer's chest names read the player's position as the line is built.
+    private void Follow(float now)
+    {
+        var player = Player.m_localPlayer;
+        if (Answer?.Explanation == null || !player || now - lineAt < FollowEvery) return;
+        var at = player.transform.position;
+        if ((at - lineFrom).sqrMagnitude < FollowStep * FollowStep) return;
+        lineAt = now; lineFrom = at;
+        var line = Answer.Line;
+        if (line == Explanation) return;
+        Explanation = line; ExplanationRevision++;
+    }
+
+    // X16: starts gathering a new context when there is none or the current one is stale (TooltipContext.Stale).
+    private void Freshen(float now)
+    {
+        if (gather != null) return;
+        var plugin = Plugin.Instance; var player = Player.m_localPlayer;
+        if (plugin == null || !player) return;
+        var stamp = TooltipContext.Stamp(player!, Chest, results.Revision, ruleRevision, plugin, now);
+        if (context != null && !context.Stale(stamp)) return;
+        building = new TooltipContext(stamp);
+        gather = building.Gather(stash, Cleanup); gatherWork = 0; gatherStarted = Stopwatch.GetTimestamp();
+    }
+
+    // P6-11 cost check: a context reads every chest in range, so it is gathered a few chests per frame within StepBudget.
+    private const double StepBudget = 2.0;
+
+    private void Step()
+    {
+        if (gather == null) return;
+        var started = UiCost.Start(); var clock = Stopwatch.StartNew(); var finished = false;
+        try
+        {
+            var more = true;
+            while (gather != null && (more = gather.MoveNext())) if (clock.Elapsed.TotalMilliseconds >= StepBudget) break;
+            finished = !more;
+        }
+        catch (Exception error) when (OptionalFailure.Recoverable(error))
+        {
+            // Every answer says so until the context is rebuilt (at the latest when it is TooltipContext.MaximumAge old).
+            StopGather(); building!.Fail(); finished = true;
+            if (CleanupRunner.LogLimit("explanation context|" + error.GetType().Name) is { } more)
+                log.LogWarning($"Explanations could not gather the chests nearby: {error.GetType().Name}: {error.Message}" + more);
+        }
+        gatherWork += clock.Elapsed.TotalMilliseconds;
+        if (finished) Ready();
         UiCost.Stop("explanation", started);
     }
 
-    private void Done(string? sentence, string note)
+    // The gathered context replaces the old one, which is disposed; the subject is answered again against it.
+    private void Ready()
     {
-        Explanation = sentence;
-        ExplanationContext = note;
-        ExplanationRevision++;
+        UiCost.Record("explain context", gatherWork); // X16: the gather's work over all its frames,
+        UiCost.Record("explain context wall", (Stopwatch.GetTimestamp() - gatherStarted) * 1000.0 / Stopwatch.Frequency); // and the time it took.
+        var old = context; context = building; building = null; gather = null;
+        old?.Dispose();
+        if (subject != null) Answered(context!);
+    }
+
+    private void StopGather()
+    {
+        var running = gather; gather = null;
+        running?.Dispose();
     }
 
     private int tooltipShown = -1;
@@ -523,17 +607,13 @@ internal sealed class RuleControls
         return tooltipLine = line;
     }
 
-    private void Cancel()
-    {
-        var running = job; job = null;
-        running?.Dispose();
-    }
-
+    // X16 (memory): the contexts and their snapshot adapters go when the inventory closes or another chest opens.
     private void Forget()
     {
-        Cancel();
-        if (subject == null && hovered == null && Explanation == null) return;
-        subject = hovered = null; Explanation = null; ExplanationContext = ""; ExplanationRevision++;
+        StopGather();
+        building?.Dispose(); context?.Dispose(); building = context = null;
+        if (subject == null && hovered == null && Explanation == null && Answer == null) return;
+        subject = hovered = null; Answer = null; Explanation = null; ExplanationContext = ""; ExplanationRevision++;
     }
 
     // ---- Read-only views for the panel's sections.
@@ -545,7 +625,7 @@ internal sealed class RuleControls
         return CategorySearch.Rows(taxonomy, Categories, hasMembers, expanded, collapsed, Search);
     }
 
-    // ---- P6-06: search in the category picker, and the nearby chests that take what was found. Read only.
+    // ---- P6-06: search in the category picker, and the nearby chests that hold (D122; with the toggle, take) what was found. Read only.
     private const float SearchDelay = 0.25f;
     private string typed = "", searched = "";
     private float typedAt;
@@ -612,7 +692,7 @@ internal sealed class RuleControls
         var answers = Plugin.Instance?.CategoryAnswers; var edit = Mode == RulePanelMode.Edit;
         var key = !edit ? "-" : PickingCategories ? "c|" + SearchRevision + "|" + rowLit
             : PickingItems && gridLit.Trim().Length != 0 ? "i|" + gridLit + "|" + hoverLit + "|" + (answers?.Generation ?? long.MinValue) : "-";
-        key += "|" + ruleRevision + "|" + opened;
+        key += "|" + ruleRevision + "|" + opened + "|" + ShowsTakers;
         if (key == litKey) return;
         litKey = key;
         Light(edit);
@@ -627,7 +707,11 @@ internal sealed class RuleControls
         {
             var items = Search.Items; var categories = Search.Categories;
             if (rowLit.Length != 0) LightCategory(taxonomy, rowLit, rescan);
-            else if (items.Count != 0) { LitSubject = items[0].Name; Highlight.Request(items[0].Category, new[] { items[0].Prefab }, rescan); }
+            else if (items.Count != 0)
+            {
+                LitSubject = items[0].Name;
+                Highlight.Request(items[0].Category, new[] { items[0].Prefab }, rescan, takes: ShowsTakers, about: LitSubject);
+            }
             else if (categories.Count != 0) LightCategory(taxonomy, categories[0], rescan);
             else Highlight.Clear();
         }
@@ -635,7 +719,7 @@ internal sealed class RuleControls
         {
             var wanted = GridLit();
             LitSubject = wanted.Count == 1 ? ItemName(wanted[0]) : hoverLit.Length != 0 ? ItemName(hoverLit) : "these items";
-            Highlight.Request("", wanted, rescan);
+            Highlight.Request("", wanted, rescan, takes: ShowsTakers, about: LitSubject);
         }
         else Highlight.Clear();
     }
@@ -646,7 +730,8 @@ internal sealed class RuleControls
     {
         LitSubject = CategoryName(taxonomy, category);
         var found = Search.Items.Select(x => x.Prefab);
-        Highlight.Request(category, CategorySearch.Members(searchable ?? new List<SearchableItem>(), category, found, ChestHighlight.MaximumItems), rescan);
+        Highlight.Request(category, CategorySearch.Members(searchable ?? new List<SearchableItem>(), category, found, ChestHighlight.MaximumItems), rescan,
+            holdsOf: category, takes: ShowsTakers, about: LitSubject);
     }
 
     // The grid's items for its search, in the order shown, at most ChestHighlight.MaximumItems; just the hovered icon's
@@ -742,8 +827,19 @@ internal sealed class RuleControls
     internal string HighlightStatus() => Highlight.Status();
 
     /// <summary>The status line's tooltip (D101 C7): the chests found, with their distances.</summary>
-    internal (string Topic, string Text)? HighlightTooltip() => HighlightText.Tooltip(LitSubject, Highlight.Chests(chest => ReferenceEquals(chest, Chest) ? "This chest" :
-        CleanupRunner.Localize(chest.m_name) + (Player.m_localPlayer ? " " + Vector3.Distance(Player.m_localPlayer.transform.position, chest.transform.position).ToString("0") + " m" : "")));
+    internal (string Topic, string Text)? HighlightTooltip() => HighlightText.Tooltip(LitSubject,
+        Highlight.Chests(ChestHighlight.Kind.Holds, LitChestName), Highlight.Chests(ChestHighlight.Kind.Takes, LitChestName));
+
+    private string LitChestName(Container chest) => ReferenceEquals(chest, Chest) ? "This chest" :
+        CleanupRunner.Localize(chest.m_name) + (Player.m_localPlayer ? " " + Vector3.Distance(Player.m_localPlayer.transform.position, chest.transform.position).ToString("0") + " m" : "");
+
+    /// <summary>D122: the search also lights the chests whose rule would take a match (the rule-tag button; remembered).</summary>
+    internal bool ShowsTakers => Plugin.Instance?.Settings.SearchShowsTakers.Value == true;
+    internal void ToggleTakers() => Queue(() =>
+    {
+        if (Plugin.Instance?.Settings is { } settings) settings.SearchShowsTakers.Value = !settings.SearchShowsTakers.Value;
+        Revision++;
+    });
 
     // ---- P6-18: the Items tab's icon grid. The list is rebuilt only when the rule, the answers, the search or what is
     // in the chest and inventory changes; the view itself draws only the rows in sight.

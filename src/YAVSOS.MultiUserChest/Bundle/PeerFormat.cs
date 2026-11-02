@@ -6,12 +6,13 @@ namespace YAVSOS.Vendor.MultiUserChest {
     /// <summary>
     /// YAVSOS addition (D061 Q8). MultiUserChest copies differ in one field of every item they send: 0.6.2 writes
     /// <c>m_cheated</c>, AzuAutoStore 3.1.7's copy does not. This copy reads and writes each request in the other
-    /// peer's format, which YAVSOS publishes for every peer. When it is unknown, the copy refuses to send, and answers
-    /// a request only with items both formats read alike (<see cref="UnknownFormatGuard"/>, D116).
+    /// peer's format, which YAVSOS publishes for every peer, or which an echo probe measured for a peer that publishes
+    /// none (<see cref="PeerProbe"/>, D116). When it is unknown, the copy refuses to send, and answers a request only with
+    /// items both formats read alike (<see cref="UnknownFormatGuard"/>, D116).
     /// Unity game thread only.
     /// </summary>
     public static class PeerFormat {
-        /// <summary>Set by YAVSOS: whether a peer's copy writes <c>m_cheated</c>; null when unknown.</summary>
+        /// <summary>Set by YAVSOS: whether a peer's copy writes <c>m_cheated</c>, from its published key, else its probe; null when unknown.</summary>
         public static Func<long, bool?> Resolve;
 
         private static bool? current;
@@ -84,7 +85,7 @@ namespace YAVSOS.Vendor.MultiUserChest {
             Log.LogWarning("YAVSOS's MultiUserChest: " + text + " Further cases from this player are not logged until the game restarts.");
         }
 
-        private static string Describe(long peer) {
+        internal static string Describe(long peer) {
             foreach (Player player in Player.GetAllPlayers()) {
                 ZDO zdo = player ? player.GetComponent<ZNetView>()?.GetZDO() : null;
 

@@ -23,6 +23,12 @@ SECTIONS = ["Server", "Cleanup", "Stash", "Controls"]
 KEYS = {"Period": ".", "Comma": ",", "LeftControl": "Ctrl", "RightControl": "Ctrl", "LeftShift": "Shift",
         "RightShift": "Shift", "LeftAlt": "Alt", "RightAlt": "Alt", "Mouse2": "Middle mouse",
         "Mouse3": "Mouse 4", "Mouse4": "Mouse 5"}
+# Player-facing names for enum members and default colours. A member or colour missing here fails the script,
+# so a new one gets a readable name instead of a code identifier.
+ENUM_NAMES = {"None": "None", "SmallItemPuff": "small-item puff", "SmelterPuff": "smelter puff",
+              "FermenterPuff": "fermenter puff", "LootSparkle": "loot sparkle", "PickSparkle": "pick sparkle",
+              "AutoPickupShimmer": "auto-pickup shimmer"}
+COLOR_NAMES = {"FFC740": "gold", "80B8FF": "cool blue", "FF6B33": "red-orange"}
 
 INTRO = """# YAVSOS settings
 
@@ -41,7 +47,7 @@ Single-player and client-only games use your own file for all of them.
 **With AzuAutoStore.** AzuAutoStore does the stashing with its own keys, range and hotbar
 settings, so the **Stash** settings are read-only and kept for when it's removed, and
 `AllowStashing` has no effect. `MaximumRange` and `MaximumChests` then limit cleanup only.
-Cleanup is Ctrl plus AzuAutoStore's store key.
+Cleanup is the cleanup key's modifier (Ctrl by default) plus AzuAutoStore's store key.
 """
 
 
@@ -116,6 +122,30 @@ def constant(name):
     fail(f"can't resolve constant {name}")
 
 
+def enum_members(type_name):
+    """The members of an enum declared in YAVSOS.Core, in declaration order."""
+    for path in CORE.rglob("*.cs"):
+        found = re.search(rf"\benum\s+{type_name}\s*\{{([^}}]*)\}}", path.read_text())
+        if found:
+            return [m.split("=")[0].strip() for m in found.group(1).split(",") if m.strip()]
+    return None
+
+
+def enum_name(member):
+    if member not in ENUM_NAMES:
+        fail(f"no player-facing name for enum member {member} (add it to ENUM_NAMES)")
+    return ENUM_NAMES[member]
+
+
+def color(expr):
+    """new UnityEngine.Color(r, g, b, a) as its name and hex, such as gold (`FFC740`); alpha is ignored."""
+    parts = [float(p.strip().rstrip("f")) for p in split_args(expr)][:3]
+    hexed = "".join(f"{round(p * 255):02X}" for p in parts)
+    if hexed not in COLOR_NAMES:
+        fail(f"no name for default colour {hexed} (add it to COLOR_NAMES)")
+    return f"{COLOR_NAMES[hexed]} (`{hexed}`)"
+
+
 def number(expr):
     expr = expr.strip()
     if re.fullmatch(r"-?\d+(\.\d+)?f?", expr):
@@ -134,7 +164,23 @@ def value(expr):
         keys = [k.strip().split(".")[-1] for k in split_args(shortcut.group(1))]
         main, modifiers = keys[0], keys[1:]
         return " + ".join([KEYS.get(k, k) for k in modifiers] + [KEYS.get(main, main)])
+    colour = re.fullmatch(r"new (?:UnityEngine\.)?Color\((.*)\)", expr, re.S)
+    if colour:
+        return color(colour.group(1))
+    member = re.fullmatch(r"[\w.]+\.(\w+)\.(\w+)", expr)
+    if member and enum_members(member.group(1)):
+        return enum_name(member.group(2))
     return number(expr)
+
+
+def allowed_for(default_expr):
+    """The Allowed cell for enum and colour settings, which have no AcceptableValueRange."""
+    expr = default_expr.strip()
+    if re.fullmatch(r"new (?:UnityEngine\.)?Color\(.*\)", expr, re.S):
+        return "any colour"
+    member = re.fullmatch(r"[\w.]+\.(\w+)\.(\w+)", expr)
+    members = enum_members(member.group(1)) if member else None
+    return ", ".join(enum_name(m) for m in members) if members else ""
 
 
 def unit(description, text):
@@ -157,7 +203,7 @@ def read_settings():
         else:
             fail(f"can't read Bind call at offset {match.start()}: {args[:3]}")
         description = string_value(description)[0]
-        allowed = ""
+        allowed = allowed_for(default)
         for arg in rest:
             bounds = re.fullmatch(r"new AcceptableValueRange<\w+>\((.*)\)", arg.strip(), re.S)
             if bounds:

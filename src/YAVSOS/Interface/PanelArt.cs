@@ -4,7 +4,7 @@ using UnityEngine;
 namespace YAVSOS.Interface;
 
 /// <summary>
-/// Small shapes drawn once in code (check, bang, cross, dash, disc), so the grid marks and the status marks (D071) need no
+/// Small shapes drawn once in code (check, bang, cross, dash, rule tag, disc, the fold arrow), so the grid marks and the status marks (D071) need no
 /// game or Jotunn sprite, and no glyph the game's font may lack. Unity game thread only.
 /// </summary>
 internal static class PanelArt
@@ -16,6 +16,16 @@ internal static class PanelArt
     internal static Sprite Bang => bang ??= Lines((16, 13, 16, 27), (16, 6, 16, 6));
     internal static Sprite Cross => cross ??= Lines((6, 6, 26, 26), (6, 26, 26, 6));
     internal static Sprite Dash => dash ??= Lines((8, 16, 24, 16));
+    private static Sprite? tag;
+    /// <summary>A rule tag (D122): a label shape pointing right with a hole, the search's "also chests that would take it" button.</summary>
+    internal static Sprite Tag => tag ??= Lines((4, 7, 18, 7), (18, 7, 28, 16), (28, 16, 18, 25), (18, 25, 4, 25), (4, 25, 4, 7), (10, 16, 10, 16));
+    private static Sprite? down;
+    /// <summary>A filled triangle pointing down: the panel's fold button (X2), turned to point right while folded.</summary>
+    internal static Sprite Down => down ??= Draw(Size, false, (x, y) =>
+    {
+        float px = x + 0.5f, py = y + 0.5f; // Apex at the bottom (16, 8), base along y = 24 from x = 6 to 26.
+        return py >= 8 && py <= 24 && Mathf.Abs(px - 16) <= (py - 8) * 10 / 16 ? 1 : 0;
+    });
     /// <summary>A filled circle with a soft edge: the status marks' backing.</summary>
     internal static Sprite Disc => disc ??= Draw(Size, false, (x, y) =>
     {

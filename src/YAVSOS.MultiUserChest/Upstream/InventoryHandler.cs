@@ -6,6 +6,11 @@ using UnityEngine;
 namespace YAVSOS.Vendor.MultiUserChest {
     public static class InventoryHandler {
         public static void RPC_RequestItemAddResponse(long sender, ZDOID containerId, ZPackage package) {
+            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
+            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemAddResponseRPC, sender, containerId, package)) {
+                return;
+            }
+
             // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
             using (PeerFormat.For(sender)) {
                 HandleRPC(new RequestChestAddResponse(package), p => GetSourceInventory(p.SourceID), RPC_RequestItemAddResponse);
@@ -13,6 +18,11 @@ namespace YAVSOS.Vendor.MultiUserChest {
         }
 
         public static void RPC_RequestItemRemoveResponse(long sender, ZDOID containerId, ZPackage package) {
+            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
+            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemRemoveResponseRPC, sender, containerId, package)) {
+                return;
+            }
+
             // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
             using (PeerFormat.For(sender)) {
                 HandleRPC(new RequestChestRemoveResponse(package), p => GetTargetInventory(p.SourceID), RPC_RequestItemRemoveResponse);
@@ -20,6 +30,11 @@ namespace YAVSOS.Vendor.MultiUserChest {
         }
 
         public static void RPC_RequestDropResponse(long sender, ZDOID containerId, ZPackage package) {
+            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
+            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemDropResponseRPC, sender, containerId, package)) {
+                return;
+            }
+
             // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
             using (PeerFormat.For(sender)) {
                 HandleRPC(new RequestDropResponse(package), RPC_RequestDropResponse);
@@ -27,6 +42,11 @@ namespace YAVSOS.Vendor.MultiUserChest {
         }
 
         public static void RPC_RequestItemConsumeResponse(long sender, ZDOID containerId, ZPackage package) {
+            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
+            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemConsumeResponseRPC, sender, containerId, package)) {
+                return;
+            }
+
             // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
             using (PeerFormat.For(sender)) {
                 HandleRPC(new RequestConsumeResponse(package), RPC_RequestItemConsumeResponse);
@@ -34,6 +54,11 @@ namespace YAVSOS.Vendor.MultiUserChest {
         }
 
         public static void RPC_RequestItemMoveResponse(long sender, ZDOID containerId, ZPackage package) {
+            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
+            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemMoveResponseRPC, sender, containerId, package)) {
+                return;
+            }
+
             // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
             using (PeerFormat.For(sender)) {
                 HandleRPC(new RequestMoveResponse(package), RPC_RequestItemMoveResponse);

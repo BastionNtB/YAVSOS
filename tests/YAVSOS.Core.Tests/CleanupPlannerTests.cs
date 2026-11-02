@@ -47,6 +47,7 @@ public sealed class CleanupPlannerTests
         {
             public string Id = ""; public string Payload = ""; public int Width = 4, Height = 1;
             public bool Local = true, OptOut; public List<Slot> Slots = new(); public List<int> Blocked = new(); public double Distance;
+            public OwnerMucState OwnerMuc = OwnerMucState.Usable;
         }
         public readonly List<Chest> Chests = new();
         public Chest Add(string id, string payload = "", int width = 4, bool local = true, bool optOut = false)
@@ -55,7 +56,7 @@ public sealed class CleanupPlannerTests
         public IEnumerable<CleanupChest> Snapshot() => Chests.Select(chest => new CleanupChest(chest.Id, chest.Payload,
             new TransferInventorySnapshot(new TransferInventoryStamp("inv:" + chest.Id, Guid.Parse("18a499ef-25e2-4d38-bbb7-e7810bfe7671"), 0, 0, 1, 1, "p"),
                 chest.Width, chest.Height, chest.Slots.Select(s => new TransferStack(s.Handle, s.X, s.Y, s.Quantity, s.Maximum, s.Identity, s.Protected, mergeClass: s.Maximum > 1 && !s.Unsupported ? s.Identity.Prefab : null, transferSupported: !s.Unsupported)),
-                chest.Blocked), chest.Local, chest.OptOut, chest.Distance));
+                chest.Blocked), chest.Local, chest.OptOut, chest.Distance, chest.OwnerMuc));
         public void Apply(CleanupPlan plan)
         {
             foreach (var move in plan.Moves)
@@ -388,6 +389,26 @@ public sealed class CleanupPlannerTests
 
         remoteSource["b-metal"].Local = false;
         Assert.Equal(CleanupReason.BothRemote, Assert.Single(Plan(remoteSource, muc: true).Remainders).Reason);
+    }
+
+    // B4.33 §3: an owner whose MultiUserChest can't be reached is known at plan time, so the plan (and the tooltip built
+    // from it) skips that chest with the stash's reason and falls back to the next chest, as the stash does.
+    [Fact]
+    public void Routes_SkipAnotherPlayersChestTheirMultiUserChestCannotTake()
+    {
+        var world = new World();
+        Put(world.Add("a-wood", Rule(new[] { "materials.wood" })), "Copper", 4);
+        world.Add("b-metal", Rule(new[] { "materials.metal" }, priority: 9), local: false).OwnerMuc = OwnerMucState.Checking;
+        Assert.Equal(CleanupReason.OtherOwnerMucChecking, Assert.Single(Plan(world, muc: true).Remainders).Reason);
+        world.Add("c-metal", Rule(new[] { "materials.metal" }));
+        Assert.Equal("c-metal", Assert.Single(Plan(world, muc: true).Moves).DestinationId);
+
+        var remoteSource = new World();
+        var theirs = remoteSource.Add("a-wood", Rule(new[] { "materials.wood" }), local: false);
+        theirs.OwnerMuc = OwnerMucState.FormatUnknown;
+        Put(theirs, "Copper", 4);
+        remoteSource.Add("b-metal", Rule(new[] { "materials.metal" }));
+        Assert.Equal(CleanupReason.OtherOwnerFormatUnknown, Assert.Single(Plan(remoteSource, muc: true).Remainders).Reason);
     }
 
     [Fact]

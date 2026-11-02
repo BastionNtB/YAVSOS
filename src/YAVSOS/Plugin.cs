@@ -64,6 +64,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal StashRunner Stash { get; private set; } = null!;
     internal RunResults Results { get; } = new RunResults();
     internal ChestHighlight Highlight { get; private set; } = null!;
+    internal ChestArrivals Arrivals { get; private set; } = null!;
     internal PluginSettings Settings => settings;
 
     private void Awake()
@@ -86,8 +87,9 @@ public sealed class Plugin : BaseUnityPlugin
         Cleanup = new CleanupRunner(settings, Logger, Results);
         Stash = new StashRunner(settings, Logger, Results);
         Highlight = new ChestHighlight(Logger);
-        ruleControls = new RuleControls(settings.ShowRuleControls, settings.ShowResultPanel, settings.RulePanelOffsetX, settings.RulePanelOffsetY,
-            Cleanup, Stash, Results, Highlight, Logger);
+        Arrivals = new ChestArrivals(Logger, Highlight, settings); // D121
+        ruleControls = new RuleControls(settings.ShowRuleControls, settings.ShowResultPanel, settings.ResultPanelSeconds, settings.ResultPanelHoldInInventory,
+            settings.RulePanelOffsetX, settings.RulePanelOffsetY, settings.RulePanelFolded, Cleanup, Stash, Results, Highlight, Logger);
         var broadcast = AccessTools.DeclaredMethod(typeof(ConfigSync), "Broadcast", new[] { typeof(long), typeof(ConfigEntryBase[]) });
         if (broadcast == null || broadcast.ReturnType != typeof(void))
             throw new NotSupportedException("Pinned ServerSync settings-publication contract is unavailable.");
@@ -157,8 +159,10 @@ public sealed class Plugin : BaseUnityPlugin
         assignments?.Update();
         if (activeNet != null) NativeInventoryProbe.Update(Logger.LogInfo, Logger.LogWarning);
         MucRoute.Update();
+        AzuStoreOrder.Look(); // X14: the store key's result, once what it stored has arrived.
         Cleanup?.Update();
         Stash?.Update();
+        Arrivals?.Update();
         if (Cleanup != null && !Cleanup.Running && CleanupTriggers.Pressed(settings.CleanupShortcut)) Cleanup.Start();
         else if (Cleanup != null && CleanupTriggers.PressedInInventory(settings.CleanupShortcut))
             CleanupRunner.Say("Close the inventory to clean up, or use Clean up nearby in a chest's panel.", overInventory: true);
@@ -210,6 +214,7 @@ public sealed class Plugin : BaseUnityPlugin
         Cleanup?.EndWorld();
         Stash?.EndWorld();
         Results.Dismiss();
+        Arrivals?.Clear();
         Highlight?.Clear();
         catalog.BeginSession(false);
         classification.BeginSession(false);

@@ -21,6 +21,7 @@
     <Compile Include="../../src/YAVSOS/Networking/CategoryPolicyFileReader.cs" Link="Adapters/CategoryPolicyFileReader.cs" />
     <Compile Include="../../src/YAVSOS/Networking/ServerSyncSettingsBridge.cs" Link="Adapters/ServerSyncSettingsBridge.cs" />
     <Compile Include="../../src/YAVSOS.MultiUserChest/Bundle/UnknownFormatGuard.cs" Link="Adapters/UnknownFormatGuard.cs" />
+    <Compile Include="../../src/YAVSOS.MultiUserChest/Bundle/FormatProbe.cs" Link="Adapters/FormatProbe.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\YAVSOS.Core\YAVSOS.Core.csproj" />

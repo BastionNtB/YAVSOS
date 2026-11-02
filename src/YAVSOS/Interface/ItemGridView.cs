@@ -215,6 +215,8 @@ internal sealed class TipFill : MonoBehaviour, IPointerEnterHandler, IPointerExi
     internal bool Hovered => hovered;
     private static GameObject? passive;
     public void OnPointerEnter(PointerEventData eventData) { hovered = true; Fill?.Invoke(); }
+    /// <summary>Fills the tooltip again while it is shown, after a click changed what it says.</summary>
+    internal void Refresh() { if (hovered) Fill?.Invoke(); }
     public void OnPointerExit(PointerEventData eventData) => hovered = false;
     private void OnDisable() => hovered = false;
     private void LateUpdate()

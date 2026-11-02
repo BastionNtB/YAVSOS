@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -17,6 +18,8 @@ internal static class UiCost
     internal static long Start() => 0;
     internal static void Stop(string what, long started) { }
     internal static void Frame() { }
+    internal static Action<string, double>? Timer(string prefix) => null;
+    internal static void Record(string what, double ms) { }
 }
 #else
     internal static bool On;
@@ -28,6 +31,15 @@ internal static class UiCost
     {
         if (!On || started == 0) return;
         var ms = (Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency;
+        Rows.TryGetValue(what, out var row);
+        Rows[what] = (row.Count + 1, row.Total + ms, row.Max < ms ? ms : row.Max);
+    }
+    /// <summary>X16: a callback that records steps timed elsewhere (Core) under <paramref name="prefix"/>; null when off.</summary>
+    internal static Action<string, double>? Timer(string prefix) => On ? (step, ms) => Add(prefix + step, ms) : null;
+    /// <summary>X16: a duration measured elsewhere, such as work spread over several frames.</summary>
+    internal static void Record(string what, double ms) { if (On) Add(what, ms); }
+    private static void Add(string what, double ms)
+    {
         Rows.TryGetValue(what, out var row);
         Rows[what] = (row.Count + 1, row.Total + ms, row.Max < ms ? ms : row.Max);
     }

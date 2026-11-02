@@ -9,12 +9,19 @@ The spec (default assets/media/sources.json) maps each output file to its raw so
   "panel-overview.png": {"source": "panel-overview.png", "crop": [w, h, x, y], "width": 1600}
 Raw files live in local/media-raw/ (ignored by Git). crop, width, start/end, fps and mp4 are optional.
 A .gif output gets a two-pass palette; "mp4": true also writes a same-named .mp4 next to it.
+An entry with "overlays", "segments", "holds", "pad", "panels", "callouts" or "scale" (focus marks, cuts, insets,
+composed stills: the 1.1 captures) is built by scripts/media_annotate.py instead, which also uses gifski and gifsicle
+when they are installed.
 A .png output is cropped, optionally resized and quantised with pngquant.
 Needs ffmpeg, ImageMagick (magick) and pngquant."""
 import argparse, json, shutil, subprocess, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'scripts'))
+import media_annotate
+
+ANNOTATED = ('overlays', 'segments', 'holds', 'pad', 'panels', 'callouts', 'scale')
 
 
 def run(cmd):
@@ -73,7 +80,10 @@ def main():
     for name in a.names or list(spec):
         c = spec[name]; src = a.raw / c['source']; out = a.out / name
         if not src.exists(): print(f'{name}: skipped, no source {src}'); continue
-        (build_gif if out.suffix == '.gif' else build_png)(src, out, c)
+        if any(k in c for k in ANNOTATED):
+            (media_annotate.build_still if out.suffix == '.png' else media_annotate.build)(src, out, c)
+        else:
+            (build_gif if out.suffix == '.gif' else build_png)(src, out, c)
         extra = [out.with_suffix('.mp4')] if out.suffix == '.gif' and c.get('mp4') else []
         print(name, ', '.join(f'{p.name} {p.stat().st_size / 1e6:.2f} MB' for p in [out, *extra]))
 

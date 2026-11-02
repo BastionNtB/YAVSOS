@@ -119,11 +119,16 @@ diff -ru --label upstream --label local upstream local
 diff -ru --label upstream --label local upstream local
 --- upstream
 +++ local
-@@ -6,23 +6,38 @@
+@@ -6,23 +6,63 @@
  namespace YAVSOS.Vendor.MultiUserChest {
      public static class InventoryHandler {
          public static void RPC_RequestItemAddResponse(long sender, ZDOID containerId, ZPackage package) {
 -            HandleRPC(new RequestChestAddResponse(package), p => GetSourceInventory(p.SourceID), RPC_RequestItemAddResponse);
++            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
++            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemAddResponseRPC, sender, containerId, package)) {
++                return;
++            }
++
 +            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
 +            using (PeerFormat.For(sender)) {
 +                HandleRPC(new RequestChestAddResponse(package), p => GetSourceInventory(p.SourceID), RPC_RequestItemAddResponse);
@@ -132,6 +137,11 @@ diff -ru --label upstream --label local upstream local
  
          public static void RPC_RequestItemRemoveResponse(long sender, ZDOID containerId, ZPackage package) {
 -            HandleRPC(new RequestChestRemoveResponse(package), p => GetTargetInventory(p.SourceID), RPC_RequestItemRemoveResponse);
++            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
++            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemRemoveResponseRPC, sender, containerId, package)) {
++                return;
++            }
++
 +            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
 +            using (PeerFormat.For(sender)) {
 +                HandleRPC(new RequestChestRemoveResponse(package), p => GetTargetInventory(p.SourceID), RPC_RequestItemRemoveResponse);
@@ -140,6 +150,11 @@ diff -ru --label upstream --label local upstream local
  
          public static void RPC_RequestDropResponse(long sender, ZDOID containerId, ZPackage package) {
 -            HandleRPC(new RequestDropResponse(package), RPC_RequestDropResponse);
++            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
++            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemDropResponseRPC, sender, containerId, package)) {
++                return;
++            }
++
 +            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
 +            using (PeerFormat.For(sender)) {
 +                HandleRPC(new RequestDropResponse(package), RPC_RequestDropResponse);
@@ -148,6 +163,11 @@ diff -ru --label upstream --label local upstream local
  
          public static void RPC_RequestItemConsumeResponse(long sender, ZDOID containerId, ZPackage package) {
 -            HandleRPC(new RequestConsumeResponse(package), RPC_RequestItemConsumeResponse);
++            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
++            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemConsumeResponseRPC, sender, containerId, package)) {
++                return;
++            }
++
 +            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
 +            using (PeerFormat.For(sender)) {
 +                HandleRPC(new RequestConsumeResponse(package), RPC_RequestItemConsumeResponse);
@@ -156,6 +176,11 @@ diff -ru --label upstream --label local upstream local
  
          public static void RPC_RequestItemMoveResponse(long sender, ZDOID containerId, ZPackage package) {
 -            HandleRPC(new RequestMoveResponse(package), RPC_RequestItemMoveResponse);
++            // YAVSOS: an answer for container ZDOID.None answers a format probe: read, never applied (YAVSOS-LOCAL, PeerProbe).
++            if (PeerProbe.Intercepts(Patches.ContainerPatch.ItemMoveResponseRPC, sender, containerId, package)) {
++                return;
++            }
++
 +            // YAVSOS: read in the responder's format (YAVSOS-LOCAL, PeerFormat).
 +            using (PeerFormat.For(sender)) {
 +                HandleRPC(new RequestMoveResponse(package), RPC_RequestItemMoveResponse);

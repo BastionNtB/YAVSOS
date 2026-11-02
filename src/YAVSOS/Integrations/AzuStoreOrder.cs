@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -75,6 +76,10 @@ internal static class AzuStoreOrder
             if (shouldSkip != null && shouldSkip.ReturnType != typeof(bool)) problems.Add("ShouldSkip returns " + shouldSkip.ReturnType.Name + ".");
             problems.AddRange(AzuStoreCompatibility.CheckStoreLoop(store == null ? null : shape(store), false));
             problems.AddRange(AzuStoreCompatibility.CheckStoreLoop(storeThis == null ? null : shape(storeThis), true));
+#if YAVSOS_LAB
+            // D088: a real failed startup check for the panel-compatibilitychecks.png capture (FaultLab.StartupFault).
+            if (Transfers.FaultLab.StartupFault("azu-store-order")) problems.Add("Lab fault (D088): this check is forced to fail.");
+#endif
             harmony = new Harmony(HarmonyId);
             var self = typeof(AzuStoreOrder);
             HarmonyMethod Hook(string name, int priority = Priority.Normal) => new HarmonyMethod(AccessTools.DeclaredMethod(self, name)) { priority = priority };
@@ -189,21 +194,23 @@ internal static class AzuStoreOrder
             ((IList)pingList!.GetValue(null)).Clear();
             clearPendingSends!.Invoke(null, null);
             started = true;
+            Watch();
             var total = Ordered(plugin, answers, inventory, boxes, single);
             // Azu's own loop for the rest: unruled chests, drawers, backpacks and quivers by its own settings and order.
             restPass = true;
             foreach (var box in boxes)
             {
                 if (single != null && (single.m_stack <= 0 || !inventory.ContainsItem(single))) break;
-                total += (int)storeToContainer!.Invoke(null, new[] { box, single, single == null ? null : inventory });
+                total += Store(box, single, single == null ? null : inventory);
             }
             restPass = false;
             storeSuccess!.Invoke(null, new object[] { total });
+            Watched();
             return true;
         }
         catch (Exception error)
         {
-            restPass = false;
+            restPass = false; watch = null;
             Disable();
             var inner = error is TargetInvocationException { InnerException: { } cause } ? cause : error;
             log?.LogWarning($"AzuAutoStore's store key failed in YAVSOS's chest order ({inner.GetType().Name}: {inner.Message}); it keeps its own order from now on." +
@@ -244,11 +251,157 @@ internal static class AzuStoreOrder
                 // As cleanup does: Azu's exclusions keep a chest out of the ruled order (and its red message away). Azu's own store
                 // key ignores its pause (it pauses only ground pickup), so this does too (D097).
                 if (AzuExclusions.Allows(chest, prefab) == false) continue;
-                total += (int)storeToContainer!.Invoke(null, new[] { box, item, inventory });
+                total += Store(box, item, inventory);
                 if (item.m_stack <= 0 || !inventory.ContainsItem(item)) break;
             }
         }
         return total;
+    }
+
+    // ---- X14: the store key's result, judged by arrival (StoreKeyWatch). Read only: Azu's store calls run unchanged; a
+    // fault in the measuring turns the result off for that press, never the store.
+    private static StoreKeyWatch? watch;
+    private static Dictionary<string, Container>? watched;
+    private static Dictionary<object, Guid>? stacks;
+    private sealed class Waiting { internal StoreKeyWatch Watch = null!; internal Dictionary<string, Container> Chests = null!; internal ZNet? Session; }
+    private static readonly List<Waiting> waiting = new();
+    private static float nextLook;
+    private const float LookEvery = 0.25f;
+
+    private sealed class Measure
+    {
+        internal Container? Chest; internal string Id = ""; internal bool Drawer, Readable, Remote; internal ItemDrop.ItemData? Item;
+        internal string DrawerItem = ""; internal int DrawerCount; internal Dictionary<string, int> Player = null!; internal Dictionary<string, int>? InChest;
+    }
+
+    private static void Watch()
+    {
+        watch = new StoreKeyWatch();
+        watched = new Dictionary<string, Container>(StringComparer.Ordinal);
+        stacks = new Dictionary<object, Guid>();
+    }
+
+    // The press is over: what arrived at once is judged now, the rest each LookEvery seconds until the window ends.
+    private static void Watched()
+    {
+        if (watch == null || watched == null) return;
+        waiting.Add(new Waiting { Watch = watch, Chests = watched, Session = ZNet.instance });
+        watch = null; watched = null; stacks = null;
+        nextLook = 0;
+        Look();
+    }
+
+    /// <summary>Each frame from the plugin: publishes a press's result once nothing it stored is still on its way.</summary>
+    internal static void Look()
+    {
+        if (waiting.Count == 0 || Time.unscaledTime < nextLook) return;
+        nextLook = Time.unscaledTime + LookEvery;
+        for (var at = waiting.Count - 1; at >= 0; at--)
+        {
+            var run = waiting[at];
+            if (!ReferenceEquals(run.Session, ZNet.instance)) { waiting.RemoveAt(at); continue; } // Left the world: no result.
+            bool done;
+            try { done = run.Watch.Observe(Time.unscaledTime, (id, item) => Count(run.Chests, id, item)); }
+            catch (Exception error) when (OptionalFailure.Recoverable(error)) { waiting.RemoveAt(at); Quiet(error); continue; }
+            if (!done) continue;
+            waiting.RemoveAt(at);
+            Plugin.Instance?.Results.Publish(run.Watch.Report);
+        }
+    }
+
+    // Azu's per-chest store call, measured: what left the inventory, and the destination's count before it.
+    private static int Store(object box, ItemDrop.ItemData? item, Inventory? source)
+    {
+        Measure? before = null;
+        if (watch != null) try { before = Before(box, item); } catch (Exception error) when (OptionalFailure.Recoverable(error)) { Quiet(error); }
+        var stored = (int)storeToContainer!.Invoke(null, new[] { box, item, source });
+        if (before != null && watch != null) try { After(before, stored); } catch (Exception error) when (OptionalFailure.Recoverable(error)) { Quiet(error); }
+        return stored;
+    }
+
+    private static Measure Before(object box, ItemDrop.ItemData? item)
+    {
+        var chest = vanillaType!.IsInstanceOfType(box) ? boxedContainer!.GetValue(box) as Container : null;
+        var view = chest ? ChestRuleStore.View(chest!) : null;
+        var measure = new Measure
+        {
+            Chest = chest, Item = item, Player = Counts(Player.m_localPlayer.GetInventory()),
+            Id = view && view!.IsValid() ? view.GetZDO().m_uid.ToString() : "box " + RuntimeHelpers.GetHashCode(box),
+            Remote = view && view!.IsValid() && !view.IsOwner()
+        };
+        if (chest && RossItemDrawersIntegration.IsDrawer(chest!))
+        { measure.Drawer = true; measure.Readable = RossItemDrawersIntegration.TryRead(chest!, out measure.DrawerItem, out measure.DrawerCount); }
+        else if (chest) { measure.Readable = true; measure.InChest = Counts(chest!.GetInventory()); }
+        return measure;
+    }
+
+    private static void After(Measure measure, int stored)
+    {
+        var now = Time.unscaledTime;
+        if (measure.Chest) watched![measure.Id] = measure.Chest!;
+        if (measure.Drawer)
+        {
+            // A drawer takes one item; Azu's count is what it has to show, since Ross may take the items only once it grants
+            // the deposit (another player's game running the drawer).
+            var name = measure.Item?.m_dropPrefab ? measure.Item!.m_dropPrefab.name : measure.DrawerItem;
+            if (string.IsNullOrEmpty(name) && measure.Readable && RossItemDrawersIntegration.TryRead(measure.Chest!, out var assigned, out _)) name = assigned;
+            if (string.IsNullOrEmpty(name)) return;
+            int? count = measure.Readable ? (measure.DrawerItem == name ? measure.DrawerCount : 0) : null;
+            watch!.Stored(measure.Id, name, stored, count, viaMuc: false, Stack(measure.Item, name), now);
+            return;
+        }
+        var after = Counts(Player.m_localPlayer.GetInventory());
+        var left = 0;
+        foreach (var pair in measure.Player)
+        {
+            var gone = pair.Value - (after.TryGetValue(pair.Key, out var n) ? n : 0);
+            if (gone <= 0) continue;
+            left += gone;
+            int? count = measure.InChest == null ? null : measure.InChest.TryGetValue(pair.Key, out var had) ? had : 0;
+            var mine = measure.Item?.m_dropPrefab && measure.Item!.m_dropPrefab.name == pair.Key ? measure.Item : null;
+            watch!.Stored(measure.Id, pair.Key, gone, count, measure.Remote, Stack(mine, pair.Key), now);
+        }
+        // Azu counted more than left the inventory: the rest can't be checked.
+        if (stored > left && measure.Item?.m_dropPrefab)
+            watch!.Stored(measure.Id, measure.Item!.m_dropPrefab.name, stored - left, null, measure.Remote, Stack(measure.Item, measure.Item.m_dropPrefab.name), now);
+    }
+
+    // The source stack, so a stack split across chests counts once (B4.3); unknown stacks count once per item.
+    private static Guid Stack(ItemDrop.ItemData? item, string prefab)
+    {
+        object key = item != null ? item : prefab;
+        if (!stacks!.TryGetValue(key, out var id)) stacks.Add(key, id = Guid.NewGuid());
+        return id;
+    }
+
+    private static int? Count(Dictionary<string, Container> chests, string id, string item)
+    {
+        if (!chests.TryGetValue(id, out var chest) || !chest) return null;
+        if (RossItemDrawersIntegration.IsDrawer(chest))
+            return RossItemDrawersIntegration.TryRead(chest, out var held, out var count) ? (held == item ? count : 0) : null;
+        var inventory = chest.GetInventory();
+        return inventory == null ? null : Counts(inventory).TryGetValue(item, out var n) ? n : 0;
+    }
+
+    private static Dictionary<string, int> Counts(Inventory inventory)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var item in inventory.GetAllItems())
+        {
+            if (item == null || !item.m_dropPrefab) continue;
+            var name = item.m_dropPrefab.name;
+            counts[name] = (counts.TryGetValue(name, out var n) ? n : 0) + item.m_stack;
+        }
+        return counts;
+    }
+
+    private static bool quietLogged;
+    private static void Quiet(Exception error)
+    {
+        watch = null; // This press has no result; the store itself goes on.
+        if (quietLogged) return;
+        quietLogged = true;
+        log?.LogWarning($"The store key's result panel couldn't measure a store ({error.GetType().Name}: {error.Message}); AzuAutoStore stored as usual.");
     }
 
     private static void PickupPrefix(ItemDrop itemDrop) { drop = itemDrop; dropDecided = false; dropBest = null; }

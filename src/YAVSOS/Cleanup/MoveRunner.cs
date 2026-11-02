@@ -5,6 +5,7 @@ using BepInEx.Logging;
 using UnityEngine;
 using YAVSOS.Core.Interface;
 using YAVSOS.Core.Transfers;
+using YAVSOS.Integrations;
 using YAVSOS.Interface;
 using YAVSOS.Transfers;
 
@@ -131,6 +132,7 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
                 run.Report.Moved(observer.MovedUnits, viaMuc: true, Prefab(move), Stack(move));
                 if (observer.MovedUnits < observer.Units) run.Report.Remain(CleanupReason.NoCapacity, Prefab(move));
                 log.LogInfo(MovedViaMuc(move, observer));
+                if (observer.MovedUnits > 0) Arrived(pending.Destination);
                 break;
             case DelegatedMoveState.Refused:
                 run.Report.Refuse(TransferRefusal.Busy, Prefab(move)); Log(move, "MultiUserChest: " + observer.Detail);
@@ -161,7 +163,18 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         log.LogInfo(LastSummary + $" ({run.Clock.Elapsed.TotalMilliseconds:0} ms)");
         CleanupRunner.Say(LastSummary);
         results.Publish(run.Report);
+        // Visual follow-ups only (D121, D123); nothing may escape into Plugin.Update or the world's end.
+        try { Finished(run); }
+        catch (Exception error) when (OptionalFailure.Recoverable(error))
+        {
+            if (!finishedFailed) log.LogWarning("After a run: " + error.GetType().Name + ": " + error.Message + " (display only; the run's result stands).");
+            finishedFailed = true;
+        }
     }
+    private bool finishedFailed;
+
+    /// <summary>After a run's report is published; the stash closes its stack's tooltip here.</summary>
+    protected virtual void Finished(TRun run) { }
 
     // Nothing may escape into Plugin.Update.
     private void Execute(TRun run, TMove move)
@@ -221,6 +234,9 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
     }
 
     protected abstract string PolicyStamp(TRun run);
+
+    /// <summary>D121: items landed in the chest; it shows the player's arrival effect and glow (visual only).</summary>
+    protected static void Arrived(Container destination) => Plugin.Instance?.Arrivals?.Arrived(destination);
 
     /// <summary>Reports a direct move's result; true when it moved. A refusal without detail is not logged.</summary>
     protected bool Report(TRun run, TMove move, DirectMoveResult result)

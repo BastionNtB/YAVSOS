@@ -29,6 +29,8 @@ public sealed class CleanupReport
     private CleanupReport(string title, string verb, string left) { this.title = title; this.verb = verb; this.left = left; }
     /// <summary>"Stash: stored 4 stacks (63 items) · 2 left in your inventory (no room)".</summary>
     public static CleanupReport ForStash() => new("Stash", "stored", "left in your inventory");
+    /// <summary>X14: AzuAutoStore's store key, judged by arrival: "Store key: stored 4 stacks (63 items) · 1 unconfirmed".</summary>
+    public static CleanupReport ForStoreKey() => new("Store key", "stored", "left in your inventory");
 
     /// <param name="item">The item's identity (prefab) for the result view (P6-04); null counts it unnamed.</param>
     /// <summary>D086 D9: chests in range, and how many of the nearest a run could handle; the summary says when some weren't.</summary>
@@ -132,7 +134,9 @@ public sealed class CleanupReport
     }
     private static readonly CleanupReason[] Left = { CleanupReason.NoCapacity, CleanupReason.NoDestination, CleanupReason.AzuExcluded,
         CleanupReason.Held, CleanupReason.Unsupported, CleanupReason.MucBusy, CleanupReason.Budget, CleanupReason.ChestLimit, CleanupReason.CategoriesPending, CleanupReason.OptedOut };
-    private static readonly CleanupReason[] Skipped = { CleanupReason.OtherOwnerNoMuc, CleanupReason.BothRemote, CleanupReason.OtherOwnerFormatUnknown };
+    // F3: one line per MultiUserChest cause, counted in stacks; only the probe still checking says to run again.
+    private static readonly CleanupReason[] Skipped = { CleanupReason.OtherOwnerNoMuc, CleanupReason.BothRemote, CleanupReason.OtherOwnerMucUnusable,
+        CleanupReason.OtherOwnerMucSilent, CleanupReason.OtherOwnerMucChecking, CleanupReason.OtherOwnerFormatUnknown };
 
     /// <summary>
     /// Example: "Cleanup: moved 4 stacks (63 items) · 2 left in place (no room) · 1 refused (chest changed) ·
@@ -149,8 +153,7 @@ public sealed class CleanupReport
             CleanupReason.Unsupported, CleanupReason.MucBusy, CleanupReason.Budget, CleanupReason.ChestLimit, CleanupReason.CategoriesPending, CleanupReason.OptedOut };
         var leftParts = left.Where(x => Count(x) != 0).Select(x => Count(x) + " " + DescribeRun(x)).ToList();
         if (leftParts.Count != 0) parts.Add(LeftTotal(left) + " " + this.left + " (" + string.Join(", ", leftParts) + ")");
-        var skipped = new[] { CleanupReason.OtherOwnerNoMuc, CleanupReason.BothRemote, CleanupReason.OtherOwnerFormatUnknown };
-        foreach (var reason in skipped.Where(x => Count(x) != 0)) parts.Add(Count(reason) + " skipped (" + Describe(reason) + ")");
+        foreach (var reason in Skipped.Where(x => Count(x) != 0)) parts.Add(Count(reason) + " skipped (" + Describe(reason) + ")");
         if (Count(CleanupReason.ChestUnreadable) != 0) parts.Add(Unreadable());
         if (Refused != 0)
             parts.Add(Refused + " refused (" + string.Join(", ", refused.OrderBy(x => x.Key).Select(x => x.Value + " " + Describe(x.Key))) + ")");
@@ -179,7 +182,10 @@ public sealed class CleanupReport
         CleanupReason.ChestLimit => "in a chest farther than the nearest " + CleanupPlanner.MaximumSources + " with items; clean up again closer to it",
         CleanupReason.OtherOwnerNoMuc => "another player's chest, no MultiUserChest",
         CleanupReason.BothRemote => "both chests are other players'",
-        CleanupReason.OtherOwnerFormatUnknown => "another player's chest, their MultiUserChest format is unknown",
+        CleanupReason.OtherOwnerMucUnusable => "another player's chest; their MultiUserChest can't take requests",
+        CleanupReason.OtherOwnerMucSilent => "another player's chest; no MultiUserChest answered",
+        CleanupReason.OtherOwnerMucChecking => "another player's chest; still checking their MultiUserChest, run again in a moment",
+        CleanupReason.OtherOwnerFormatUnknown => "another player's chest; their MultiUserChest format is unknown",
         CleanupReason.CategoriesPending => "waiting for categories to load, run again shortly",
         CleanupReason.OptedOut => "its chest was set to be left alone",
         CleanupReason.ChestUnreadable => "couldn't be read (see the log)",

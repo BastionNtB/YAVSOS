@@ -48,6 +48,24 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         internal override IReadOnlyList<CleanupMove> Moves => Plan.Moves;
     }
 
+    /// <summary>
+    /// D123: the chests the run left something in that the player can act on (no chest takes it, or the chests that take
+    /// it are full) are marked in the player's StaysColor, each labelled with its first such item and why. Other reasons
+    /// (another player's chest, protected, held, the run's limits) are normal and stay unmarked; the result panel lists all.
+    /// </summary>
+    protected override void Finished(Run run)
+    {
+        var arrivals = Plugin.Instance?.Arrivals;
+        if (arrivals == null || run.Plan == null) return;
+        foreach (var chest in run.Plan.Remainders.Where(x => x.Reason is CleanupReason.NoDestination or CleanupReason.NoCapacity).GroupBy(x => x.SourceId))
+        {
+            if (!run.Chests.TryGetValue(chest.Key, out var container)) continue;
+            var first = chest.First();
+            var others = chest.Select(x => x.Identity.Prefab).Distinct(StringComparer.Ordinal).Count() - 1;
+            arrivals.Stayed(container, HighlightText.Keeps(Name(first.Identity.Prefab), others, first.Reason == CleanupReason.NoCapacity));
+        }
+    }
+
     internal CleanupRunner(PluginSettings settings, ManualLogSource log, RunResults results) : base(log, results)
     {
         this.settings = settings;
@@ -150,7 +168,8 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
                     log.LogInfo($"Cleanup leaves {skipped} in {Localize(container.m_name)} at {container.transform.position}: YAVSOS can't move it without changing it." + more);
             var player = Player.m_localPlayer;
             chests.Add(new CleanupChest(id, ChestRuleStore.Payload(container), capture.Snapshot, view.IsOwner(), ChestRuleStore.CleanupOptOut(container),
-                player ? Vector3.Distance(player.transform.position, container.transform.position) : 0));
+                player ? Vector3.Distance(player.transform.position, container.transform.position) : 0,
+                view.IsOwner() ? OwnerMucState.Usable : MucRoute.OwnerState(zdo.GetOwner())));
             run.Chests.Add(id, container);
             if (drag != null && run.Adapter.TryHandle(container.GetInventory(), drag, out var handle)) held.Add(handle);
             return true;
@@ -195,26 +214,43 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     }
 
     /// <summary>
-    /// P6-05: what "Clean up nearby" would do with stack <paramref name="item"/> of chest <paramref name="source"/> now,
-    /// from the inputs a run gathers (<see cref="PlacementExplainer.Cleanup"/>). Read only. Advance one step per frame;
-    /// <paramref name="done"/> gets the lines, or null with a note saying why it cannot be explained (the note may also
-    /// qualify an answer). Chests are read a few per frame, so the answer may be a few frames older than a run's.
+    /// X16 (P9-13): what <see cref="Prepare"/> gathered for the cleanup explanations of one open chest: the run's chests
+    /// and snapshot adapter (alive with it, disposed with it), the prepared limits and receivers, and the note that
+    /// qualifies every answer, or explains why there is none. Read only.
     /// </summary>
-    internal IEnumerator<bool> Explain(Container source, ItemDrop.ItemData item, Action<string?, string> done)
+    internal sealed class Prepared : IDisposable
+    {
+        internal readonly Run? Run; internal readonly CleanupExplainContext? Context; internal readonly string Note;
+        internal readonly Container? Source; internal readonly Func<string, string>? Names;
+        internal Prepared(Run? run, CleanupExplainContext? context, string note, Container? source = null, Func<string, string>? names = null)
+        { Run = run; Context = context; Note = note; Source = source; Names = names; }
+        internal static Prepared Without(string note) => new(null, null, note);
+        public void Dispose() => Run?.Adapter.Dispose();
+    }
+
+    /// <summary>
+    /// P6-05, X16: gathers what "Clean up nearby" would work from now, once per open chest <paramref name="source"/>: the
+    /// inputs a run gathers and the stack-independent limits and receivers (<see cref="CleanupExplainContext"/>). Read
+    /// only. Advance one step per frame; <paramref name="done"/> gets the result, which then owns the snapshot adapter;
+    /// stopped early, the adapter is disposed here. Chests are read a few per frame, so the context may be a few frames
+    /// older than a run's.
+    /// </summary>
+    internal IEnumerator<bool> Prepare(Container source, Action<Prepared> done)
     {
         var plugin = Plugin.Instance; var player = Player.m_localPlayer;
         var note = "";
-        if (plugin == null || !player || player.IsDead() || !ZNet.instance || !source) { done(null, note); yield break; }
-        if (!NativeInventoryProbe.Supported) { done(null, "Cleanup is unavailable: " + NativeInventoryProbe.Status + "."); yield break; }
-        if (AzuExclusions.State == AzuExclusionState.Unavailable) { done(null, AzuUnreadable); yield break; }
+        if (plugin == null || !player || player.IsDead() || !ZNet.instance || !source) { done(Prepared.Without(note)); yield break; }
+        if (!NativeInventoryProbe.Supported) { done(Prepared.Without("Cleanup is unavailable: " + NativeInventoryProbe.Status + ".")); yield break; }
+        if (AzuExclusions.State == AzuExclusionState.Unavailable) { done(Prepared.Without(AzuUnreadable)); yield break; }
         var answers = plugin.CategoryAnswers;
-        if (answers == null) { done(null, "YAVSOS categories are still loading."); yield break; }
+        if (answers == null) { done(Prepared.Without("YAVSOS categories are still loading.")); yield break; }
         if (!settings.AllowCleanup.Value) note = "Cleanup is turned off on this server; this is what it would do.";
         var range = Math.Min(settings.EffectiveCleanupRange, settings.MaximumRange.Value);
         var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal) };
+        var handed = false;
         try
         {
-            // Spread over frames (P6-11 cost check): one scene search, then ExplainBatch chests per step, then the plan.
+            // Spread over frames (P6-11 cost check): one scene search, then ExplainBatch chests per step, then the receivers.
             var timed = UiCost.Start();
             var scene = Scene();
             var near = Nearby(player, range, scene).Take(settings.EffectiveMaximumChests).ToList();
@@ -224,31 +260,46 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
             for (var at = 0; at < near.Count; at++)
             {
                 if (at != 0 && at % ExplainBatch == 0) yield return true;
-                if (!player || !source) { done(null, ""); yield break; }
+                if (!player || !source) { done(Prepared.Without("")); yield break; }
                 timed = UiCost.Start();
                 if (near[at]) GatherChest(run, near[at], chests, held, drag); // One removed since the search is left out.
                 UiCost.Stop("explain chest", timed);
             }
             yield return true;
-            if (!player || player.IsDead() || !source) { done(null, ""); yield break; }
+            if (!player || player.IsDead() || !source) { done(Prepared.Without("")); yield break; }
             timed = UiCost.Start();
             var input = Input(plugin, answers, run, chests, held, out _);
             UiCost.Stop("explain input", timed);
             yield return true;
-            if (!player || player.IsDead() || !source) { done(null, ""); yield break; }
-            var id = ChestRuleStore.View(source)?.GetZDO()?.m_uid.ToString();
-            if (id == null || !run.Chests.ContainsKey(id)) { done(null, "This chest is beyond cleanup range or can't be cleaned up."); yield break; }
-            if (!run.Adapter.TryHandle(source.GetInventory(), item, out var handle) ||
-                input.Chests.First(x => x.Id == id).Inventory.Stacks.All(x => x.Handle != handle))
-            { done(null, "That item cannot be moved by cleanup."); yield break; }
-            // One sentence (R4 review): no per-chest rows and no search for chests out of range.
-            var names = ChestNamer(player, source, run.Chests);
+            if (!player || player.IsDead() || !source) { done(Prepared.Without("")); yield break; }
             timed = UiCost.Start();
-            var answer = PlacementExplainer.Cleanup(input, id, handle, plugin.RuleEvaluator, names, Name, openName: RuleControls.OpenValueName, detail: false);
-            UiCost.Stop("explain plan", timed);
-            done(ExplanationView.Tooltip(answer, true, names), note);
+            var context = new CleanupExplainContext(input, plugin.RuleEvaluator);
+            UiCost.Stop("explain receivers", timed); // X16: once per context; each stack's "routes" is timed in Answer.
+            handed = true;
+            done(new Prepared(run, context, note, source, ChestNamer(player!, source, run.Chests)));
         }
-        finally { run.Adapter.Dispose(); }
+        finally { if (!handed) run.Adapter.Dispose(); }
+    }
+
+    /// <summary>
+    /// P6-05, X16: what "Clean up nearby" would do with stack <paramref name="item"/> of the prepared chest, against the
+    /// prepared context (<see cref="CleanupExplainContext.Explain"/>): the typed answer (S2), or none with a note saying
+    /// why. One sentence (R4 review): no per-chest rows and no search for chests out of range. Read only.
+    /// </summary>
+    internal ExplanationAnswer Answer(Prepared prepared, ItemDrop.ItemData item)
+    {
+        if (prepared.Context == null || prepared.Run == null) return ExplanationAnswer.Without(prepared.Note);
+        var source = prepared.Source;
+        if (!Player.m_localPlayer || !source) return ExplanationAnswer.Without("");
+        var id = ChestRuleStore.View(source!)?.GetZDO()?.m_uid.ToString();
+        if (id == null || !prepared.Run.Chests.ContainsKey(id)) return ExplanationAnswer.Without("This chest is beyond cleanup range or can't be cleaned up.");
+        if (!prepared.Run.Adapter.TryHandle(source!.GetInventory(), item, out var handle) || !prepared.Context.Has(id, handle))
+            return ExplanationAnswer.Without("That item cannot be moved by cleanup.");
+        var timed = UiCost.Start();
+        var answer = prepared.Context.Explain(id, handle, prepared.Names, Name, openName: RuleControls.OpenValueName, detail: false,
+            timed: UiCost.Timer("explain ")); // X16: this stack's routes.
+        UiCost.Stop("explain plan", timed);
+        return new ExplanationAnswer(answer, true, prepared.Note, prepared.Names);
     }
 
     /// <summary>Chests captured per explanation step: a few per frame keeps a large base from stalling the frame.</summary>
@@ -257,15 +308,19 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     /// <summary>Every container in the scene, searched once per explanation.</summary>
     internal static Container[] Scene() => ContainerRegistry.Scene();
 
-    /// <summary>"this chest" for the open one, otherwise the chest's name and distance ("Chest 6 m away"), since many chests share a name.</summary>
+    /// <summary>
+    /// "this chest" for the open one, otherwise the chest's name and distance ("Chest 6 m away"), since many chests share a
+    /// name. X16: the distance is from where the player is when a name is asked for, so a line rebuilt later follows them.
+    /// </summary>
     internal static Func<string, string> ChestNamer(Player player, Container? open, IReadOnlyDictionary<string, Container> chests)
     {
-        var center = player.transform.position;
+        var last = player.transform.position;
         return id =>
         {
             if (!chests.TryGetValue(id, out var container) || !container) return id;
             if (ReferenceEquals(container, open)) return "this chest";
-            return Localize(container.m_name) + " " + Vector3.Distance(center, container.transform.position).ToString("0") + " m away";
+            if (player) last = player.transform.position; // Gone (logout, death): the last place seen.
+            return Localize(container.m_name) + " " + Vector3.Distance(last, container.transform.position).ToString("0") + " m away";
         };
     }
 
@@ -301,7 +356,10 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
             merge, move.Kind.ToString(), () => (Owner(source), Owner(destination)),
             () => ChestRuleStore.View(source)!.IsOwner() && ChestRuleStore.View(destination)!.IsOwner(), ("source", "destination"));
         if (Report(run, move, result))
+        {
+            Arrived(destination);
             log.LogInfo($"Cleanup moved {result.Units} {Name(move.Identity.Prefab)} from {Localize(source.m_name)} to {Localize(destination.m_name)} ({move.Kind}).");
+        }
     }
 
     // P4-03: MultiUserChest takes the request from here (D043). Its windows (refund after 30 s, slot-only removal) are inherited.
@@ -317,7 +375,7 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         var remote = move.Route == CleanupRoute.MucAdd ? destination : source;
         if (!ChestRuleStore.View(remote)!.GetZDO().HasOwner()) { run.Report.Refuse(TransferRefusal.OwnerChanged, move.Identity.Prefab); return; }
         // D061 Q8: YAVSOS's copy never sends a request the owner's copy might misread.
-        if (!MucRoute.OwnerFormatKnown(ChestRuleStore.View(remote)!.GetZDO().GetOwner())) { run.Report.Remain(CleanupReason.OtherOwnerFormatUnknown, move.Identity.Prefab); return; }
+        if (MucRoute.OwnerState(ChestRuleStore.View(remote)!.GetZDO().GetOwner()).Skip() is { } skip) { run.Report.Remain(skip, move.Identity.Prefab); return; }
         // Cell (−1, −1) both ways: the owner or MultiUserChest's response picks a free slot, so nothing is ever swapped out
         // of a cell, and if MultiUserChest does not intercept, the game itself refuses the move.
         run.MayHaveWritten = true;

@@ -1,3 +1,40 @@
+![YAVSOS banner: three chests and a wooden sign reading YAVSOS, Yet Another Valheim Storage Organization System](assets/art/banner.png)
+
+# Yet Another Valheim Storage Organization System
+
+YAVSOS: A Valheim storage organization system built around efficiency, mod compatibility, extensibility and multiplayer support. Stash and organize your items with automatic item categorizations. All while supporting and working with other mods!
+
+![One press of the stash key among ruled chests: the inventory empties into the right chests, each chest puffs and glows gold as its items land, and the result panel lists what went where.](assets/media/hero.gif)
+
+- **Works well with:** AzuAutoStore.
+- **Supported:** single-player, self-hosted, dedicated servers, and client only.
+
+## Download:
+
+ [Thunderstore](https://thunderstore.io/c/valheim/p/BastionNtB/YAVSOS/) ·
+[Hexium](https://valheim.hexium.gg/mods/BastionNtB/YAVSOS) ·
+[Nexus Mods](https://www.nexusmods.com/valheim/mods/4684) Use your favorite Nexus Mod Manager to install it.
+[GitHub](https://github.com/BastionNtB/YAVSOS/releases). Use [Gale](https://github.com/Kesomannen/gale) or [r2modman](https://github.com/ebkr/r2modmanPlus) to install it
+for you; see [Getting started](#getting-started).
+
+## Help and feedback:
+
+Bugs, questions, ideas and requests all go through GitHub issues. This helps me keep everything in one place.
+
+**[Open an issue on GitHub ›](https://github.com/BastionNtB/YAVSOS/issues/new/choose)** · [See existing issues](https://github.com/BastionNtB/YAVSOS/issues)
+
+## AI Disclaimer
+
+This project's codebase was written entirely by AI. If this deters you from wanting to use the project, I completely understand. I am not a coder. I've tried to become one many times and failed each time. It just doesn't work for me. That isn't a defense for my use of AI, it just is what it is.
+
+With that being said, my involvement with this project is, and will continue to be, the design for every behavior, UI flow, feature, and function. Their implementation is a direct result of my choices. I can't read or understand the code; this means my friends/family and I test it by how it behaves.
+
+I've put almost a month of time (at the time of writing this) into this project so far and plan to keep supporting it the only way I can. Bugs and issues will be addressed and fixed. I will read and listen to feature requests and weigh them against what I envision for the project, and how best to keep it something that helps or is useful to people.
+
+This document has been written by myself, and not AI.
+
+![section divider](assets/art/divider-left.png)
+
 # YAVSOS: Yet Another Valheim Storage Organization System
 
 You've played Valheim for a while now, so you know how it goes. You have chests everywhere
@@ -12,17 +49,6 @@ according to its categories, filters and priorities.
 You don't need to spend hours categorizing items; YAVSOS does it for you, using actual game
 data and hints to work out which categories items belong in. Assigning a category also
 anticipates items you haven't found yet and makes a home for them.
-
-![Standing among a few ruled chests (Ores, Food, Wood), one press of the store key: the inventory empties into the right chests, and the result panel lists what went where. The first thing a store page shows.](assets/media/hero.gif)
-
-## AI Disclaimer
-This project's codebase was written entirely by AI. If this deters you from wanting to use the project, I completely understand. I am not a coder. I've tried to become one many times and failed each time. It just doesn't work for me. That isn't a defense for my use of AI, it just is what it is.
-
-With that being said, my involvement with this project is, and will continue to be, the design for every behavior, UI flow, feature, and function. Their implementation is a direct result of my choices. I can't read or understand the code; this means my friends/family and I test it by how it behaves.
-
-I've put almost a month of time (at the time of writing this) into this project so far and plan to keep supporting it the only way I can. Bugs and issues will be addressed and fixed. I will read and listen to feature requests and weigh them against what I envision for the project, and how best to keep it something that helps or is useful to people.
-
-This document has been written by myself, and not AI.
 
 ## Why YAVSOS?
 
@@ -53,7 +79,9 @@ and it goes to some lengths to keep them behaving exactly the way you expect the
   on. If an update changes one of them, only that part turns off, everything else keeps
   working, and the panel tells you what happened.
 
-![The panel's status marks with one integration's hover open after a startup check turned off part of it: the cross, the line saying which part is off, and the other parts still ticked.](assets/media/panel-compatibilitychecks.png)
+![The AzuAutoStore status mark with its hover open after a startup check turned off one part: a cross and "Not working: chest order: its store key keeps its own order", with the other four parts still on. Additional mods shown: AzuAutoStore.](assets/media/panel-compatibilitychecks.png)
+
+> Additional mods shown: AzuAutoStore.
 
 - **A communal effort!** When a mod YAVSOS works with has a gap, we'd rather work with its
   modder to see whether a fix belongs there than build a replacement. Anything we do have to
@@ -62,9 +90,12 @@ and it goes to some lengths to keep them behaving exactly the way you expect the
 The way I see it, you shouldn't have to give up the mods you trust to get your storage
 organized. YAVSOS should just fit in.
 
+![section divider](assets/art/divider-right.png)
+
 ## Getting started
 
 ### Required mods
+
 - **BepInEx**
 - **Jotunn**
 
@@ -116,10 +147,9 @@ they're sent to every player who joins.
 
 ## Setup types
 
-YAVSOS works in single-player, on a server, or just for you on a server that doesn't have it.
-If the server has YAVSOS installed, every player will need it as well. The server's categories and settings
-apply to everyone. If it's on client only stashing should work on its own, but stashing into busy
-chests requires the other player(s) to have YAVSOS as well.
+YAVSOS works in single-player, on a server, or just for you on a server that doesn't have it. If the server has YAVSOS installed, every player will need it as well. The server's categories and settings apply to everyone. If it's on client only stashing should work on its own, but stashing into busy chests requires the other player(s) to have YAVSOS, AzuAutoStore (AAS), or MultiUserChest (MUC) as well. While this mixing and matching works, it’s recommended that everyone be on the same version of MUC (either the one bundled with YAVSOS, AAS, or Standalone MUC)
+
+![section divider](assets/art/divider-left.png)
 
 ## How it works
 
@@ -128,70 +158,73 @@ chests requires the other player(s) to have YAVSOS as well.
 Open a chest, and the rule panel shows up beside it. Tick the categories you want it to accept, for example,
 *Ores & metal scrap* or *Raw food*. YAVSOS rules are live as soon as you change them. Every item in those categories now belongs there, including ones you haven't found yet.
 
-![An open chest with the rule panel beside it: a category ticked, the item grid, the priority bar and the status marks, with short callouts naming each part.](assets/media/panel-overview.png)
+![The rule panel with callouts: the status marks, the rule with its Copy, Paste and Clear buttons, the editor tabs, the items the rule accepts, the priority bar, and the clean-up buttons.](assets/media/panel-overview.png)
 
-![An empty chest: search "ore", tick *Ores*, the item grid fills with every ore including ones not found yet, "Rule saved."](assets/media/set-rule.gif)
+![In an empty chest's panel, search "ore" and tick *Ores & metal scrap*: the item grid fills with every ore, including ones not found yet.](assets/media/set-rule.gif)
 
-You can always clear a rule with a click of a button.
+You can always clear a rule with a click of a button or Copy a rule from one chest and paste to another.
+
+![Copy on a Food chest's rule, then Paste on an empty chest: the empty chest takes the rule's category, its two Never items and its priority.](assets/media/copy-paste.gif)
 
 Rule editing respects the ward's permission settings when the chest is inside its area; a private chest can only be edited by the builder.
 
 If you want more control:
 
 - **Always or Never.** Under the "Items" tab, you can click an item's icon to mark it *Always*, meaning it will always be accepted there (even if it's not in the category), click again for *Never*, meaning it won't be stashed there (even if it is in the category). Click again to clear it, meaning it will follow the category and filters. This is so you can have fine-grained control over what goes into a chest or not.
-![Clicking item icons in the grid: one becomes *Always here*, another *Never here*, then clear; the Rule section's chips update.](assets/media/always-never.gif)
+
+![Clicking two icons in the item grid: one becomes *Always here*, the other *Always here* and then *Never here*, then both are cleared; the rule's chips change at each click.](assets/media/always-never.gif)
+
 - **Filters.** Narrow things down, for example only upgraded gear, items crafted by you, an
   EpicLoot rarity, or food that's mostly health. The panel only offers filters that make
   sense for the items you picked.
-![A *Swords* rule with a filter such as "only upgraded", showing the filter choices the panel offers for those items.](assets/media/filters.png)
+
+![The Filters tab of a Swords chest set to "only from Warfare": Item origin offers Warfare, Base game and origin not known; EpicLoot rarity offers magic to ancient. Additional mods shown: Warfare, EpicLoot.](assets/media/filters.png)
+
+> Additional mods shown: Warfare, EpicLoot, ZenUI, BetterUI.
+
 - **Priority.** When two chests are set to accept an item, you can set a priority rank on chests you want to accept the item first, then use others as a backup. Priority 1 (Critical) vs Priority 10 (Fuhgeddaboudit), with Priority 5 being normal.
-![Two chests that both take Copper, one at priority 2 (*Urgent*) and one at 5 (*Normal*), with the priority bar visible on the first.](assets/media/priority.png)
 
 ### Status marks
 
 On the top right of the YAVSOS panel, you can find the status of YAVSOS and its integrations (if the companion mod is installed). Hover over each of the status icons in game to see explanations of exactly what's going on. Below is a general overview:
 
-- Green `✔` means everything is active.
-- Amber/yellow `!` means a partial failure or there is something you might need to look at, such as AAS exclusions for a chest or categories for a mod not working.
-- Red `𐄂` means a mod integration was disabled due to an automatic incompatibility check or functionality of YAVSOS is considered not working.
-- Grey `⁃` means a setting has been disabled.
-
-![The marks at the top right with the AzuAutoStore mark's hover open, showing its amber caution, and the matching amber slots in the item grid.](assets/media/status-marks.png)
+- Green ![green tick](assets/art/mark-ok.png) means everything is active.
+- Amber/yellow ![amber exclamation mark](assets/art/mark-caution.png) means a partial failure or there is something you might need to look at, such as AAS exclusions for a chest or categories for a mod not working.
+- Red ![red cross](assets/art/mark-broken.png) means a mod integration was disabled due to an automatic incompatibility check or functionality of YAVSOS is considered not working.
+- Grey ![grey dash](assets/art/mark-off.png) means a setting has been disabled.
 
 ### Stashing
 
-Stashing takes items from your inventory and automatically puts them into nearby chests for you. YAVSOS also directs where those items end up using rules you set up.
+Stashing takes items from your inventory and automatically puts them into nearby chests for you. YAVSOS directs where these items end up by using the rules you set up on each chest.
 
-Press **.** (period) to stash everything in your inventory or **middle-click** a single stack/item in your inventory to
-stash just that one. With AzuAutoStore (AAS) installed, YAVSOS defers to AAS for its stashing and you would use the AAS stash key as usual.
+Press **.** (period) to stash everything in your inventory or **middle-click** a single stack/item in your inventory to stash just that one. With YAVSOS only installed, you will see chests light up and a little ‘puff’ animation on the chests stacked. YAVSOS also will show a summary result panel in the bottom center of your screen. With AzuAutoStore (AAS) installed, YAVSOS defers to AAS for its stashing and you would use the AAS stash key as usual and see AAS’s stashing animation instead.
+
+![AzuAutoStore's store key fills eight Ross drawers, each reserved for one item, and the result panel lists what went where. Additional mods shown: AzuAutoStore, RossItemDrawers.](assets/media/store-key.gif)
 
 - **For chests with a rule:** Your items end up in the chests according to the rules that were set up, regardless of whether the item is already in the chest or not.
-
-- **For chests without a rule:** The chest will accept items where existing items already match. (As is AAS's default behavior.)
+- **For chests without a rule:** The chest will accept items where existing items already match. (Just like AAS's default behavior.)
 
 Equipped items are never stashed. Items in your hotbar or AzuExtendedPlayerInventory (AzuEPI) quick slots are by default not stashed. These are configured through AAS when installed, or YAVSOS when standalone.
 
-![Inventory open, middle-click (or AzuAutoStore's single-item key) on one stack: only that stack goes to its chest.](assets/media/stash-single.gif)
+![Pointing at a stack of copper in the inventory: the tooltip reads "Stash stack (Middle mouse): Black Metal Chest 3 m away (counts as Metals)". A middle-click sends only that stack, and the result panel confirms it.](assets/media/where-it-goes.gif)
 
 ### Cleaning up
 
 Sometimes people don't always stash things in the right place, or maybe you want to change the rules or priority on existing chests, or your critical supply chest has run out of items also stored in a lower-priority chest somewhere nearby. The cleanup function can help here!
 
-It finds items that are better placed in other chests (rule mismatch, higher priority, etc.) and moves them to the place within the configured range. You can do this from the chest panel by clicking on **Clean up nearby** or by pressing **Ctrl + stash key** (default `.`, period). Afterwards, you will see a panel display informing you of what moved or stayed.
+It finds items that are better placed in other chests (rule mismatch, higher priority, etc.) and moves them to the place within the configured range. This also will move items from unruled chests into ruled ones. You can do this from the chest panel by clicking on **Clean up nearby** or by pressing **Ctrl + stash key** (default `.`, period). Afterwards, you will see a panel display informing you of what moved or stayed. Additionally, you will see chests light up red if something couldn’t be moved (because it was full or no existing rule takes the item). You can also disallow cleaning a chest with a click of a button.
 
-![A Wood chest holding a few misplaced ores and a sword; Ctrl + store key: the ores move to the Ores chest, the sword stays (no chest takes it), and the result panel says so.](assets/media/cleanup.gif)
+![Ctrl + the stash key at a Wood chest holding misplaced ores and a sword: the ores move to the Ores chest, which glows gold; the sword stays, so the Wood chest glows red-orange; the result panel says why.](assets/media/cleanup.gif)
 
-![A result panel up close, readable: moved, left in place and the reasons.](assets/media/result-panel.png)
+![A cleanup result up close: "moved 2 stacks (13 items): Copper Ore ×8, Tin Ore ×5" and "1 left in place (no chest takes it): Bronze Sword".](assets/media/result-panel.png)
 
 ### Finding things
 
 - Hover over a chest to see its rule, like "Food › eaten by Boar · priority 2 (Urgent)".
 - Hover over an item in your inventory to see its categories and where stashing would send it.
-- Search in the panel, and the nearby chests that would take that item light up.
+- Search in the panel, and the nearby chests that would take that item light up in blue (if the rule highlight button at the end of the search bar is toggled on), while chests that have the item light up gold..
 
-![Two parts: a chest's hover label ("Food › eaten by Boar · priority 2 (Urgent)") and an inventory tooltip with the item's categories and where it would go.](assets/media/labels-tooltips.png)
-
-![Typing an item name in the panel's search: nearby chests that take it light up.](assets/media/search-highlight.gif)
+![Searching "copper": the two chests holding copper light up gold, and the rule-tag button adds, in blue, the Metals chest that would take it. Pointing at a lit chest says why: "takes Copper" or "holds Copper ×132".](assets/media/finding.gif)
 
 ## Help and feedback
 
@@ -199,15 +232,17 @@ Everything goes through **GitHub issues**: bugs, questions, ideas and requests.
 
 **[Open an issue on GitHub ›](https://github.com/BastionNtB/YAVSOS/issues/new/choose)** · [See existing issues](https://github.com/BastionNtB/YAVSOS/issues)
 
----
+![section divider](assets/art/divider-right.png)
 
 ## Reference
 
 ### For server admins and modders
+
 - [Settings](docs/SETTINGS.md): for a list of all settings and their defaults and much more.
 - [Categories file](docs/MODDING.md): Want to add your own categories? Find out how here!
 
 ### For developers
+
 - [Building from source](docs/BUILDING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Design](docs/DESIGN.md): how YAVSOS works and why.
@@ -228,13 +263,16 @@ Everything goes through **GitHub issues**: bugs, questions, ideas and requests.
   assignment already does that job. An empty drawer assigned to an item gets that item
   through AzuAutoStore.
 - **The game's "Place stacks" button** works as it always has and doesn't follow rules.
-- **Item origin:** the "from mod" filter knows items registered through Jotunn or
-  ItemManager. Items a mod adds some other way show their origin as "not known".
+- **Item origin:** the "item origin" filter knows items registered through Jotunn or ItemManager. Items a mod adds some other way show their origin as "not known", and base game items show as “Base game”
 
-Tested with AzuAutoStore 3.1.7, Jotunn 2.30.2, EpicLoot 0.15.4, RossItemDrawers 1.3.0 and
-AzuExtendedPlayerInventory 2.6.4. During the testing, other mods were tested as well, but they won't be listed here; the mod is designed to generally be compatible by default. If specific compatibilities need to be expanded or made, create an issue on the GitHub for it!
+![ZenUI's item tooltip for raspberries ending in YAVSOS's stash line, and BetterUI's chest hover showing YAVSOS's label "Metals · priority 2 (Urgent)". Additional mods shown: ZenUI, BetterUI.](assets/media/ui-mods.png)
+
+Tested with AzuAutoStore 3.1.7, Jotunn 2.30.2, EpicLoot 0.15.6, RossItemDrawers 1.3.0 and AzuExtendedPlayerInventory 2.6.6. During the testing, other mods were tested as well, but they won't be listed here; the mod is designed to generally be compatible by default. If specific compatibilities need to be expanded or made, create an issue on the GitHub for it!
 
 ## Licence and credits
+
 YAVSOS is GPL-3.0-or-later ([LICENSE](LICENSE)). YAVSOS wouldn't work without the hard work of these modders and their mods: ServerSync by blaxxun and
 MultiUserChest by MSchmoecker, both MIT ([notices](third_party/README.md)).
 Built on Jotunn and BepInEx.
+
+![closing ornament](assets/art/ornament.png)

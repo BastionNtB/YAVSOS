@@ -21,14 +21,16 @@ public sealed class CleanupChest
     public bool OptOut { get; }
     /// <summary>Distance from the player; the run's chest and source limits keep the nearest (D086 D9).</summary>
     public double Distance { get; }
+    /// <summary>For another player's chest: whether a MultiUserChest request can reach its owner, as for stash (F3, D117).</summary>
+    public OwnerMucState OwnerMuc { get; }
     public CleanupChest(string id, string rulePayload, TransferInventorySnapshot inventory, bool locallyOwned, bool optOut = false,
-        double distance = 0)
+        double distance = 0, OwnerMucState ownerMuc = OwnerMucState.Usable)
     {
         Id = TransferCanonical.Text(id, 256, false);
         RulePayload = rulePayload ?? throw new ArgumentNullException(nameof(rulePayload));
         Inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
         if (double.IsNaN(distance) || distance < 0) throw new ArgumentOutOfRangeException(nameof(distance));
-        LocallyOwned = locallyOwned; OptOut = optOut; Distance = distance;
+        LocallyOwned = locallyOwned; OptOut = optOut; Distance = distance; OwnerMuc = ownerMuc;
     }
 }
 
@@ -105,6 +107,12 @@ public enum CleanupReason
     BothRemote,
     /// <summary>The other player's MultiUserChest item format is unknown, so YAVSOS's copy cannot send it a request (D061 Q8).</summary>
     OtherOwnerFormatUnknown,
+    /// <summary>The other player's MultiUserChest can't take requests: they publish format 0 (D086 D13, F3).</summary>
+    OtherOwnerMucUnusable,
+    /// <summary>The other player publishes no MultiUserChest format and no echo probe was answered (D116, F3).</summary>
+    OtherOwnerMucSilent,
+    /// <summary>The other player's MultiUserChest is still being checked by echo probe (D116, F3); run again in a moment.</summary>
+    OtherOwnerMucChecking,
     /// <summary>The other player's chest already has a MultiUserChest request this run.</summary>
     MucBusy,
     /// <summary>The stack is protected or cannot be moved exactly.</summary>
@@ -411,6 +419,8 @@ public static class CleanupPlanner
             if (source.LocallyOwned && chest.LocallyOwned) result.Destinations.Add(Gate(CleanupGate.Usable));
             else if (!source.LocallyOwned && !chest.LocallyOwned) result.Destinations.Add(Gate(CleanupGate.Blocked, CleanupReason.BothRemote));
             else if (!input.MucAvailable) result.Destinations.Add(Gate(CleanupGate.Blocked, CleanupReason.OtherOwnerNoMuc));
+            // Known at plan time, as in stash, so the plan and the explanation skip a chest the write would skip (B4.33 §3).
+            else if ((source.LocallyOwned ? chest : source).OwnerMuc.Skip() is { } skip) result.Destinations.Add(Gate(CleanupGate.Blocked, skip));
             else result.Destinations.Add(Gate(CleanupGate.Usable, via: source.LocallyOwned ? CleanupRoute.MucAdd : CleanupRoute.MucRemove));
         }
     }

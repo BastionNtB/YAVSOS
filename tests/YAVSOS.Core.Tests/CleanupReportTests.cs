@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Xunit;
 using YAVSOS.Core.Transfers;
 
@@ -34,6 +35,41 @@ public sealed class CleanupReportTests
     {
         var report = new CleanupReport(); report.Refuse(TransferRefusal.TurnedOff, "Wood");
         Assert.Contains("turned off on this server", report.Summary());
+    }
+
+    // F3 (maintainer, 2026-10-30): one skipped line per cause, in stacks; only the probe still checking says to run again.
+    [Fact]
+    public void Detail_OneLinePerMultiUserChestCause()
+    {
+        var report = CleanupReport.ForStash();
+        report.Moved(20); report.Moved(30); report.Moved(10); report.Moved(3);
+        report.Remain(CleanupReason.OtherOwnerMucUnusable, "Copper"); report.Remain(CleanupReason.OtherOwnerMucUnusable, "Tin");
+        report.Remain(CleanupReason.OtherOwnerMucSilent, "Wood");
+        for (var i = 0; i < 3; i++) report.Remain(CleanupReason.OtherOwnerMucChecking, "Stone");
+        Assert.Equal(new[]
+        {
+            "stored 4 stacks (63 items)",
+            "2 skipped (another player's chest; their MultiUserChest can't take requests)",
+            "1 skipped (another player's chest; no MultiUserChest answered)",
+            "3 skipped (another player's chest; still checking their MultiUserChest, run again in a moment)"
+        }, report.Detail().Lines.Select(x => x.Label));
+        Assert.Equal("Stash: stored 4 stacks (63 items) · 2 skipped (another player's chest; their MultiUserChest can't take requests) · " +
+            "1 skipped (another player's chest; no MultiUserChest answered) · " +
+            "3 skipped (another player's chest; still checking their MultiUserChest, run again in a moment)", report.Summary());
+        var cleanup = new CleanupReport(); cleanup.Remain(CleanupReason.OtherOwnerFormatUnknown);
+        Assert.Equal("Cleanup: moved 0 stacks (0 items) · 1 skipped (another player's chest; their MultiUserChest format is unknown)", cleanup.Summary());
+        Assert.DoesNotContain("again", CleanupReport.Describe(CleanupReason.OtherOwnerMucUnusable) + CleanupReport.Describe(CleanupReason.OtherOwnerMucSilent) +
+            CleanupReport.Describe(CleanupReason.OtherOwnerFormatUnknown));
+    }
+
+    [Fact]
+    public void OwnerMucState_MapsEachCauseToItsReason()
+    {
+        Assert.Null(OwnerMucState.Usable.Skip());
+        Assert.Equal(CleanupReason.OtherOwnerMucUnusable, OwnerMucState.CantTakeRequests.Skip());
+        Assert.Equal(CleanupReason.OtherOwnerMucSilent, OwnerMucState.NoAnswer.Skip());
+        Assert.Equal(CleanupReason.OtherOwnerMucChecking, OwnerMucState.Checking.Skip());
+        Assert.Equal(CleanupReason.OtherOwnerFormatUnknown, OwnerMucState.FormatUnknown.Skip());
     }
 
     [Fact]

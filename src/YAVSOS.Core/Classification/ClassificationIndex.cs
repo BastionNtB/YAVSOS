@@ -11,7 +11,7 @@ namespace YAVSOS.Core.Classification;
 
 public sealed class ClassificationIndex
 {
-    public const string Version = "yavsos-classifier-12";
+    public const string Version = "yavsos-classifier-13";
     internal static bool IsInstanceRarityType(string type) => type is "OneHandedWeapon" or "TwoHandedWeapon" or "TwoHandedWeaponLeft" or
         "Bow" or "Shield" or "Helmet" or "Chest" or "Legs" or "Shoulder" or "Hands" or "Utility" or "Trinket" or "Tool" or "Torch";
     public string InputFingerprint { get; }
@@ -74,10 +74,19 @@ public sealed class ClassificationIndex
         // D086 D3: one item's malformed facts fail only that item (Misc, with the reason), not the index.
         var malformed = new SortedDictionary<string, (CatalogFact Row, string Reason)>(StringComparer.Ordinal);
         var skipped = new List<string>();
+        // D125: which kinds of item supply each ammo type, from the kinds the game's inventory accepts as ammo (Ammo,
+        // AmmoNonEquipable, Consumable). A malformed item supplies nothing.
+        var ammoSuppliers = new Dictionary<string, (bool Consumable, bool Other)>(StringComparer.Ordinal);
         foreach (var row in catalog.Items.Values)
         {
             work.Spend();
-            try { facts.Add(row.Identity, new ItemFacts(row)); }
+            try
+            {
+                var fact = new ItemFacts(row); facts.Add(row.Identity, fact);
+                if (fact.AmmoType.Length == 0 || fact.Type is not ("Ammo" or "AmmoNonEquipable" or "Consumable")) continue;
+                ammoSuppliers.TryGetValue(fact.AmmoType, out var supplied);
+                ammoSuppliers[fact.AmmoType] = fact.Type == "Consumable" ? (true, supplied.Other) : (supplied.Consumable, true);
+            }
             catch (InvalidDataException error) { malformed.Add(row.Identity, (row, error.Message)); }
         }
         var uses = new Dictionary<string, List<CraftingUse>>(StringComparer.Ordinal);
@@ -140,7 +149,12 @@ public sealed class ClassificationIndex
             }
             foreach (var semantic in DefaultItemSemantics.Memberships(item.Prefab, item.Type))
                 Add(semantic.Category, semantic.Reason, semantic.Source);
-            if (item.Weapon)
+            // D125: the game's attack drinks Consumable ammo, so a weapon-type item whose ammo only Consumables supply (a
+            // tankard and its meads) is a drinking vessel, not a weapon. No supplier, or any other kind, keeps it a weapon.
+            var drinks = item.Weapon && item.AmmoType.Length != 0 && ammoSuppliers.TryGetValue(item.AmmoType, out var suppliers) &&
+                suppliers.Consumable && !suppliers.Other;
+            if (drinks) Add("equipment", "Held item whose attack drinks its ammo: only Consumable items supply ammo type " + item.AmmoType + ".");
+            else if (item.Weapon)
             {
                 Add("weapons", "Weapon item type: " + item.Type);
                 var group = item.Skill switch { "Swords" => "swords", "Axes" => "axes", "Clubs" => "clubs", "Spears" => "spears", "Polearms" => "polearms",

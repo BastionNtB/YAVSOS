@@ -2,6 +2,8 @@ using System;
 using System.Runtime.CompilerServices;
 using BepInEx.Logging;
 using HarmonyLib;
+using UnityEngine;
+using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
 using YAVSOS.Integrations;
 using YAVSOS.Transfers;
@@ -10,7 +12,8 @@ namespace YAVSOS.Interface;
 
 /// <summary>
 /// P6-07 (D062 Q3): a chest with a rule shows an automatic label from it in its hover text, such as
-/// "Ores &amp; metals · priority 1" (no prefix, Q8). Appended, never rebuilt, after BetterUI's postfix (Harmony ID
+/// "Ores &amp; metals · priority 1" (no prefix, Q8). D122: a chest the search lit also says why ("holds Copper ×57",
+/// "takes Copper"), ruled or not. Appended, never rebuilt, after BetterUI's postfix (Harmony ID
 /// <c>MK_BetterUI</c>; 2.5.13 replaces the text of a non-empty chest), so its "( 12/40 )" and the vanilla hints stay.
 /// The label is built once per chest and rule (payload) and category set; per hover frame it costs one payload read
 /// and a comparison. Read only. Ross ItemDrawers' drawers have their own hover text and get no label. With
@@ -46,32 +49,63 @@ internal static class ChestLabels
     {
         if (failed || string.IsNullOrEmpty(__result)) return;
         var plugin = Plugin.Instance;
-        if (plugin == null || !plugin.Settings.ShowChestLabels.Value) return;
+        if (plugin == null) return;
         try
         {
-            var payload = ChestRuleStore.Payload(__instance);
-            if (payload.Length == 0) return;
+            // ShowChestLabels turns off the rule's label only; the lit line below is the non-colour cue (D122).
+            var payload = plugin.Settings.ShowChestLabels.Value ? ChestRuleStore.Payload(__instance) : "";
+            // D122: a chest the search lit says why, ruled or not, in its kind's colour. D123's stays mark first: while it
+            // glows it owns the chest's colour, so its line matches what the player sees.
+            var lit = plugin.Arrivals.Reason(__instance) ?? plugin.Highlight.Reason(__instance);
+            if (payload.Length == 0 && lit == null) return;
             // A chest you cannot open shows no rule. ZenHoverItem (priority 300, before this) cuts that chest's text
             // to its name and "no access"; the label must not reappear under it (D065: defer to its display).
             var player = Player.m_localPlayer;
             if (!player || !Accessible(__instance, player.GetPlayerID())) return;
+            var why = lit is { } reason ? WhyLine(reason.Kind, reason.Why) : "";
+            if (payload.Length == 0) { __result += why; return; }
             var taxonomy = plugin.RuleTaxonomy;
             var cached = Cache.GetOrCreateValue(__instance);
             if (!ReferenceEquals(cached.Payload, payload) && !StringComparer.Ordinal.Equals(cached.Payload, payload) || !ReferenceEquals(cached.Taxonomy, taxonomy))
             {
                 cached.Payload = payload; cached.Taxonomy = taxonomy;
-                var read = plugin.RuleEvaluator.Read(payload, taxonomy);
-                var label = read.HasRule ? RuleText.Label(read.Rules, taxonomy, RuleControls.ItemName, RuleControls.OpenValueName) : null;
+                var label = Label(plugin, payload, taxonomy);
                 // Q8: no "YAVSOS:" prefix; the colour sets the line apart.
-                cached.Line = label == null ? "" : "\n<color=#E8B04A>" + Plain(label) + "</color>";
+                cached.Line = label == null ? "" : "\n<color=" + ChestLabelPreview.Color + ">" + label + "</color>";
             }
             if (cached.Line.Length != 0) __result += cached.Line;
+            __result += why;
         }
         catch (Exception error) when (OptionalFailure.Recoverable(error))
         {
             failed = true; DisplayFaults.Add(DisplayFaults.Labels); // Hover text runs every frame; one warning, then the game's text alone.
             Log?.LogWarning("Chest labels turned off: " + error.GetType().Name + ": " + error.Message);
         }
+    }
+
+    /// <summary>
+    /// S3 (audit D04): the label a rule payload shows in the chest's hover text, plain text without the colour; null
+    /// without a rule. Out of the Harmony postfix so the panel can preview it (X2).
+    /// </summary>
+    internal static string? Label(Plugin plugin, string payload, ClassificationTaxonomy taxonomy)
+    {
+        var read = plugin.RuleEvaluator.Read(payload, taxonomy);
+        return read.HasRule && RuleText.Label(read.Rules, taxonomy, RuleControls.ItemName, RuleControls.OpenValueName) is { } label ? Plain(label) : null;
+    }
+
+    // D122/D123: the lit chest's "holds …"/"takes …"/"keeps …" line, built again only when it or its colour changes
+    // (hover text is asked for every frame).
+    private static (ChestHighlight.Kind Kind, string Why, Color Color) whyKey;
+    private static string whyLine = "";
+    private static string WhyLine(ChestHighlight.Kind kind, string why)
+    {
+        var color = ChestHighlight.ColorOf(kind);
+        if (whyKey.Kind != kind || !ReferenceEquals(whyKey.Why, why) || whyKey.Color != color)
+        {
+            whyKey = (kind, why, color);
+            whyLine = "\n<color=#" + ColorUtility.ToHtmlStringRGB(color) + ">" + Plain(why) + "</color>";
+        }
+        return whyLine;
     }
 
     // Names come from configuration and other mods; keep them from opening their own rich-text tags.

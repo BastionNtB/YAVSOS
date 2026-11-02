@@ -4,6 +4,7 @@ using BepInEx.Logging;
 using UnityEngine;
 using UnityEngine.UI;
 using YAVSOS.Cleanup;
+using YAVSOS.Core.Interface;
 using YAVSOS.Core.Transfers;
 
 namespace YAVSOS.Interface;
@@ -14,34 +15,36 @@ namespace YAVSOS.Interface;
 /// </summary>
 internal sealed class RunResults
 {
-    /// <summary>How long a result stays up while the inventory is closed.</summary>
-    internal const float Seconds = 12;
     internal ResultSummary? Latest { get; private set; }
     /// <summary>Bumped on every publish, so the panel rebuilds its lines only then.</summary>
     internal int Revision { get; private set; }
-    private float left;
+    private readonly ResultCountdown countdown = new ResultCountdown(); // P9-23
 
     internal void Publish(CleanupReport report)
     {
         Latest = report.Detail(CleanupRunner.Name);
         Revision++;
-        left = Latest.Empty ? 0 : Seconds; // An empty run has nothing to add to its one-line message.
+        // An empty run has nothing to add to its one-line message. A published result is final (a stash or cleanup run
+        // ends only after MultiUserChest answers or the run gives up; AzuAutoStore's after nothing is still on its way),
+        // so the countdown starts with every line the result will have (D117).
+        if (Latest.Empty) countdown.Stop(); else countdown.Restart();
     }
 
-    internal void Dismiss() => left = 0;
+    internal void Dismiss() => countdown.Stop();
 
-    /// <summary>The countdown is held while the inventory is open, so the result can be read and closed there.</summary>
-    internal bool Visible(bool held, float elapsed)
-    {
-        if (left > 0 && !held) left -= elapsed;
-        return left > 0 && Latest != null;
-    }
+    /// <summary>
+    /// P9-23: up for the player's <paramref name="seconds"/>; with <paramref name="holdInInventory"/> on, the countdown
+    /// waits while the inventory is open. The Close button stays for closing it sooner.
+    /// </summary>
+    internal bool Visible(float elapsed, float seconds, bool inventoryOpen, bool holdInInventory) =>
+        countdown.Tick(elapsed, seconds, inventoryOpen, holdInInventory) && Latest != null;
 }
 
 /// <summary>
 /// P6-04: a short Jotunn wood panel at the bottom centre of Jotunn's overlay canvas, so it shows over the
-/// inventory screen too: what moved and what stayed, with reasons and item names. A Close button dismisses it; the
-/// one-line message in the corner is shown either way. Lines are rebuilt only when a new result is published.
+/// inventory screen too: what moved and what stayed, with reasons and item names. It closes by itself after the player's
+/// ResultPanelSeconds (P9-23), or sooner with its Close button; the one-line message in the corner is shown either way.
+/// Lines are rebuilt only when a new result is published.
 /// </summary>
 internal sealed class ResultPanel
 {

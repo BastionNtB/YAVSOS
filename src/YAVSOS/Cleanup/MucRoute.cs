@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection.Emit;
 using BepInEx.Bootstrap;
 using BepInEx.Logging;
 using HarmonyLib;
+using UnityEngine;
 using YAVSOS.Core.Transfers;
 using YAVSOS.Integrations;
 using YAVSOS.Vendor.MultiUserChest;
@@ -17,17 +19,29 @@ namespace YAVSOS.Cleanup;
 /// those. Before any request, a MultiUserChest-style intercept must actually be present on
 /// <c>Inventory.AddItem(ItemData, int, int, int, bool)</c>, patched by that copy's own Harmony id (D058: a capability,
 /// not a version). Every peer publishes the item format of its copy on its player object, and YAVSOS's copy reads and
-/// writes each request in the other player's format (D061 Q8). Unity game thread only.
+/// writes each request in the other player's format (D061 Q8). For a player that publishes none (AzuAutoStore without
+/// YAVSOS), YAVSOS's copy measures it with an echo probe (D116, <see cref="PeerProbe"/>). Unity game thread only.
 /// </summary>
 internal static class MucRoute
 {
     internal const string StandaloneGuid = MultiUserChestCopies.StandaloneGuid;
-    /// <summary>Player ZDO key: 2 = the peer's copy writes <c>m_cheated</c> (0.6.2), 1 = it does not (Azu 3.1.7), 0 = no copy or unknown.</summary>
+    /// <summary>
+    /// Player ZDO key: 2 = the peer's copy writes <c>m_cheated</c> (0.6.2), 1 = it does not (Azu 3.1.7), 0 = no copy or
+    /// one that can't take requests, <see cref="UnreadableFormat"/> = the copy takes requests but its format couldn't be read.
+    /// </summary>
     internal const string FormatKeyName = "com.bastionntb.yavsos.muc-format"; // D078 B07 (was YAVSOS_MucFormat before 1.0.0)
     private static readonly int FormatKey = FormatKeyName.GetStableHashCode();
+    // B4.33: kept apart from 0 so other players read "format is unknown", not "can't take requests". Every YAVSOS since
+    // 1.0.0 reads any value but 1 and 2 as unknown and refuses, so older players treat it as they treated 0.
+    internal const int UnreadableFormat = -1;
     private static int localFormat;
     private static Player? published;
+    /// <summary>D116: how often the players in range are checked for one that publishes no format and needs a probe.</summary>
+    internal const float ProbeScanEvery = 1f;
+    private static float scannedAt = float.MinValue;
+    private static ZNet? probeWorld;
     internal static string BundledStatus { get; private set; } = "not checked";
+    private static ManualLogSource? logger;
 
     /// <summary>
     /// After the chainloader has loaded every plugin, before <c>Game.Start</c>: activates YAVSOS's copy when no other
@@ -35,6 +49,7 @@ internal static class MucRoute
     /// </summary>
     internal static void Initialize(ManualLogSource log)
     {
+        logger = log;
         var plugins = Chainloader.PluginInfos;
         var choice = MultiUserChestCopies.Choose(plugins.ContainsKey);
         var other = choice == MultiUserChestCopy.Yavsos ? null : new[] { StandaloneGuid, AzuAutoStoreIntegration.AzuGuid }
@@ -63,11 +78,13 @@ internal static class MucRoute
             "MultiUserChest" => WriterFormat(AccessTools.TypeByName("MultiUserChest.InventoryHelper"), out cause),
             _ => WriterFormat(AccessTools.TypeByName("AzuAutoStore.APIs.MUC.MUCSrc.Helper.InventoryHelper"), out cause)
         };
+        if (cause != null) localFormat = UnreadableFormat;
         log.LogInfo($"YAVSOS's MultiUserChest: {BundledStatus}. In use: {(source.Length == 0 ? "none" : source)}; item format {Describe(localFormat)}.");
-        // SF11 (D087): other players can't tell this copy's format, so their YAVSOS treats this player's open chests as busy.
+        // SF11 (D087): other players can't tell this copy's format, so their YAVSOS doesn't send to this player's chests.
         if (cause != null)
-            log.LogWarning($"{source}'s item format could not be read ({cause}). Other players whose YAVSOS uses its own MultiUserChest skip chests " +
-                "you have open (\"busy\") until you close them; everything else works.");
+            log.LogWarning($"{source}'s item format could not be read ({cause}). Other players whose YAVSOS uses its own MultiUserChest " +
+                "don't move items into or out of chests your game handles; their result says your MultiUserChest format is unknown. " +
+                "Everything else works.");
     }
 
     internal static bool Available(out string source)
@@ -90,24 +107,97 @@ internal static class MucRoute
     /// </summary>
     internal static bool OwnerFormatKnown(long owner) => !BundledCopy.Active || PeerFormat.Known(owner);
 
-    /// <summary>Publishes the local copy's item format on the local player's object once per spawned player.</summary>
+    /// <summary>
+    /// F3: <see cref="OwnerFormatKnown"/> with the cause when it is false, so the result line says why the chest was skipped:
+    /// a published 0, an unrecognised published format, or the probe's state for a peer that publishes none.
+    /// </summary>
+    internal static OwnerMucState OwnerState(long owner)
+    {
+        if (OwnerFormatKnown(owner)) return OwnerMucState.Usable;
+        if (Published(owner) is { } format) return format == 0 ? OwnerMucState.CantTakeRequests : OwnerMucState.FormatUnknown;
+        return PeerProbe.Status(owner) switch
+        {
+            ProbeStatus.NoAnswer => OwnerMucState.NoAnswer,
+            ProbeStatus.UnknownAnswer => OwnerMucState.FormatUnknown,
+            // A2.11: only loaded players are probed, so an owner out of range stays unknown until they come near;
+            // "run again in a moment" is for a probe that is about to go out or is under way (D117).
+            ProbeStatus.NotProbed when !Loaded(owner) => OwnerMucState.FormatUnknown,
+            _ => OwnerMucState.Checking
+        };
+    }
+
+    /// <summary>
+    /// Publishes the local copy's item format on the local player's object once per spawned player; then, while YAVSOS's
+    /// copy is active, probes players that publish none (D116).
+    /// </summary>
     internal static void Update()
+    {
+        Publish();
+        Probe();
+    }
+
+    private static void Publish()
     {
         var player = Player.m_localPlayer;
         if (!player || ReferenceEquals(player, published)) return;
         var zdo = player.GetComponent<ZNetView>()?.GetZDO();
         if (zdo == null || !zdo.IsOwner()) return;
-        zdo.Set(FormatKey, localFormat);
+        // D086 D13 (F3): a copy that can't take requests publishes 0, so other players' YAVSOS skips chests this player's
+        // game handles instead of sending requests nothing would answer. Checked here, after every plugin has patched.
+        var usable = Available(out var source);
+        zdo.Set(FormatKey, usable ? localFormat : 0);
+        if (!usable && source.Length != 0 && !warnedUnusable)
+        {
+            warnedUnusable = true;
+            logger?.LogWarning($"{source} is installed, but its intercept on Inventory.AddItem is missing, so it can't take requests from other players. " +
+                "Their YAVSOS doesn't move items into or out of chests your game handles; their result says your MultiUserChest " +
+                "can't take requests. Everything else works.");
+        }
         published = player;
     }
+    private static bool warnedUnusable;
 
-    private static bool? Resolve(long peer)
+    // D116: each remote player in range without a format key is probed once per session id (retries bounded by
+    // FormatProbeBook). The cache is dropped with the world, and per peer when it has left: no longer in the player
+    // list and no player object of its own loaded (the list can lag behind a new player's object).
+    private static void Probe()
+    {
+        if (!ReferenceEquals(ZNet.instance, probeWorld)) { PeerProbe.Clear(); probeWorld = ZNet.instance; scannedAt = float.MinValue; }
+        if (!BundledCopy.Active || !ZNet.instance || ZRoutedRpc.instance == null || !Player.m_localPlayer) return;
+        var now = Time.unscaledTime;
+        if (now - scannedAt < ProbeScanEvery) return;
+        scannedAt = now;
+        var self = ZDOMan.GetSessionID();
+        var loaded = new HashSet<long>();
+        foreach (var player in Player.GetAllPlayers())
+        {
+            var zdo = player ? player.GetComponent<ZNetView>()?.GetZDO() : null;
+            var peer = zdo?.GetOwner() ?? 0;
+            if (zdo == null || peer == 0 || peer == self) continue;
+            loaded.Add(peer);
+            if (!zdo.GetInt(FormatKey, out _)) PeerProbe.Probe(peer, now);
+        }
+        var listed = new HashSet<long>(ZNet.instance.GetPlayerList().Select(x => x.m_characterID.UserID));
+        PeerProbe.Update(now, peer => loaded.Contains(peer) || listed.Contains(peer));
+    }
+
+    // D116: the format a peer publishes on its player object; else, with no key at all, what its probe measured. A
+    // published 0 (no usable copy, D13) is final: such a peer is not probed.
+    private static bool? Resolve(long peer) =>
+        Published(peer) is { } format ? format switch { 2 => true, 1 => false, _ => (bool?)null } : PeerProbe.Of(peer);
+
+    // The peer's player object is loaded here: only loaded players are probed.
+    private static bool Loaded(long peer) =>
+        Player.GetAllPlayers().Any(player => player && player.GetComponent<ZNetView>()?.GetZDO()?.GetOwner() == peer);
+
+    // The format key on the peer's loaded player object; null when it has none or its player isn't loaded.
+    private static int? Published(long peer)
     {
         foreach (var player in Player.GetAllPlayers())
         {
             var zdo = player ? player.GetComponent<ZNetView>()?.GetZDO() : null;
             if (zdo == null || zdo.GetOwner() != peer) continue;
-            return zdo.GetInt(FormatKey) switch { 2 => true, 1 => false, _ => (bool?)null };
+            return zdo.GetInt(FormatKey, out var format) ? format : null;
         }
         return null;
     }

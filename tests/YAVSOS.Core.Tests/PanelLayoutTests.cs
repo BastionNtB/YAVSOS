@@ -85,26 +85,44 @@ public sealed class PanelLayoutTests
     }
 
     [Fact]
-    public void HighlightStatus_OneShortLine_NothingWhileLooking()
+    public void HighlightStatus_CountsHoldersAndTakers_NothingWhileLooking()
     {
-        Assert.Equal("", HighlightText.Status(false, 3, true, false, 10, false));
-        Assert.Equal("", HighlightText.Status(true, 0, false, true, 10, false)); // No "Looking for chests…" flicker.
-        Assert.Equal("No chest within 10 m takes this.", HighlightText.Status(true, 0, false, false, 10, false));
-        Assert.Equal("No chest within 10 m takes these items.", HighlightText.Status(true, 0, false, false, 10.4f, true));
-        Assert.Equal("Lit up 1 chest", HighlightText.Status(true, 1, true, true, 10, false)); // Shown as soon as one is found.
-        Assert.Equal("Lit up 3 chests", HighlightText.Status(true, 3, true, false, 10, true));
-        Assert.Equal("Found 3 chests", HighlightText.Status(true, 3, false, false, 10, false)); // Colouring unavailable.
+        Assert.Equal("", HighlightText.Status(false, 3, 0, false, 10, false, false));
+        Assert.Equal("", HighlightText.Status(true, 0, 0, true, 10, false, true)); // No "Looking for chests…" flicker.
+        Assert.Equal("No chest within 10 m holds this.", HighlightText.Status(true, 0, 0, false, 10, false, false));
+        Assert.Equal("No chest within 10 m holds or takes these.", HighlightText.Status(true, 0, 0, false, 10.4f, true, true));
+        Assert.Equal("1 holds this", HighlightText.Status(true, 1, 0, true, 10, false, false)); // Shown as soon as one is found.
+        Assert.Equal("2 hold these", HighlightText.Status(true, 2, 5, false, 10, true, false)); // D122: takers only with the toggle.
+        Assert.Equal("2 hold this · 1 more takes it", HighlightText.Status(true, 2, 1, false, 10, false, true));
+        Assert.Equal("None hold this · 3 take it", HighlightText.Status(true, 0, 3, false, 10, false, true));
+        Assert.Equal("1 holds these · none take them", HighlightText.Status(true, 1, 0, false, 10, true, true));
     }
 
     [Fact]
-    public void HighlightTooltip_ListsTheChests_Bounded()
+    public void HighlightTooltip_ListsTheChestsWithWhy_Bounded()
     {
-        Assert.Null(HighlightText.Tooltip("Copper", Array.Empty<string>()));
-        var tip = HighlightText.Tooltip("Copper", new[] { "Chest 6 m", "Chest 8 m" })!.Value;
-        Assert.Equal(("Chests that take Copper", "Chest 6 m\nChest 8 m"), tip);
-        var many = HighlightText.Tooltip("", Enumerable.Range(1, 15).Select(x => "Chest " + x + " m").ToList())!.Value;
-        Assert.Equal("Chests that take it", many.Topic);
-        Assert.EndsWith("Chest 12 m\n… and 3 more", many.Text);
+        Assert.Null(HighlightText.Tooltip("Copper", Array.Empty<string>(), Array.Empty<string>()));
+        var tip = HighlightText.Tooltip("Copper", new[] { "Chest 6 m" }, new[] { "Chest 8 m" })!.Value;
+        Assert.Equal(("Chests lit for Copper", "Chest 6 m · holds\nChest 8 m · takes"), tip);
+        var many = HighlightText.Tooltip("", Enumerable.Range(1, 15).Select(x => "Chest " + x + " m").ToList(), Array.Empty<string>())!.Value;
+        Assert.Equal("Chests lit for it", many.Topic);
+        Assert.EndsWith("Chest 12 m · holds\n… and 3 more", many.Text);
+    }
+
+    [Fact]
+    public void HighlightLabel_SaysWhyAChestIsLit()
+    {
+        Assert.Equal("holds Copper ×57", HighlightText.Holds("Copper", 57, 0));
+        Assert.Equal("holds Copper Ore ×105 +1 more", HighlightText.Holds("Copper Ore", 105, 1));
+        Assert.Equal("takes Copper", HighlightText.Takes("Copper"));
+        Assert.Equal("takes it", HighlightText.Takes(""));
+    }
+
+    [Fact]
+    public void StaysLabel_SaysWhatCleanupLeftAndWhy()
+    {
+        Assert.Equal("keeps Bronze Sword: no chest takes it", HighlightText.Keeps("Bronze Sword", 0, false));
+        Assert.Equal("keeps Copper Ore +1 more: the chests that take them are full", HighlightText.Keeps("Copper Ore", 1, true));
     }
 
     [Fact]

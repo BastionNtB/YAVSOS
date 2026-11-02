@@ -17,14 +17,14 @@ public sealed class StashChest
     public TransferInventorySnapshot Inventory { get; }
     /// <summary>The local peer is the chest's current owner (direct writes possible).</summary>
     public bool LocallyOwned { get; }
-    /// <summary>For another player's chest: a MultiUserChest request to its owner can be read correctly (D061 Q8).</summary>
-    public bool OwnerFormatKnown { get; }
-    public StashChest(string id, string rulePayload, TransferInventorySnapshot inventory, bool locallyOwned, bool ownerFormatKnown = true)
+    /// <summary>For another player's chest: whether a MultiUserChest request to its owner can be read correctly, and if not, why (D061 Q8, F3).</summary>
+    public OwnerMucState OwnerMuc { get; }
+    public StashChest(string id, string rulePayload, TransferInventorySnapshot inventory, bool locallyOwned, OwnerMucState ownerMuc = OwnerMucState.Usable)
     {
         Id = TransferCanonical.Text(id, 256, false);
         RulePayload = rulePayload ?? throw new ArgumentNullException(nameof(rulePayload));
         Inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
-        LocallyOwned = locallyOwned; OwnerFormatKnown = ownerFormatKnown;
+        LocallyOwned = locallyOwned; OwnerMuc = ownerMuc;
     }
 }
 
@@ -304,6 +304,5 @@ public static class StashPlanner
         input.AzuAllows != null && !input.AzuAllows(chest.Id, stack.Identity) ? new Route(chest, tier, ranked, CleanupRoute.Direct, CleanupReason.AzuExcluded)
         : chest.LocallyOwned ? new Route(chest, tier, ranked, CleanupRoute.Direct, null)
         : !input.MucAvailable ? new Route(chest, tier, ranked, CleanupRoute.MucAdd, CleanupReason.OtherOwnerNoMuc)
-        : !chest.OwnerFormatKnown ? new Route(chest, tier, ranked, CleanupRoute.MucAdd, CleanupReason.OtherOwnerFormatUnknown)
-        : new Route(chest, tier, ranked, CleanupRoute.MucAdd, null);
+        : new Route(chest, tier, ranked, CleanupRoute.MucAdd, chest.OwnerMuc.Skip());
 }

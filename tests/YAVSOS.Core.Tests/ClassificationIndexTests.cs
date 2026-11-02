@@ -41,6 +41,81 @@ public sealed class ClassificationIndexTests
         Assert.Equal(subgroup, result.Primary); Assert.True(result.InstanceRarity);
     }
 
+    // D125 (P9-26): the game makes a tankard a one-handed weapon with the default Swords skill and ammo type "mead";
+    // its attack drinks a Consumable mead. Shapes below are the game's own (catalog dump 2026-10-13).
+    private static CatalogFact Tankard(string id = "Tankard", string ammo = "mead") => Item(id, "OneHandedWeapon", "Swords", ammo: ammo);
+    private static CatalogFact Mead(string id = "MeadHealthMinor", string ammo = "mead") => Item(id, "Consumable", effect: "Potion_health_minor", ammo: ammo);
+
+    [Fact]
+    public void Build_WeaponWhoseAmmoOnlyConsumablesSupplyIsADrinkingVesselInTheEquipmentRoot()
+    {
+        var index = Build(new[] { Tankard(), Tankard("TankardOdin"), Mead(), Mead("MeadStaminaMinor"), Item("SwordIron", "OneHandedWeapon", "Swords") });
+        foreach (var id in new[] { "Tankard", "TankardOdin" })
+        {
+            var tankard = index.Items[id];
+            Assert.Equal(new[] { "equipment" }, Categories(tankard)); Assert.Equal("equipment", tankard.Primary);
+            // The picker shows it under Equipment · Other (D051 closure), not under any named Equipment subcategory.
+            Assert.Equal(new[] { "equipment", "equipment.other" }, AllCategories(tankard));
+            Assert.Contains("mead", Assert.Single(CategoryClosure.Underived(tankard.Memberships)).Reason);
+            Assert.True(tankard.InstanceRarity); // Still per-instance gear: rarity and condition read the stack as before.
+            Assert.False(ClassificationFilters.Matches(tankard, Rule(new[] { "weapons.swords" })));
+            Assert.False(ClassificationFilters.Matches(tankard, Rule(new[] { "weapons" })));
+            Assert.False(ClassificationFilters.Matches(tankard, Rule(new[] { "equipment.tools" })));
+            Assert.True(ClassificationFilters.Matches(tankard, Rule(new[] { "equipment" })));
+        }
+        Assert.Equal(new[] { "meads" }, Categories(index.Items["MeadHealthMinor"])); // The drinks themselves are unchanged.
+        Assert.Equal(new[] { "weapons", "weapons.swords" }, Categories(index.Items["SwordIron"]));
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("mixed-ammo")]
+    [InlineData("mixed-ammo-nonequipable")]
+    [InlineData("empty-ammo")]
+    [InlineData("only-material")]
+    [InlineData("malformed-consumable")]
+    public void Build_WeaponStaysAWeaponUnlessOnlyConsumablesSupplyItsAmmo(string caseId)
+    {
+        var facts = new List<CatalogFact>
+        {
+            caseId == "empty-ammo" ? Tankard(ammo: "") : Tankard(),
+            caseId == "empty-ammo" ? Mead(ammo: "") : caseId == "malformed-consumable" ? Item("MeadHealthMinor", "Consumable", health: double.NaN, ammo: "mead") : Item("Wood"),
+        };
+        if (caseId == "mixed-ammo") { facts.Add(Mead()); facts.Add(Item("Flagon", "Ammo", ammo: "mead")); }
+        if (caseId == "mixed-ammo-nonequipable") { facts.Add(Mead()); facts.Add(Item("Flagon", "AmmoNonEquipable", ammo: "mead")); }
+        // Only the kinds the game's inventory takes as ammo supply it; a Material with the same ammo type does not.
+        if (caseId == "only-material") facts.Add(Item("Barley", ammo: "mead"));
+        var index = Build(facts);
+        Assert.Equal(new[] { "weapons", "weapons.swords" }, Categories(index.Items["Tankard"]));
+        if (caseId == "malformed-consumable") Assert.Equal("misc", index.Items["MeadHealthMinor"].Primary);
+    }
+
+    [Theory]
+    // Every ammo-using weapon shape in the game's catalog other than the tankards, with its real suppliers.
+    [InlineData("Bow", "Bow", "Bows", "$ammo_arrows", "ArrowWood", "Ammo", "weapons.bows")]
+    [InlineData("CrossbowArbalest", "Bow", "Crossbows", "$ammo_bolts", "BoltBone", "Ammo", "weapons.crossbows")]
+    [InlineData("FishingRod", "TwoHandedWeapon", "None", "$item_fishingbait", "FishingBait", "Ammo", "weapons.other")]
+    [InlineData("SwordIron", "OneHandedWeapon", "Swords", "", "MeadHealthMinor", "Consumable", "weapons.swords")]
+    [InlineData("StaffFireball", "TwoHandedWeapon", "ElementalMagic", "", "MeadEitrMinor", "Consumable", "weapons.magic")]
+    public void Build_RealWeaponShapesKeepTheirWeaponCategory(string id, string type, string skill, string ammo, string supplier, string supplierType, string expected)
+    {
+        var index = Build(new[] { Item(id, type, skill, ammo: ammo), Item(supplier, supplierType, ammo: ammo), Tankard(), Mead("MeadTasty") });
+        Assert.Contains(expected, AllCategories(index.Items[id])); Assert.Contains("weapons", Categories(index.Items[id]));
+        Assert.DoesNotContain("equipment", AllCategories(index.Items[id]));
+        Assert.Equal("equipment", index.Items["Tankard"].Primary);
+    }
+
+    [Fact]
+    public void Build_DrinkingVesselRuleIsInTheAnswerIdentityAndTheClassifierVersion()
+    {
+        // D125 changed answers for unchanged inputs, so cached and published answers from version 12 must rebuild.
+        Assert.Equal("yavsos-classifier-13", ClassificationIndex.Version);
+        var vessel = Build(new[] { Tankard(), Mead() });
+        var weapon = Build(new[] { Tankard(), Item("MeadHealthMinor", "Ammo", ammo: "mead") });
+        Assert.NotEqual(vessel.Fingerprint, weapon.Fingerprint);
+        Assert.Equal(vessel.Fingerprint, Build(new[] { Mead(), Tankard() }).Fingerprint); // Supplier order does not matter.
+    }
+
     [Theory]
     [InlineData("Helmet", "equipment.armor.head")]
     [InlineData("Chest", "equipment.armor.chest")]

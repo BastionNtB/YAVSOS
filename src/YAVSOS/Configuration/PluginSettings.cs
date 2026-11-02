@@ -11,11 +11,19 @@ internal sealed class PluginSettings
     public ConfigEntry<bool> LockSharedPolicy { get; }
     public ConfigEntry<bool> ShowRuleControls { get; }
     public ConfigEntry<bool> ShowResultPanel { get; }
+    public ConfigEntry<int> ResultPanelSeconds { get; }
+    public ConfigEntry<bool> ResultPanelHoldInInventory { get; }
     public ConfigEntry<bool> ShowChestLabels { get; }
     public ConfigEntry<bool> ShowItemCategories { get; }
     public ConfigEntry<int> HighlightSecondsAfterClose { get; }
+    public ConfigEntry<YAVSOS.Core.Interface.ChestArrivalEffect> ChestArrivalEffect { get; }
+    public ConfigEntry<UnityEngine.Color> HoldsColor { get; }
+    public ConfigEntry<UnityEngine.Color> TakesColor { get; }
+    public ConfigEntry<UnityEngine.Color> StaysColor { get; }
+    public ConfigEntry<bool> SearchShowsTakers { get; }
     public ConfigEntry<float> RulePanelOffsetX { get; }
     public ConfigEntry<float> RulePanelOffsetY { get; }
+    public ConfigEntry<bool> RulePanelFolded { get; }
     public ConfigEntry<bool> AllowCleanup { get; }
     public ConfigEntry<float> MaximumRange { get; }
     public ConfigEntry<int> MaximumChests { get; }
@@ -52,24 +60,48 @@ internal sealed class PluginSettings
         // D042: settings arrive with their working features; unimplemented placeholders are not registered.
         ShowRuleControls = Bind(file, sync, "Controls", "ShowRuleControls", true,
             "Show the chest rule panel while a chest is open.", false, sharedChanged);
-        // P6-04: the result panel adds item names and reasons to the one-line message, which is shown either way.
+        // P6-04: the result panel adds item names and reasons to the one-line message, which is shown either way (X14: Azu's too).
         ShowResultPanel = Bind(file, sync, "Controls", "ShowResultPanel", true,
-            "After a cleanup, or a stash with YAVSOS's own store keys (without AzuAutoStore), show a short result panel with what moved and what stayed, with item names and reasons.", false, sharedChanged);
+            "After a cleanup or a stash, show a short result panel with what moved and what stayed, with item names and reasons. With AzuAutoStore installed, it shows after AzuAutoStore's store key.", false, sharedChanged);
+        // P9-23: the panel closes by itself; holding it while the inventory is open (always so before 1.1) is opt-in.
+        ResultPanelSeconds = Bind(file, sync, "Controls", "ResultPanelSeconds", YAVSOS.Core.Interface.ResultCountdown.DefaultSeconds,
+            "How many seconds the result panel stays up before it closes by itself. Its Close button closes it sooner.",
+            false, sharedChanged, new AcceptableValueRange<int>(YAVSOS.Core.Interface.ResultCountdown.MinimumSeconds, YAVSOS.Core.Interface.ResultCountdown.MaximumSeconds));
+        ResultPanelHoldInInventory = Bind(file, sync, "Controls", "ResultPanelHoldInInventory", false,
+            "Keep the result panel up while your inventory is open; its time counts down only while the inventory is closed. When off, it closes after ResultPanelSeconds whether the inventory is open or not.",
+            false, sharedChanged);
         // P6-07 (D062 Q3): an automatic label from the chest's rule; no typed names.
         ShowChestLabels = Bind(file, sync, "Controls", "ShowChestLabels", true,
-            "Add the chest's rule to its hover text, such as \"Food › eaten by Boar · priority 2 (Urgent)\". Only chests with a rule that you can open.", false, sharedChanged);
+            "Add the chest's rule to its hover text, such as \"Food › eaten by Boar · priority 2 (Urgent)\". Only chests with a rule that you can open. A chest lit by your search or cleanup says why either way.", false, sharedChanged);
         ShowItemCategories = Bind(file, sync, "Controls", "ShowItemCategories", true,
             "Add an item's categories to its tooltip, such as \"Raw food, Animal feed · eaten by Boar, Hen\".", false, sharedChanged);
         // P8-18 (D100): the search highlight is on while the search is; this is how long it stays once the chest closes.
         HighlightSecondsAfterClose = Bind(file, sync, "Controls", "HighlightSecondsAfterClose", YAVSOS.Core.Interface.HighlightLinger.DefaultSeconds,
-            "After you close a chest, how many seconds the chests lit by its search stay lit, so you can walk to them. 0 turns them off when the chest closes. While the search is active they stay lit.",
+            "How many seconds chests stay lit. After you close a chest, the chests lit by its search stay lit this long, so you can walk to them (while the search is active they stay lit). After your stash or cleanup, the chests it put items into, or left something in, light up this long. 0 turns the light off: search lights end when the chest closes, and stash and cleanup only play the ChestArrivalEffect.",
             false, sharedChanged, new AcceptableValueRange<int>(0, YAVSOS.Core.Interface.HighlightLinger.MaximumSeconds));
+        // D121: YAVSOS's own moves only; AzuAutoStore's store key shows AzuAutoStore's own ping.
+        ChestArrivalEffect = Bind(file, sync, "Controls", "ChestArrivalEffect", YAVSOS.Core.Interface.ChestArrivalEffect.SmallItemPuff,
+            "The small effect a chest plays when your stash or cleanup puts items into it. None turns it off. With AzuAutoStore installed, its store key shows AzuAutoStore's own effect instead; cleanup still shows this one.",
+            false, sharedChanged);
+        // D122: the search highlight's two looks, each player's own; alpha is ignored.
+        HoldsColor = Bind(file, sync, "Controls", "HoldsColor", new UnityEngine.Color(1f, 0.78f, 0.25f, 1f),
+            "The colour of chests that hold what you searched for, and of chests your stash or cleanup just put items into. Alpha is ignored.", false, sharedChanged);
+        TakesColor = Bind(file, sync, "Controls", "TakesColor", new UnityEngine.Color(0.5f, 0.72f, 1f, 1f),
+            "The colour of chests whose rule would take what you searched for, shown while the rule-tag button beside the search box is on. Alpha is ignored.", false, sharedChanged);
+        // D123: cleanup marks the chests it left something in that the player can act on.
+        StaysColor = Bind(file, sync, "Controls", "StaysColor", new UnityEngine.Color(1f, 0.42f, 0.2f, 1f),
+            "The colour of chests your cleanup left something in because no chest takes it or the chests that take it are full. Alpha is ignored.", false, sharedChanged);
+        SearchShowsTakers = Bind(file, sync, "Controls", "SearchShowsTakers", false,
+            "Also light the chests whose rule would take what you search for, not only the chests that hold it. The rule-tag button beside the search box turns this on and off.", false, sharedChanged);
         // P6-03 (D062): the panel follows the chest window, so its position is an offset from there. The earlier absolute IMGUI
         // PanelX/PanelY keys are no longer read; a stale value would have pushed the panel off its window.
         RulePanelOffsetX = Bind(file, sync, "Controls", "PanelOffsetX", 0f,
             "Rule panel offset to the right of its place beside the chest window, in the game's UI units (1080p-scaled); negative moves it left. Drag the panel's title to change it, for example if it overlaps another mod's window.", false, sharedChanged);
         RulePanelOffsetY = Bind(file, sync, "Controls", "PanelOffsetY", 0f,
             "Rule panel offset downwards from the top of the chest window, in the game's UI units (1080p-scaled); negative moves it up.", false, sharedChanged);
+        // X2 (D116): one fold for every chest, not per chest; the panel's arrow sets it.
+        RulePanelFolded = Bind(file, sync, "Controls", "PanelFolded", false,
+            "Show the rule panel folded: only its title, status marks and the chest's label. The arrow left of the panel's title folds and unfolds it.", false, sharedChanged);
         // D079: with AzuAutoStore installed, it does the stashing, so YAVSOS's Stash settings show read-only (values kept for
         // when it is removed). Server settings stay bound on every side for ServerSync and say what applies in each case.
         var azu = !StashRunner.Enabled;
@@ -89,8 +121,9 @@ internal sealed class PluginSettings
         CleanupRange = Bind(file, sync, "Cleanup", "Range", 10f,
             "How far from you, in metres, cleanup looks for chests. Capped by the server's MaximumRange.", false, sharedChanged,
             new AcceptableValueRange<float>(1f, 100f));
+        // D126: Ctrl, as before 1.1. With Azu only the modifier counts (CleanupTriggers, CleanupKey).
         CleanupShortcut = Bind(file, sync, "Cleanup", "Shortcut", new KeyboardShortcut(UnityEngine.KeyCode.Period, UnityEngine.KeyCode.LeftControl),
-            "Runs cleanup of nearby chests when AzuAutoStore is not installed. With AzuAutoStore, cleanup is Ctrl plus AzuAutoStore's own store key.",
+            "Runs cleanup of nearby chests. With AzuAutoStore installed, only this shortcut's modifier counts: cleanup is that modifier (Ctrl if there is none) plus AzuAutoStore's own store key. Set it to None for no cleanup key; the Clean up nearby button still works.",
             false, sharedChanged);
         // D061: YAVSOS's own stash, used only when AzuAutoStore is not installed.
         AllowStashing = Bind(file, sync, "Server", "AllowStashing", true,

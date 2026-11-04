@@ -8,6 +8,7 @@ using UnityEngine;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Transfers;
 using YAVSOS.Integrations;
+using YAVSOS.Interface;
 
 namespace YAVSOS.Transfers;
 
@@ -71,7 +72,7 @@ internal static class RuleLab
         var text = $"target={chest!.gameObject.name}; eligibility={ChestRuleStore.Eligibility(chest)}; owner={ChestRuleStore.View(chest)?.IsOwner() == true}; " +
             $"azu={AzuAutoStoreIntegration.State}; categoriesReady={plugin.ClassificationEvidenceReady}; rebuilding={plugin.CategoriesRebuilding}";
         var policy = read.Policy;
-        if (policy == null) return text + "; " + read.Message;
+        if (policy == null) return text + "; " + Said(read);
         text += $"; state={policy.State}; revision={policy.Revision}; hasRule={policy.HasRule}";
         if (policy.Rules == null) return text;
         var view = ChestRuleEdit.From(policy.Rules);
@@ -249,8 +250,11 @@ internal static class RuleLab
         var chest = Target(); var plugin = Plugin.Instance;
         if (!chest || plugin == null) return "no target";
         var result = plugin.ChestRules.TryEdit(chest!, expected ?? "", edit);
-        return result.Reason + ": " + result.Message;
+        return result.Reason + ": " + Said(result);
     }
+
+    /// <summary>A rule result for the Lab bridge: its message in English, or "ok" when it succeeded (successes say nothing, D101).</summary>
+    internal static string Said(ChestRuleResult result) => result.Message == null ? "ok" : Texts.English(result.Message);
 
     private static ItemDrop.ItemData? Item(string prefab)
     {

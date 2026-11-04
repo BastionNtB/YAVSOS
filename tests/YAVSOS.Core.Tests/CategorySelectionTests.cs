@@ -91,16 +91,16 @@ public sealed class CategorySelectionTests
         Assert.Equal(1, counts["materials"]); Assert.Equal(1, counts["equipment"]); Assert.False(counts.ContainsKey("weapons"));
         bool Has(string id) => counts.ContainsKey(id);
         var none = new HashSet<string>();
-        var rows = CategorySelection.Rows(Default, Array.Empty<string>(), Has, none, none);
+        var rows = CategorySelection.Rows(EnglishText.Names(Default), Array.Empty<string>(), Has, none, none);
         Assert.Equal(new[] { "equipment", "materials" }, rows.Select(x => x.Id).OrderBy(x => x, StringComparer.Ordinal));
         Assert.All(rows, x => Assert.False(x.Expanded));
-        var named = CategorySelection.Rows(Default, new[] { "catalog.customization", "equipment.armor.head" }, Has, none, none);
+        var named = CategorySelection.Rows(EnglishText.Names(Default), new[] { "catalog.customization", "equipment.armor.head" }, Has, none, none);
         Assert.Contains(named, x => x.Id == "catalog.customization" && x.State == CategorySelectionState.On);
         Assert.Contains(named, x => x.Id == "equipment" && x.Expanded && x.State == CategorySelectionState.Partial);
         Assert.Contains(named, x => x.Id == "equipment.armor.head" && x.Depth == 2);
-        var collapsed = CategorySelection.Rows(Default, new[] { "equipment.armor.head" }, Has, none, new HashSet<string> { "equipment" });
+        var collapsed = CategorySelection.Rows(EnglishText.Names(Default), new[] { "equipment.armor.head" }, Has, none, new HashSet<string> { "equipment" });
         Assert.DoesNotContain(collapsed, x => x.Depth > 0);
-        var open = CategorySelection.Rows(Default, Array.Empty<string>(), Has, new HashSet<string> { "materials" }, none);
+        var open = CategorySelection.Rows(EnglishText.Names(Default), Array.Empty<string>(), Has, new HashSet<string> { "materials" }, none);
         Assert.Equal(new[] { "materials", "materials.wood" }, open.Where(x => x.Id.StartsWith("materials", StringComparison.Ordinal)).Select(x => x.Id));
     }
 
@@ -109,7 +109,7 @@ public sealed class CategorySelectionTests
     public void Rows_AreAlphabeticalWithinEachLevelAndMiscLast()
     {
         var none = new HashSet<string>();
-        var rows = CategorySelection.Rows(Default, Array.Empty<string>(), _ => true, new HashSet<string>(Default.Categories.Keys), none);
+        var rows = CategorySelection.Rows(EnglishText.Names(Default), Array.Empty<string>(), _ => true, new HashSet<string>(Default.Categories.Keys), none);
         foreach (var level in rows.GroupBy(x => Default.ParentOf(x.Id) ?? ""))
         {
             var names = level.Where(x => x.Id != "misc").Select(x => x.Name).ToArray();

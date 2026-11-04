@@ -104,6 +104,16 @@ public sealed class RuleEditState
         if (!list.Remove(prefab)) { list.Add(prefab); other.Remove(prefab); }
     }
 
+    /// <summary>
+    /// X22 (D132, "Always: these items" since D139): each item is marked Always, so the chest accepts everything it holds
+    /// now. An item marked Never is moved to Always, as <see cref="Choose"/> does; the suggestion leaves those out.
+    /// </summary>
+    public void AcceptAll(IEnumerable<string> prefabs)
+    {
+        if (prefabs == null) throw new ArgumentNullException(nameof(prefabs));
+        foreach (var prefab in prefabs) { Includes.Add(prefab); Excludes.Remove(prefab); }
+    }
+
     /// <summary>Filters of the edited alternative this version doesn't know (D077 B01); kept on save unless removed.</summary>
     public IReadOnlyList<string> UnknownFilters => Filters.Keys.Where(x => !ClassificationFilters.IsKnown(x)).ToArray();
 

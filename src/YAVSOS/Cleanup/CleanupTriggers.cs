@@ -6,6 +6,8 @@ using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
+using YAVSOS.Interface;
 
 namespace YAVSOS.Cleanup;
 
@@ -79,7 +81,7 @@ internal static class CleanupTriggers
         var chord = CleanupKey.WithAzu(Chord(watchedOwn.Value), Chord(azuStore.Value));
         if (!CleanupKey.Same(chord, Chord(azuPause.Value))) return;
         pauseWarned = true;
-        log?.LogWarning("YAVSOS's cleanup key (" + chord + ") is also AzuAutoStore's Pause Shortcut, so each cleanup also pauses or resumes " +
+        log?.LogWarning("YAVSOS's cleanup key (" + (chord?.Name() is { } name ? Texts.English(name) : "") + ") is also AzuAutoStore's Pause Shortcut, so each cleanup also pauses or resumes " +
             "AzuAutoStore's storing. Change AzuAutoStore's Pause Shortcut, or the modifier in YAVSOS's Cleanup Shortcut.");
     }
 
@@ -93,20 +95,21 @@ internal static class CleanupTriggers
     /// <summary>
     /// P8-17 (Q12, revised 2026-10-28): the single-stack key as a player reads it ("Middle mouse"): Azu's "Store Single
     /// Item Shortcut" when Azu stores (its single-item store follows YAVSOS's order too, <c>TryStoreThisItem</c>), else
-    /// YAVSOS's own; "" when Azu's couldn't be read or is unset, so the tooltip says "Stash stack" without a key.
+    /// YAVSOS's own; null when Azu's couldn't be read or is unset, so the tooltip says "Stash stack" without a key. A
+    /// message list (P10-04), so a line built from it follows a language change.
     /// </summary>
-    internal static string StackKey(bool azuStores, ConfigEntry<KeyboardShortcut> own)
+    internal static MessageList? StackKey(bool azuStores, ConfigEntry<KeyboardShortcut> own)
     {
         var shortcut = azuStores ? azuSingle?.Value : own.Value;
-        return shortcut is { } key && key.MainKey != KeyCode.None ? KeyNames.Format(key.MainKey.ToString(), key.Modifiers.Select(x => x.ToString())) : "";
+        return shortcut is { } key && key.MainKey != KeyCode.None ? KeyNames.Format(key.MainKey.ToString(), key.Modifiers.Select(x => x.ToString())) : null;
     }
 
     /// <summary>
     /// The cleanup key as a player reads it ("Ctrl + ."), for the Clean up nearby tooltip (D101): the chord
-    /// <see cref="Pressed"/> checks, with Azu's store key while it is bound, else YAVSOS's own; "" when unset.
+    /// <see cref="Pressed"/> checks, with Azu's store key while it is bound, else YAVSOS's own; null when unset.
     /// </summary>
-    internal static string KeyName(ConfigEntry<KeyboardShortcut> own) =>
-        azuStore != null ? AzuChord(own)?.ToString() ?? "" : Chord(own.Value).ToString();
+    internal static MessageList? KeyName(ConfigEntry<KeyboardShortcut> own) =>
+        azuStore != null ? AzuChord(own)?.Name() : Chord(own.Value).Name();
 
     internal static bool Pressed(ConfigEntry<KeyboardShortcut> own) => !InventoryGui.IsVisible() && Down(own);
 
@@ -133,17 +136,23 @@ internal static class CleanupTriggers
 [HarmonyPatch(typeof(Terminal), "InitTerminal")]
 internal static class CleanupConsoleCommand
 {
+    private static Terminal.ConsoleCommand? command;
+    private static bool listening;
+
     [HarmonyPostfix]
     private static void Register()
     {
-        new Terminal.ConsoleCommand("yavsos", "cleanup [radius] - move misplaced items between nearby chests by their YAVSOS rules", args =>
+        // The help line is set when the console starts and again on a language change (ConsoleCommand.Description is a
+        // public field the game reads when it lists commands).
+        if (!listening) { listening = true; Texts.Changed += () => { if (command != null) command.Description = Texts.Get("yavsos_console_cleanup_help"); }; }
+        command = new Terminal.ConsoleCommand("yavsos", Texts.Get("yavsos_console_cleanup_help"), args =>
         {
             if (args.Args.Length < 2 || !args.Args[1].Equals("cleanup", StringComparison.OrdinalIgnoreCase))
-            { args.Context?.AddString("Usage: yavsos cleanup [radius]"); return; }
+            { args.Context?.AddString(Texts.Get("yavsos_console_cleanup_usage")); return; }
             float? radius = args.Args.Length > 2 && float.TryParse(args.Args[2], System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out var value) && value > 0 ? value : null;
             var runner = Plugin.Instance?.Cleanup;
-            args.Context?.AddString(runner == null ? "YAVSOS is not loaded." : runner.Start(radius));
+            args.Context?.AddString(runner == null ? Texts.Get("yavsos_console_not_loaded") : (runner.Start(radius).Message is { } said ? Texts.Get(said) : ""));
         });
     }
 }

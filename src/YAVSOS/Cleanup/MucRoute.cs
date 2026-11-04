@@ -69,13 +69,14 @@ internal static class MucRoute
                 BundledStatus = "off: " + error.GetType().Name + ": " + error.Message;
             }
         }
-        Available(out var source);
+        InUse(out var copy);
+        var source = LogName(copy);
         string? cause = null;
-        localFormat = source switch
+        localFormat = copy switch
         {
-            "" => 0,
-            "YAVSOS's MultiUserChest" => 2,
-            "MultiUserChest" => WriterFormat(AccessTools.TypeByName("MultiUserChest.InventoryHelper"), out cause),
+            MultiUserChestCopy.None => 0,
+            MultiUserChestCopy.Yavsos => 2,
+            MultiUserChestCopy.Standalone => WriterFormat(AccessTools.TypeByName("MultiUserChest.InventoryHelper"), out cause),
             _ => WriterFormat(AccessTools.TypeByName("AzuAutoStore.APIs.MUC.MUCSrc.Helper.InventoryHelper"), out cause)
         };
         if (cause != null) localFormat = UnreadableFormat;
@@ -83,23 +84,45 @@ internal static class MucRoute
         // SF11 (D087): other players can't tell this copy's format, so their YAVSOS doesn't send to this player's chests.
         if (cause != null)
             log.LogWarning($"{source}'s item format could not be read ({cause}). Other players whose YAVSOS uses its own MultiUserChest " +
-                "don't move items into or out of chests your game handles; their result says your MultiUserChest format is unknown. " +
+                "don't move items into or out of chests your game handles; their result says YAVSOS doesn't recognize your MultiUserChest's item format. " +
                 "Everything else works.");
     }
 
-    internal static bool Available(out string source)
+    /// <summary>
+    /// The MultiUserChest copy in use (<see cref="MultiUserChestCopy.None"/> when none is), and whether it intercepts
+    /// moves. Typed, so the MultiUserChest mark picks its own sentence per copy (inventory case 12) and no code compares names.
+    /// </summary>
+    internal static bool InUse(out MultiUserChestCopy copy)
     {
-        var (copy, owner) = MultiUserChestCopies.Choose(Chainloader.PluginInfos.ContainsKey) switch
+        copy = MultiUserChestCopies.Choose(Chainloader.PluginInfos.ContainsKey);
+        var owner = copy switch
         {
-            MultiUserChestCopy.Standalone => ("MultiUserChest", StandaloneGuid),
-            MultiUserChestCopy.AzuAutoStore => ("AzuAutoStore's MultiUserChest", AzuAutoStoreIntegration.AzuGuid),
-            MultiUserChestCopy.Yavsos when BundledCopy.Active => ("YAVSOS's MultiUserChest", BundledCopy.HarmonyId),
-            _ => ("", "")
+            MultiUserChestCopy.Standalone => StandaloneGuid,
+            MultiUserChestCopy.AzuAutoStore => AzuAutoStoreIntegration.AzuGuid,
+            MultiUserChestCopy.Yavsos when BundledCopy.Active => BundledCopy.HarmonyId,
+            _ => ""
         };
-        source = copy;
+        if (owner.Length == 0) copy = MultiUserChestCopy.None;
         // The intercept must come from the MultiUserChest copy in use, not merely from some other mod's prefix.
         return owner.Length != 0 && Intercepted(owner);
     }
+
+    /// <summary><see cref="InUse"/> with the copy's English name, for log lines; "" when none is in use.</summary>
+    internal static bool Available(out string source)
+    {
+        var available = InUse(out var copy);
+        source = LogName(copy);
+        return available;
+    }
+
+    /// <summary>A copy's English name, for log lines and Lab output only (players get the MultiUserChest mark's messages).</summary>
+    internal static string LogName(MultiUserChestCopy copy) => copy switch
+    {
+        MultiUserChestCopy.Standalone => "MultiUserChest",
+        MultiUserChestCopy.AzuAutoStore => "AzuAutoStore's MultiUserChest",
+        MultiUserChestCopy.Yavsos => "YAVSOS's MultiUserChest",
+        _ => ""
+    };
 
     /// <summary>
     /// D061 Q8: a request to this peer can be read correctly. YAVSOS's copy adapts to the peer's published format and
@@ -151,7 +174,7 @@ internal static class MucRoute
             warnedUnusable = true;
             logger?.LogWarning($"{source} is installed, but its intercept on Inventory.AddItem is missing, so it can't take requests from other players. " +
                 "Their YAVSOS doesn't move items into or out of chests your game handles; their result says your MultiUserChest " +
-                "can't take requests. Everything else works.");
+                "can't handle requests. Everything else works.");
         }
         published = player;
     }

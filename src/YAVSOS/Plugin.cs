@@ -19,6 +19,7 @@ using YAVSOS.Integrations;
 using YAVSOS.Transfers;
 using YAVSOS.Interface;
 using YAVSOS.Cleanup;
+using YAVSOS.Core.Messages;
 
 namespace YAVSOS;
 
@@ -69,6 +70,7 @@ public sealed class Plugin : BaseUnityPlugin
 
     private void Awake()
     {
+        Texts.Load(Logger); // P10-04: before the settings bind, so their descriptions can come from the English file.
         sync = new ConfigSync(ProjectIdentity.Guid)
         {
             DisplayName = ProjectIdentity.Name, CurrentVersion = ProjectIdentity.Version,
@@ -76,6 +78,7 @@ public sealed class Plugin : BaseUnityPlugin
             ModRequired = false // Set true for managed server sessions before accepting peers.
         };
         policy = new PolicyHost(sync, Paths.ConfigPath, Logger);
+        policy.Published += ServerPolicyPublished;
         catalog = new LoadedCatalogHost(Logger);
         sources = new LoadedSourceHost(Logger);
         classification = new ClassificationHost(Logger.LogInfo, Logger.LogWarning, policy.State, () => catalog.Current,
@@ -115,6 +118,7 @@ public sealed class Plugin : BaseUnityPlugin
         // notices most item changes; without the console command, the key and button still clean up.
         PatchView(typeof(CatalogRegistryPatches), "Catalog refresh on ObjectDB.UpdateRegisters");
         PatchView(typeof(CleanupConsoleCommand), "The \"yavsos cleanup\" console command");
+        PatchView(typeof(ClientVersions), "The server's warning about players whose YAVSOS can't read the categories file");
         ContainerRegistry.Initialize(harmony, Logger);
         // Display-only patches (D058): a changed game method turns off that view alone.
         ChestLabels.Log = Logger;
@@ -136,6 +140,7 @@ public sealed class Plugin : BaseUnityPlugin
     // After the chainloader has loaded every plugin (BepInEx loads them all before any Start runs), before Game.Start.
     private void Start()
     {
+        Texts.Listen();
         MucRoute.Initialize(Logger);
         if (!ServerYavsosProbe.Supported) // D058: only detection is off; clients wait for server settings as before.
             Logger.LogWarning("Server detection turned off: the bundled ServerSync changed. On a server without YAVSOS chest rules stay off.");
@@ -161,11 +166,12 @@ public sealed class Plugin : BaseUnityPlugin
         MucRoute.Update();
         AzuStoreOrder.Look(); // X14: the store key's result, once what it stored has arrived.
         Cleanup?.Update();
+        Cleanup?.WarmUp(); // P10-28: once per launch, after categories are first ready.
         Stash?.Update();
         Arrivals?.Update();
         if (Cleanup != null && !Cleanup.Running && CleanupTriggers.Pressed(settings.CleanupShortcut)) Cleanup.Start();
         else if (Cleanup != null && CleanupTriggers.PressedInInventory(settings.CleanupShortcut))
-            CleanupRunner.Say("Close the inventory to clean up, or use Clean up nearby in a chest's panel.", overInventory: true);
+            GameText.Say(Message.Of("yavsos_cleanup_inventory_open").With("button", Texts.Get("yavsos_cleanup_button")), overInventory: true);
         else if (Stash != null && !Stash.Running) StashTriggers.Poll(settings, Stash);
         settingsBridge.Publish(IsManagedServer, ConfigSync.ProcessingServerUpdate,
             publishSettings);
@@ -174,12 +180,12 @@ public sealed class Plugin : BaseUnityPlugin
     // After the inventory screen's own Update, so the panel follows the chest window in the same frame.
     // Patches whose failure must turn off only their own feature (D058, D087: named in the log).
     /// <param name="display">SF4: the display part the Display mark names when this patch fails; null for a non-display hook.</param>
-    private void PatchView(Type patch, string name, string? display = null)
+    private void PatchView(Type patch, string name, YAVSOS.Core.Interface.DisplayPart? display = null)
     {
         try { harmony.PatchAll(patch); }
         catch (Exception error) when (OptionalFailure.Recoverable(error))
         {
-            if (display != null) DisplayFaults.Add(display);
+            if (display is { } part) DisplayFaults.Add(part);
             Logger.LogWarning(name + " turned off: " + error.GetType().Name + ": " + error.Message);
         }
     }
@@ -244,6 +250,11 @@ public sealed class Plugin : BaseUnityPlugin
     // initial settings by now; with neither, this client runs on its own categories and settings (D074).
     internal void ServerPeerInfo(ZNet net, ZRpc rpc)
     {
+        if (ReferenceEquals(activeNet, net) && net.IsServer())
+        {
+            if (policy.State.Mode == PolicyMode.ManagedServer) ClientVersions.Joined(net, rpc, policy.State.Local, Logger);
+            return;
+        }
         if (!ReferenceEquals(activeNet, net) || net.IsServer() || activeServerPeer == null
             || !peerGate.Accepts(rpc)) return;
         if (policy.State.Mode == PolicyMode.ManagedClient) // Its settings can arrive before its peer info.
@@ -266,6 +277,13 @@ public sealed class Plugin : BaseUnityPlugin
                 Logger.LogWarning("Cannot tell whether the server has YAVSOS (ServerSync changed); chest rules wait for server settings.");
                 break;
         }
+    }
+
+    // X48 option C (D130): a changed file that older players can't read is named for each of them in the log.
+    private void ServerPolicyPublished(CategoryPolicy served)
+    {
+        if (activeNet != null && activeNet.IsServer() && policy.State.Mode == PolicyMode.ManagedServer)
+            ClientVersions.Changed(activeNet, served, Logger);
     }
 
     internal void AdvertiseClientVersion(ZNet net, ZNetPeer peer)

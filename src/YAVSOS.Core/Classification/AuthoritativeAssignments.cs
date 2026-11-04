@@ -74,7 +74,7 @@ public sealed class AuthoritativeAssignmentSnapshot
     {
         if (catalog == null || policy == null) throw new ArgumentNullException(nameof(catalog));
         cancellation.ThrowIfCancellationRequested();
-        var taxonomy = ClassificationRuleSet.FromSchema1(policy).Taxonomy;
+        var taxonomy = ClassificationRuleSet.FromPolicy(policy).Taxonomy;
         return new AuthoritativeAssignmentSnapshot(ClassificationIndex.Version, ClassificationPipeline.Version, catalog.Fingerprint,
             policy.Fingerprint, taxonomy, "none", new SortedDictionary<string, ClassificationResult>(StringComparer.Ordinal),
             ItemProfileScope.Build(catalog, cancellation: cancellation), cancellation, AssignmentCapabilities.Identity);
@@ -85,7 +85,7 @@ public sealed class AuthoritativeAssignmentSnapshot
     {
         if (catalog == null || classified == null || policy == null) throw new ArgumentNullException(nameof(catalog));
         cancellation.ThrowIfCancellationRequested();
-        var taxonomy = ClassificationRuleSet.FromSchema1(policy).Taxonomy;
+        var taxonomy = ClassificationRuleSet.FromPolicy(policy).Taxonomy;
         // Pipeline origin fingerprints are checked in addition to the complete loaded item set below.
         if (classified.CatalogFingerprint != catalog.Fingerprint || classified.PolicyFingerprint != policy.Fingerprint ||
             classified.Index.Taxonomy.Fingerprint != taxonomy.Fingerprint)
@@ -173,7 +173,7 @@ public static class AuthoritativeAssignmentsCodec
     {
         try
         {
-            var effectiveTaxonomy = ClassificationRuleSet.FromSchema1(effective).Taxonomy;
+            var effectiveTaxonomy = ClassificationRuleSet.FromPolicy(effective).Taxonomy;
             if (taxonomy != null && taxonomy.Fingerprint != effectiveTaxonomy.Fingerprint)
                 throw new InvalidDataException("Optional assignment taxonomy differs from the effective policy; no assignments accepted.");
             taxonomy = effectiveTaxonomy;

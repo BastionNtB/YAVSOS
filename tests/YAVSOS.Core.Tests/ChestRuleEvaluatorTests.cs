@@ -19,7 +19,7 @@ public sealed class ChestRuleEvaluatorTests
         Assert.True(CategoryPolicyCodec.TryParse(xml, out var policy, out var error), error); return policy!;
     }
     internal static AuthoritativeAssignmentSnapshot Snapshot(CatalogSnapshot catalog, CategoryPolicy policy) =>
-        AuthoritativeAssignmentSnapshot.Create(catalog, ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy)), policy);
+        AuthoritativeAssignmentSnapshot.Create(catalog, ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy)), policy);
 
     private sealed class Answers : ICategoryAnswers
     {

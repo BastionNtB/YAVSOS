@@ -13,9 +13,9 @@ namespace YAVSOS.Cleanup;
 /// </summary>
 internal static class CleanupLab
 {
-    public static string Run(float radius) => Plugin.Instance?.Cleanup.Start(radius > 0 ? radius : null) ?? "not loaded";
+    public static string Run(float radius) => Plugin.Instance?.Cleanup.Start(radius > 0 ? radius : null).ToString() ?? "not loaded";
     public static string Status() => Plugin.Instance?.Cleanup is { } runner
-        ? $"running={runner.Running}; progress={runner.Progress}; last={runner.LastSummary}; probe={NativeInventoryProbe.Status}; " +
+        ? $"running={runner.Running}; progress={runner.Progress}; last={(runner.LastSummary is { } last ? Interface.Texts.English(last) : "")}; probe={NativeInventoryProbe.Status}; " +
           $"azuExclusions={Integrations.AzuExclusions.State}; azuPause={Integrations.AzuExclusions.PauseState}; hold={CleanupRunner.DiagnosticHold}"
         : "not loaded";
 
@@ -85,7 +85,7 @@ internal static class CleanupLab
     public static string OptOut(bool on)
     {
         var chest = RuleLab.Target(); var plugin = Plugin.Instance;
-        return chest && plugin != null ? plugin.ChestRules.TrySetCleanupOptOut(chest!, on).Message : "no target";
+        return chest && plugin != null ? RuleLab.Said(plugin.ChestRules.TrySetCleanupOptOut(chest!, on)) : "no target";
     }
 
     /// <summary>Fixture (D059): ask AzuAutoStore, through its own RPC, to set or clear "storing paused" on the target.</summary>

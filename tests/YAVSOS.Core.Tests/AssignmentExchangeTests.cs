@@ -29,7 +29,7 @@ public sealed class AssignmentExchangeTests
     {
         var catalog = CatalogSnapshot.Build(new[] { Item() });
         Assert.True(CategoryPolicyCodec.TryParse(CategoryPolicyCodec.EmptyDocument, out var policy, out _));
-        return (catalog, policy!, ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy!)));
+        return (catalog, policy!, ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy!)));
     }
     [Fact]
     public void Exchange_ServerSnapshotAndClientAcceptanceShareAuthoritativeResultWithoutLocalInference()

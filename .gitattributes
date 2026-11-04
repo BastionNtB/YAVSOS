@@ -4,3 +4,6 @@
 *.jpeg binary
 *.ico binary
 *.dll binary
+# P10-04: message files merge key by key (scripts/messages_merge.py; the driver is set in each clone, docs/BUILDING.md).
+src/YAVSOS/Translations/**/*.json merge=yavsos-messages
+src/YAVSOS/Translations/*.json merge=yavsos-messages

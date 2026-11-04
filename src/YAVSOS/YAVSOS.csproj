@@ -16,6 +16,10 @@
   <ItemGroup Condition="'$(Configuration)' != 'Lab'">
     <Compile Remove="Transfers/RuleLab.cs;Transfers/FaultLab.cs;Cleanup/StashLab.cs;Cleanup/CleanupLab.cs;Interface/UiLab.cs" />
   </ItemGroup>
+  <!-- P10-04: the English text, embedded (not shipped loose) and loaded in Awake (Texts.cs). notes.json is for translators. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Translations/English/yavsos.json" LogicalName="YAVSOS.Translations.English.yavsos.json" />
+  </ItemGroup>
   <ItemGroup>
     <None Include="../../LICENSE" Link="YAVSOS-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../third_party/ServerSync/LICENSE.txt" Link="ServerSync-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />

@@ -165,7 +165,7 @@ public sealed class OptionalEpicLootSemanticsTests
         foreach (var document in new[] { CategoryPolicyCodec.EmptyDocument, xml })
         {
             Assert.True(CategoryPolicyCodec.TryParse(document, out var policy, out var error), error);
-            var classified = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy!), forward.Snapshot);
+            var classified = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy!), forward.Snapshot);
             var snapshot = AuthoritativeAssignmentSnapshot.Create(catalog, classified, policy!);
             var decoded = AuthoritativeAssignmentsCodec.ParseWire(AuthoritativeAssignmentsCodec.ToWire(snapshot), policy!);
             Assert.Equal(snapshot.Fingerprint, decoded.Fingerprint);

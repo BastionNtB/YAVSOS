@@ -83,22 +83,24 @@ public static class CategorySelection
     /// Visible rows, A–Z within each level and Misc last. A category is shown when it has current members or the rule names it or one of
     /// its descendants (D054); an umbrella's rows follow it only while it is expanded. Partial nodes expand by default.
     /// </summary>
-    public static IReadOnlyList<CategoryTreeRow> Rows(ClassificationTaxonomy taxonomy, IReadOnlyCollection<string> stored,
+    /// <param name="names">The names the player sees (S13); rows sort by them and show them.</param>
+    public static IReadOnlyList<CategoryTreeRow> Rows(CategoryNames names, IReadOnlyCollection<string> stored,
         Func<string, bool> hasMembers, ICollection<string> expanded, ICollection<string> collapsed)
     {
-        if (taxonomy == null || stored == null || hasMembers == null || expanded == null || collapsed == null) throw new ArgumentNullException(nameof(taxonomy));
+        if (names == null || stored == null || hasMembers == null || expanded == null || collapsed == null) throw new ArgumentNullException(nameof(names));
+        var taxonomy = names.Taxonomy;
         var rows = new List<CategoryTreeRow>();
         bool Visible(string id) => hasMembers(id) || stored.Any(x => taxonomy.Categories.ContainsKey(x) && taxonomy.IsAncestorOrSelf(id, x));
         // A–Z within each level, Misc last (maintainer, 2026-10-21): DisplayRank picks an item's primary category, so
         // by rank the tree read as random ("Fishing bait" near the top, "Fish" in the middle). Classification keeps it.
         IEnumerable<string> Ordered(IEnumerable<string> ids) => ids.Where(Visible).OrderBy(x => x == "misc" ? 1 : 0)
-            .ThenBy(x => taxonomy.Categories[x].Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(x => x, StringComparer.Ordinal);
+            .ThenBy(names.Shown, StringComparer.CurrentCultureIgnoreCase).ThenBy(x => x, StringComparer.Ordinal);
         void Add(string id, int depth)
         {
             var state = StateOf(taxonomy, stored, id);
             var children = taxonomy.ChildrenOf(id).Where(Visible).ToArray();
             var open = children.Length > 0 && !collapsed.Contains(id) && (expanded.Contains(id) || state == CategorySelectionState.Partial);
-            rows.Add(new CategoryTreeRow(id, taxonomy.Categories[id].Name, depth, state, children.Length > 0, open));
+            rows.Add(new CategoryTreeRow(id, names.Shown(id), depth, state, children.Length > 0, open));
             if (open) foreach (var child in Ordered(children)) Add(child, depth + 1);
         }
         foreach (var root in Ordered(taxonomy.Categories.Keys.Where(x => taxonomy.ParentOf(x) == null))) Add(root, 0);

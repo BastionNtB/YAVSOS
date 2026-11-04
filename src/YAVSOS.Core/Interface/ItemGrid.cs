@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using YAVSOS.Core.Classification;
+using YAVSOS.Core.Messages;
 
 namespace YAVSOS.Core.Interface;
 
@@ -162,15 +163,32 @@ public static class ItemGrid
     /// <summary>The mark a click gives: none → Always → Never → none.</summary>
     public static GridMark Next(GridMark mark) => mark switch { GridMark.None => GridMark.Always, GridMark.Always => GridMark.Never, _ => GridMark.None };
 
-    /// <summary>What a mark means, for the icon's tooltip.</summary>
-    public static string MarkText(GridMark mark, bool byCategory) => mark switch
+    /// <summary>
+    /// What a mark means, for the icon's tooltip (P10-04: a message; the click hint is <see cref="ClickHint"/>, its own
+    /// sentence). The mark names come from their own keys, so the sentences can't drift from them.
+    /// </summary>
+    public static Message MarkText(GridMark mark, bool byCategory) => (mark switch
     {
-        GridMark.Always => byCategory
-            ? "Always here: ignores this rule's filters and wins over chests that take it only by category, at the same priority."
-            : "Always here, although no ticked category takes it.",
-        GridMark.Never => "Never here, whatever the categories say.",
-        _ => byCategory ? "Taken by this rule's categories." : "Not taken by this rule."
-    } + " Click: Always → Never → clear.";
+        GridMark.Always => Message.Of(byCategory ? "yavsos_grid_mark_always" : "yavsos_grid_mark_always_only"),
+        GridMark.Never => Message.Of("yavsos_grid_mark_never"),
+        _ => Message.Of(byCategory ? "yavsos_grid_mark_accepted" : "yavsos_grid_mark_not_accepted")
+    }).With("always", Always).With("never", Never);
+
+    /// <summary>"Click: Always → Never → clear." under every icon's mark sentence.</summary>
+    public static Message ClickHint => Message.Of("yavsos_grid_mark_click").With("always", Always).With("never", Never);
+
+    /// <summary>The item marks' names, as the panel shows them; other messages quote them through these.</summary>
+    public static Message Always => Message.Of("yavsos_grid_always");
+    public static Message Never => Message.Of("yavsos_grid_never");
+
+    /// <summary>A grid section's title with how many icons it has: "Accepted by this rule (12)".</summary>
+    public static Message Title(GridSection section, int count) => (section switch
+    {
+        GridSection.Here => Message.Of("yavsos_grid_here"),
+        GridSection.Marked => Message.Of("yavsos_grid_marked").With("always", Always).With("never", Never),
+        GridSection.Rule => Message.Of("yavsos_grid_rule"),
+        _ => Message.Of("yavsos_grid_found")
+    }).Count(count);
 
     private static bool Matches(GridSource source, string text) =>
         CultureInfo.CurrentCulture.CompareInfo.IndexOf(source.Name, text, CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace) >= 0 ||

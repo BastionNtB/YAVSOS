@@ -8,6 +8,7 @@ using UnityEngine;
 using YAVSOS.Configuration;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Core.Transfers;
 using YAVSOS.Integrations;
 using YAVSOS.Interface;
@@ -57,12 +58,12 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     {
         var arrivals = Plugin.Instance?.Arrivals;
         if (arrivals == null || run.Plan == null) return;
-        foreach (var chest in run.Plan.Remainders.Where(x => x.Reason is CleanupReason.NoDestination or CleanupReason.NoCapacity).GroupBy(x => x.SourceId))
+        foreach (var chest in run.Plan.Remainders.Where(x => x.Reason is RunReason.NoDestination or RunReason.NoCapacity).GroupBy(x => x.SourceId))
         {
             if (!run.Chests.TryGetValue(chest.Key, out var container)) continue;
             var first = chest.First();
             var others = chest.Select(x => x.Identity.Prefab).Distinct(StringComparer.Ordinal).Count() - 1;
-            arrivals.Stayed(container, HighlightText.Keeps(Name(first.Identity.Prefab), others, first.Reason == CleanupReason.NoCapacity));
+            arrivals.Stayed(container, HighlightText.Stays(Texts.Escape(GameText.ItemName(first.Identity.Prefab)), others, first.Reason == RunReason.NoCapacity));
         }
     }
 
@@ -76,8 +77,9 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
 
     protected override float PollSeconds => 0.5f;
     protected override string Prefab(CleanupMove move) => move.Identity.Prefab;
+    protected override string Destination(CleanupMove move) => move.DestinationId;
     protected override Guid Stack(CleanupMove move) => move.Handle;
-    protected override CleanupRoute Route(CleanupMove move) => move.Route;
+    protected override MoveRoute Route(CleanupMove move) => move.Route;
     protected override string PolicyStamp(Run run) => run.Plan.PolicyStamp;
 #if YAVSOS_LAB
     protected override bool HoldNext(Run run)
@@ -92,49 +94,116 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         MoveVerification.Counts(Capture(run.Adapter, pending.Source!, pending.Move.SourceId).Snapshot,
             Capture(run.Adapter, pending.Destination, pending.Move.DestinationId).Snapshot, pending.Key);
     protected override string MovedViaMuc(CleanupMove move, DelegatedMoveObserver observer) =>
-        $"Cleanup moved {observer.MovedUnits} {Name(move.Identity.Prefab)} via MultiUserChest ({move.Route}, {observer.Detail}).";
+        $"Cleanup moved {observer.MovedUnits} {GameText.ItemName(move.Identity.Prefab)} via MultiUserChest ({move.Route}, {observer.Detail}).";
 
-    /// <summary>Plans an area cleanup around the local player; returns the message shown to them.</summary>
-    internal string Start(float? radius = null)
+    /// <summary>Plans an area cleanup around the local player; returns how it ended and the message shown to them.</summary>
+    internal RunStart Start(float? radius = null)
     {
         var plugin = Plugin.Instance; var player = Player.m_localPlayer;
-        if (plugin == null || !player || player.IsDead() || !ZNet.instance) return Say("Cleanup needs a player in the world.");
+        if (plugin == null || !player || player.IsDead() || !ZNet.instance) return Refuse("yavsos_cleanup_no_player");
         // A01: one run at a time across both runners, as the stash already refuses during a cleanup; a MultiUserChest
         // request the stash holds would otherwise be observed against chests cleanup is changing.
-        if (active != null || plugin.Stash.Running) return Say("A stash or cleanup is already running.");
-        if (!settings.AllowCleanup.Value) return Say("Cleanup is turned off on this server.");
-        if (!NativeInventoryProbe.Supported) return Say("Cleanup is unavailable: " + NativeInventoryProbe.Status + ".");
+        if (active != null || plugin.Stash.Running) return Refuse("yavsos_run_busy");
+        if (!settings.AllowCleanup.Value) return Refuse("yavsos_cleanup_off_server");
+        // Inventory case 8: the reader's diagnostic stays in the log (NativeInventoryProbe logs it); the player gets the outcome.
+        if (!NativeInventoryProbe.Supported) return Refuse(NativeInventoryProbe.Checked ? "yavsos_cleanup_reader_broken" : "yavsos_run_reader_checking");
         // D056: with Azu present, its exclusions must be readable; cleanup never bypasses them.
-        if (AzuExclusions.State == AzuExclusionState.Unavailable) return Say(AzuUnreadable);
+        if (AzuExclusions.State == AzuExclusionState.Unavailable) return Refuse("yavsos_cleanup_azu_unreadable");
         var answers = plugin.CategoryAnswers;
-        if (answers == null || !answers.CategoriesReady) return Say("YAVSOS categories are still loading. Try cleanup again shortly.");
+        if (answers == null || !answers.CategoriesReady) return Refuse("yavsos_run_categories_loading");
         var range = Math.Min(radius ?? settings.EffectiveCleanupRange, settings.MaximumRange.Value);
         var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal) };
+        var timed = UiCost.Start();
         var input = Gather(plugin, answers, player, run, out var unreadable, out var mucSource);
+        UiCost.Stop("cleanup gather", timed); // A2-01: the gather's share of the logged plan time.
         var plan = CleanupPlanner.Plan(input, plugin.RuleEvaluator);
-        if (plan.CategoriesPending) { run.Adapter.Dispose(); return Say("YAVSOS categories are still loading. Try cleanup again shortly."); }
+        if (plan.CategoriesPending) { run.Adapter.Dispose(); return Refuse("yavsos_run_categories_loading"); }
         run.Plan = plan;
         foreach (var rest in plan.Remainders)
         {
-            if (rest.Reason == CleanupReason.AzuExcluded && rest.DestinationId != null && run.Chests.TryGetValue(rest.DestinationId, out var excluded))
+            if (rest.Reason == RunReason.AzuExcluded && rest.DestinationId != null && run.Chests.TryGetValue(rest.DestinationId, out var excluded))
             {
-                var type = Localize(excluded.m_name);
-                run.Report.Remain(rest.Reason, rest.Identity.Prefab, type);
-                log.LogInfo($"Cleanup: AzuAutoStore's config excludes {Name(rest.Identity.Prefab)} from {type}; left in place.");
+                var type = GameText.Localize(excluded.m_name);
+                run.Report.Remain(rest.Reason, rest.Identity.Prefab, Texts.Escape(type));
+                log.LogInfo($"Cleanup: AzuAutoStore's config excludes {GameText.ItemName(rest.Identity.Prefab)} from {type}; left in place.");
             }
             else run.Report.Remain(rest.Reason, rest.Identity.Prefab);
         }
-        for (var i = 0; i < unreadable; i++) run.Report.Remain(CleanupReason.ChestUnreadable);
-        for (var i = 0; i < plan.SkippedChests; i++) run.Report.Remain(CleanupReason.ChestLimit);
+        for (var i = 0; i < unreadable; i++) run.Report.Remain(RunReason.ChestUnreadable);
+        for (var i = 0; i < plan.SkippedChests; i++) run.Report.Remain(RunReason.ChestLimit);
         log.LogInfo($"Cleanup planned {plan.Moves.Count} moves over {input.Chests.Count} containers within {range:0.#} m in {run.Clock.Elapsed.TotalMilliseconds:0.0} ms" +
             (input.MucAvailable ? $"; other players' chests through {mucSource}." : "; no MultiUserChest, other players' chests are skipped."));
         active = run;
-        if (plan.Moves.Count == 0) { Finish(); return LastSummary; }
-        return Started;
+        if (plan.Moves.Count == 0) { Finish(); return RunStart.Summary(LastSummary!); }
+        // D101: the rule panel says nothing when a run began; only the console prints this.
+        return new RunStart(RunOutcome.Started, Message.Of("yavsos_cleanup_started"));
     }
 
-    /// <summary>What <see cref="Start"/> returns when a run began; the rule panel says nothing then (D101).</summary>
-    internal const string Started = "Cleanup started.";
+    // P10-28 (D133): the first cleanup of each game launch paid the runtime's one-time compile and setup cost in one
+    // frame (lab measurement, 2026-11-04: 119 ms against 25 ms warm; a second session in the same game was close to warm). Once
+    // per launch, after categories are first ready: the planner on a made-up base off the game thread (Core, nothing
+    // shared with the game), then, here on the game thread, the reads of one nearby chest as a run makes them. Read
+    // only; nothing moves. A run that starts first warms the code itself, and the warm-up then stops.
+    private const int WarmIdle = 0, WarmPlanning = 1, WarmReading = 2, WarmDone = 3;
+    private static int warm = WarmIdle;
+    private static string? warmReport;
+    private float nextWarmRead;
+
+    internal void WarmUp()
+    {
+        if (warm == WarmDone) return;
+        var plugin = Plugin.Instance;
+        if (warm == WarmIdle)
+        {
+            if (plugin?.CategoryAnswers?.CategoriesReady != true) return;
+            warm = WarmPlanning;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                var clock = Stopwatch.StartNew();
+                try
+                {
+                    var plan = CleanupWarmup.Plan();
+                    warmReport = $"Cleanup warm-up planned {plan.Moves.Count} moves over a made-up base off the game thread in {clock.Elapsed.TotalMilliseconds:0.0} ms.";
+                }
+                catch (Exception error) { warmReport = $"Cleanup warm-up stopped ({error.GetType().Name}: {error.Message}); the first cleanup pays the one-time cost instead."; }
+                System.Threading.Volatile.Write(ref warm, WarmReading);
+            });
+            return;
+        }
+        if (System.Threading.Volatile.Read(ref warm) == WarmPlanning) return;
+        if (warmReport != null) { log.LogInfo(warmReport); warmReport = null; }
+        if (active != null) { warm = WarmDone; return; }
+        if (Time.unscaledTime < nextWarmRead) return;
+        nextWarmRead = Time.unscaledTime + 5f; // No chest near yet, or not ready: look again in a few seconds.
+        var player = Player.m_localPlayer; var answers = plugin?.CategoryAnswers;
+        if (plugin == null || answers?.CategoriesReady != true || !player || player.IsDead() || !ZNet.instance || !NativeInventoryProbe.Supported) return;
+        var container = Nearby(player, settings.EffectiveCleanupRange).FirstOrDefault();
+        if (!container) return;
+        var clock = Stopwatch.StartNew(); var timed = UiCost.Start();
+        var run = new Run { Session = ZNet.instance, Radius = settings.EffectiveCleanupRange, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal) };
+        try
+        {
+            var chests = new List<CleanupChest>(); var held = new List<Guid>();
+            if (GatherChest(run, container, chests, held, null, quiet: true) && chests.Count != 0)
+            {
+                var input = Input(plugin, answers, run, chests, held, out _);
+                if (chests[0].Inventory.Stacks.FirstOrDefault() is { } stack) input.InstanceFacets?.Invoke(stack);
+            }
+        }
+        catch (Exception error) when (error is not OutOfMemoryException) { log.LogInfo($"Cleanup warm-up skipped the chest read ({error.GetType().Name})."); }
+        finally { run.Adapter.Dispose(); }
+        UiCost.Stop("cleanup warm-up read", timed);
+        warm = WarmDone;
+        log.LogInfo($"Cleanup warm-up read one nearby chest in {clock.Elapsed.TotalMilliseconds:0.0} ms.");
+    }
+
+    /// <summary>A start refused with message <paramref name="key"/>, said on screen.</summary>
+    internal static RunStart Refuse(string key)
+    {
+        var message = Message.Of(key);
+        GameText.Say(message);
+        return new RunStart(RunOutcome.Refused, message);
+    }
 
     // The planner's live inputs, shared by Start and Explain (P6-05), so an explanation sees what a run would see.
     private CleanupInput Gather(Plugin plugin, ICategoryAnswers answers, Player player, Run run, out int unreadable, out string mucSource)
@@ -154,8 +223,8 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         return Input(plugin, answers, run, chests, held, out mucSource);
     }
 
-    // One chest of Gather: false when it could not be read (logged); a chest already gathered is skipped.
-    private bool GatherChest(Run run, Container container, List<CleanupChest> chests, List<Guid> held, ItemDrop.ItemData? drag)
+    // One chest of Gather: false when it could not be read (logged unless quiet); a chest already gathered is skipped.
+    private bool GatherChest(Run run, Container container, List<CleanupChest> chests, List<Guid> held, ItemDrop.ItemData? drag, bool quiet = false)
     {
         var view = ChestRuleStore.View(container)!; var zdo = view.GetZDO();
         var id = zdo.m_uid.ToString();
@@ -163,9 +232,9 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         try
         {
             var capture = Capture(run.Adapter, container, id);
-            foreach (var skipped in capture.Uncapturable)
+            foreach (var skipped in quiet ? Enumerable.Empty<string>() : capture.Uncapturable)
                 if (LogLimit(id + "|" + skipped) is { } more)
-                    log.LogInfo($"Cleanup leaves {skipped} in {Localize(container.m_name)} at {container.transform.position}: YAVSOS can't move it without changing it." + more);
+                    log.LogInfo($"Cleanup leaves {skipped} in {GameText.Localize(container.m_name)} at {container.transform.position}: YAVSOS can't move it without changing it." + more);
             var player = Player.m_localPlayer;
             chests.Add(new CleanupChest(id, ChestRuleStore.Payload(container), capture.Snapshot, view.IsOwner(), ChestRuleStore.CleanupOptOut(container),
                 player ? Vector3.Distance(player.transform.position, container.transform.position) : 0,
@@ -176,16 +245,12 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            if (LogLimit(id + "|" + error.GetType().Name) is { } more)
-                log.LogWarning($"Cleanup skipped container {Localize(container.m_name)} at {container.transform.position}: it could not be read " +
+            if (!quiet && LogLimit(id + "|" + error.GetType().Name) is { } more)
+                log.LogWarning($"Cleanup skipped container {GameText.Localize(container.m_name)} at {container.transform.position}: it could not be read " +
                     $"({error.GetType().Name}: {error.Message}); its items stay and it takes nothing this run." + more);
             return false;
         }
     }
-
-    // D088, D087: why cleanup is off when AzuAutoStore's exclusions can't be read at all.
-    private const string AzuUnreadable = "Cleanup is off: AzuAutoStore changed, and YAVSOS can't read which chests it keeps items out of. " +
-        "AzuAutoStore and chest rules keep working.";
 
     private CleanupInput Input(Plugin plugin, ICategoryAnswers answers, Run run, List<CleanupChest> chests, List<Guid> held, out string mucSource)
     {
@@ -210,7 +275,8 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
             facets.Add(stack.Handle, known);
             return known;
         }
-        return new CleanupInput(plugin.RuleTaxonomy, answers, chests, plugin.CategoryMemberCount, mucAvailable: muc, azuAllows: azu, held: held, instanceFacets: Facets);
+        return new CleanupInput(plugin.RuleTaxonomy, answers, chests, plugin.CategoryMemberCount, mucAvailable: muc, azuAllows: azu, held: held, instanceFacets: Facets,
+            timed: UiCost.Timer("cleanup plan ")); // A2-01 part 2: Lab only; null in the release build.
     }
 
     /// <summary>
@@ -220,11 +286,11 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     /// </summary>
     internal sealed class Prepared : IDisposable
     {
-        internal readonly Run? Run; internal readonly CleanupExplainContext? Context; internal readonly string Note;
-        internal readonly Container? Source; internal readonly Func<string, string>? Names;
-        internal Prepared(Run? run, CleanupExplainContext? context, string note, Container? source = null, Func<string, string>? names = null)
+        internal readonly Run? Run; internal readonly CleanupExplainContext? Context; internal readonly Message? Note;
+        internal readonly Container? Source; internal readonly Func<string, ChestName?>? Names;
+        internal Prepared(Run? run, CleanupExplainContext? context, Message? note, Container? source = null, Func<string, ChestName?>? names = null)
         { Run = run; Context = context; Note = note; Source = source; Names = names; }
-        internal static Prepared Without(string note) => new(null, null, note);
+        internal static Prepared Without(Message? note) => new(null, null, note);
         public void Dispose() => Run?.Adapter.Dispose();
     }
 
@@ -238,13 +304,13 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     internal IEnumerator<bool> Prepare(Container source, Action<Prepared> done)
     {
         var plugin = Plugin.Instance; var player = Player.m_localPlayer;
-        var note = "";
+        Message? note = null;
         if (plugin == null || !player || player.IsDead() || !ZNet.instance || !source) { done(Prepared.Without(note)); yield break; }
-        if (!NativeInventoryProbe.Supported) { done(Prepared.Without("Cleanup is unavailable: " + NativeInventoryProbe.Status + ".")); yield break; }
-        if (AzuExclusions.State == AzuExclusionState.Unavailable) { done(Prepared.Without(AzuUnreadable)); yield break; }
+        if (!NativeInventoryProbe.Supported) { done(Prepared.Without(Message.Of(NativeInventoryProbe.Checked ? "yavsos_cleanup_reader_broken" : "yavsos_run_reader_checking"))); yield break; }
+        if (AzuExclusions.State == AzuExclusionState.Unavailable) { done(Prepared.Without(Message.Of("yavsos_cleanup_azu_unreadable"))); yield break; }
         var answers = plugin.CategoryAnswers;
-        if (answers == null) { done(Prepared.Without("YAVSOS categories are still loading.")); yield break; }
-        if (!settings.AllowCleanup.Value) note = "Cleanup is turned off on this server; this is what it would do.";
+        if (answers == null) { done(Prepared.Without(Message.Of("yavsos_where_note_loading"))); yield break; }
+        if (!settings.AllowCleanup.Value) note = Message.Of("yavsos_where_note_cleanup_off");
         var range = Math.Min(settings.EffectiveCleanupRange, settings.MaximumRange.Value);
         var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal) };
         var handed = false;
@@ -260,18 +326,18 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
             for (var at = 0; at < near.Count; at++)
             {
                 if (at != 0 && at % ExplainBatch == 0) yield return true;
-                if (!player || !source) { done(Prepared.Without("")); yield break; }
+                if (!player || !source) { done(Prepared.Without(null)); yield break; }
                 timed = UiCost.Start();
                 if (near[at]) GatherChest(run, near[at], chests, held, drag); // One removed since the search is left out.
                 UiCost.Stop("explain chest", timed);
             }
             yield return true;
-            if (!player || player.IsDead() || !source) { done(Prepared.Without("")); yield break; }
+            if (!player || player.IsDead() || !source) { done(Prepared.Without(null)); yield break; }
             timed = UiCost.Start();
             var input = Input(plugin, answers, run, chests, held, out _);
             UiCost.Stop("explain input", timed);
             yield return true;
-            if (!player || player.IsDead() || !source) { done(Prepared.Without("")); yield break; }
+            if (!player || player.IsDead() || !source) { done(Prepared.Without(null)); yield break; }
             timed = UiCost.Start();
             var context = new CleanupExplainContext(input, plugin.RuleEvaluator);
             UiCost.Stop("explain receivers", timed); // X16: once per context; each stack's "routes" is timed in Answer.
@@ -290,13 +356,14 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     {
         if (prepared.Context == null || prepared.Run == null) return ExplanationAnswer.Without(prepared.Note);
         var source = prepared.Source;
-        if (!Player.m_localPlayer || !source) return ExplanationAnswer.Without("");
+        if (!Player.m_localPlayer || !source) return ExplanationAnswer.Without(null);
         var id = ChestRuleStore.View(source!)?.GetZDO()?.m_uid.ToString();
-        if (id == null || !prepared.Run.Chests.ContainsKey(id)) return ExplanationAnswer.Without("This chest is beyond cleanup range or can't be cleaned up.");
+        if (id == null || !prepared.Run.Chests.ContainsKey(id)) return ExplanationAnswer.Without(Message.Of("yavsos_where_note_out_of_reach"));
         if (!prepared.Run.Adapter.TryHandle(source!.GetInventory(), item, out var handle) || !prepared.Context.Has(id, handle))
-            return ExplanationAnswer.Without("That item cannot be moved by cleanup.");
+            return ExplanationAnswer.Without(Message.Of("yavsos_where_note_cleanup_cant_move"));
         var timed = UiCost.Start();
-        var answer = prepared.Context.Explain(id, handle, prepared.Names, Name, openName: RuleControls.OpenValueName, detail: false,
+        // The diagnostic summary isn't shown (detail off), so its chest names are left as IDs.
+        var answer = prepared.Context.Explain(id, handle, null, GameText.ItemName, openName: RuleControls.OpenValueName, detail: false,
             timed: UiCost.Timer("explain ")); // X16: this stack's routes.
         UiCost.Stop("explain plan", timed);
         return new ExplanationAnswer(answer, true, prepared.Note, prepared.Names);
@@ -309,18 +376,20 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     internal static Container[] Scene() => ContainerRegistry.Scene();
 
     /// <summary>
-    /// "this chest" for the open one, otherwise the chest's name and distance ("Chest 6 m away"), since many chests share a
-    /// name. X16: the distance is from where the player is when a name is asked for, so a line rebuilt later follows them.
+    /// The open chest, otherwise the chest's name and distance ("Chest 6 m away"), since many chests share a name; null
+    /// for a chest no longer there ("a chest nearby"). Typed (inventory case 3), so no answer compares English words.
+    /// X16: the distance is from where the player is when a name is asked for, so a line rebuilt later follows them.
     /// </summary>
-    internal static Func<string, string> ChestNamer(Player player, Container? open, IReadOnlyDictionary<string, Container> chests)
+    internal static Func<string, ChestName?> ChestNamer(Player player, Container? open, IReadOnlyDictionary<string, Container> chests)
     {
         var last = player.transform.position;
         return id =>
         {
-            if (!chests.TryGetValue(id, out var container) || !container) return id;
-            if (ReferenceEquals(container, open)) return "this chest";
+            if (!chests.TryGetValue(id, out var container) || !container) return null;
+            if (ReferenceEquals(container, open)) return ChestName.Open;
             if (player) last = player.transform.position; // Gone (logout, death): the last place seen.
-            return Localize(container.m_name) + " " + Vector3.Distance(last, container.transform.position).ToString("0") + " m away";
+            return ChestName.Away(GameText.Localize(container.m_name),
+                (long)Math.Round(Vector3.Distance(last, container.transform.position), MidpointRounding.AwayFromZero));
         };
     }
 
@@ -329,15 +398,15 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         // While MultiUserChest holds a request, other moves touching its chests would blur what it is observed to have done.
         if (run.Delegated.Any(x => x.Move.SourceId == move.SourceId || x.Move.DestinationId == move.SourceId ||
                                    x.Move.SourceId == move.DestinationId || x.Move.DestinationId == move.DestinationId))
-        { run.Report.Remain(CleanupReason.MucBusy, move.Identity.Prefab); return; }
+        { run.Report.Remain(RunReason.MucBusy, move.Identity.Prefab); return; }
         if (run.PolicyChanged) { run.Report.Refuse(TransferRefusal.PolicyChanged, move.Identity.Prefab); return; }
         var refusal = Recheck(run, move, out var source, out var destination);
         if (refusal == TransferRefusal.PolicyChanged) { run.PolicyChanged = true; run.Report.Refuse(refusal, move.Identity.Prefab); return; }
         // B4.5: a source opted out during the run keeps its items; that is the player's choice, not "rules changed".
         if (refusal == TransferRefusal.RuleMismatch && source && ChestRuleStore.CleanupOptOut(source!))
-        { run.Report.Remain(CleanupReason.OptedOut, move.Identity.Prefab); return; }
+        { run.Report.Remain(RunReason.OptedOut, move.Identity.Prefab); return; }
         if (refusal == TransferRefusal.Protected)
-        { run.Report.Remain(CleanupReason.AzuExcluded, move.Identity.Prefab, destination ? Localize(destination!.m_name) : null); return; }
+        { run.Report.Remain(RunReason.AzuExcluded, move.Identity.Prefab, destination ? Texts.Escape(GameText.Localize(destination!.m_name)) : null); return; }
         if (refusal != TransferRefusal.None) { run.Report.Refuse(refusal, move.Identity.Prefab); return; }
         GameInventoryCapture before, beforeDestination;
         var side = "source"; // SF15: which capture failed, for the log only.
@@ -348,8 +417,8 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
             !before.Snapshot.Stacks.Any(x => x.Handle == move.Handle && x.Identity.Equals(move.Identity)))
         { run.Report.Refuse(TransferRefusal.InventoryChanged, move.Identity.Prefab); return; }
         var drag = DragItem != null && InventoryGui.instance ? DragItem(InventoryGui.instance) : null;
-        if (ReferenceEquals(drag, item)) { run.Report.Remain(CleanupReason.Held, move.Identity.Prefab); return; }
-        if (move.Route != CleanupRoute.Direct) { Delegate(run, move, source, destination, before, beforeDestination, item); return; }
+        if (ReferenceEquals(drag, item)) { run.Report.Remain(RunReason.Held, move.Identity.Prefab); return; }
+        if (move.Route != MoveRoute.Direct) { Delegate(run, move, source, destination, before, beforeDestination, item); return; }
         if (!move.TryMergeTarget(before.Snapshot, beforeDestination.Snapshot, out var merge)) { run.Report.Refuse(TransferRefusal.InventoryChanged, move.Identity.Prefab); return; }
         var result = WriteDirect(run, move, () => Capture(run.Adapter, source, move.SourceId), () => Capture(run.Adapter, destination, move.DestinationId),
             before, beforeDestination, sourceInventory, destinationInventory, item, move.Handle, move.Identity, move.Units, move.DestinationX, move.DestinationY,
@@ -358,7 +427,7 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         if (Report(run, move, result))
         {
             Arrived(destination);
-            log.LogInfo($"Cleanup moved {result.Units} {Name(move.Identity.Prefab)} from {Localize(source.m_name)} to {Localize(destination.m_name)} ({move.Kind}).");
+            log.LogInfo($"Cleanup moved {result.Units} {GameText.ItemName(move.Identity.Prefab)} from {GameText.Localize(source.m_name)} to {GameText.Localize(destination.m_name)} ({move.Kind}).");
         }
     }
 
@@ -366,13 +435,13 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     private void Delegate(Run run, CleanupMove move, Container source, Container destination, GameInventoryCapture before,
         GameInventoryCapture beforeDestination, ItemDrop.ItemData item)
     {
-        if (!MucRoute.Available(out _)) { run.Report.Remain(CleanupReason.OtherOwnerNoMuc, move.Identity.Prefab); return; }
+        if (!MucRoute.Available(out _)) { run.Report.Remain(RunReason.OtherOwnerNoMuc, move.Identity.Prefab); return; }
         var key = MoveVerification.MergeKey(before.Snapshot, move.Handle, move.Identity);
         var baseline = MoveVerification.Counts(before.Snapshot, beforeDestination.Snapshot, key);
         var units = Math.Min(move.Units, item.m_stack);
         if (units < 1) { run.Report.Refuse(TransferRefusal.InventoryChanged, move.Identity.Prefab); return; }
         // The other player's chest must have a live owner to answer, or MultiUserChest does not intercept.
-        var remote = move.Route == CleanupRoute.MucAdd ? destination : source;
+        var remote = move.Route == MoveRoute.MucAdd ? destination : source;
         if (!ChestRuleStore.View(remote)!.GetZDO().HasOwner()) { run.Report.Refuse(TransferRefusal.OwnerChanged, move.Identity.Prefab); return; }
         // D061 Q8: YAVSOS's copy never sends a request the owner's copy might misread.
         if (MucRoute.OwnerState(ChestRuleStore.View(remote)!.GetZDO().GetOwner()).Skip() is { } skip) { run.Report.Remain(skip, move.Identity.Prefab); return; }
@@ -382,7 +451,7 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         try { destination.GetInventory().MoveItemToThis(source.GetInventory(), item, units, -1, -1); }
         catch (Exception error) when (error is not OutOfMemoryException)
         { run.Report.Unconfirm(viaMuc: true, move.Identity.Prefab); Log(move, "the MultiUserChest request threw " + Cause(error) + "; result unconfirmed"); return; }
-        if (move.Route == CleanupRoute.MucAdd)
+        if (move.Route == MoveRoute.MucAdd)
         {
             var after = Capture(run.Adapter, source, move.SourceId).Snapshot;
             // MultiUserChest takes the item out of the local source at once; if it did not, it never sent a request.
@@ -398,7 +467,7 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
                 !StringComparer.Ordinal.Equals(local.ContentFingerprint, beforeDestination.Snapshot.ContentFingerprint))
             {
                 run.Report.Unconfirm(viaMuc: true, move.Identity.Prefab);
-                log.LogError($"Cleanup {Name(move.Identity.Prefab)} x{units} ({move.SourceId} -> {move.DestinationId}): the game changed chests directly instead of sending a MultiUserChest request; result unconfirmed. Not corrected (D041).");
+                log.LogError($"Cleanup {GameText.ItemName(move.Identity.Prefab)} x{units} ({move.SourceId} -> {move.DestinationId}): the game changed chests directly instead of sending a MultiUserChest request; result unconfirmed. Not corrected (D041).");
                 return;
             }
         }
@@ -424,7 +493,7 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
             return TransferRefusal.InventoryChanged;
         // The planned route fixes which side is local; an ownership change in between refuses the move ("run again").
         var sourceLocal = ChestRuleStore.View(source)!.IsOwner(); var destinationLocal = ChestRuleStore.View(destination)!.IsOwner();
-        if (sourceLocal != (move.Route != CleanupRoute.MucRemove) || destinationLocal != (move.Route != CleanupRoute.MucAdd)) return TransferRefusal.OwnerChanged;
+        if (sourceLocal != (move.Route != MoveRoute.MucRemove) || destinationLocal != (move.Route != MoveRoute.MucAdd)) return TransferRefusal.OwnerChanged;
         if (!ChestRuleStore.HasAccess(source, player) || !ChestRuleStore.HasAccess(destination, player)) return TransferRefusal.AccessDenied;
         var reach = run.Radius + 2f;
         if ((source.transform.position - player.transform.position).sqrMagnitude > reach * reach ||
@@ -493,16 +562,7 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     { var zdo = ChestRuleStore.View(container)!.GetZDO(); return (zdo.GetOwner(), zdo.OwnerRevision); }
 
 
-    protected override void Log(CleanupMove move, string text) => log.LogWarning($"Cleanup {Name(move.Identity.Prefab)} x{move.Units} ({move.SourceId} -> {move.DestinationId}): {text}");
-
-    /// <param name="overInventory">A notice shown while the inventory is open: the top-left HUD line sits under the player's
-    /// inventory grid there, so it goes to the middle of the screen, which draws above it (P9-02 batch C).</param>
-    internal static string Say(string text, bool overInventory = false)
-    {
-        if (Player.m_localPlayer)
-            Player.m_localPlayer.Message(overInventory ? MessageHud.MessageType.Center : MessageHud.MessageType.TopLeft, "YAVSOS: " + text);
-        return text;
-    }
+    protected override void Log(CleanupMove move, string text) => log.LogWarning($"Cleanup {GameText.ItemName(move.Identity.Prefab)} x{move.Units} ({move.SourceId} -> {move.DestinationId}): {text}");
 
     // D112: a cause is logged at most three times per game run (counts are never cleared), the third saying so; a chest keeping an odd item would
     // otherwise add a line on every press. Null: silenced. Bounded; past the bound new causes are not logged.
@@ -514,13 +574,5 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         if (count >= LogRepeats || count == 0 && logged.Count >= 1024) return null;
         logged[key] = ++count;
         return count == LogRepeats ? " Further repeats of this are not logged until the game restarts." : "";
-    }
-
-    internal static string Localize(string token) => Localization.instance != null && !string.IsNullOrEmpty(token) ? Localization.instance.Localize(token) : token;
-    internal static string Name(string prefab)
-    {
-        var drop = ObjectDB.instance ? ObjectDB.instance.GetItemPrefab(prefab)?.GetComponent<ItemDrop>() : null;
-        var token = drop ? drop!.m_itemData?.m_shared?.m_name : null;
-        return string.IsNullOrEmpty(token) ? prefab : Localize(token!);
     }
 }

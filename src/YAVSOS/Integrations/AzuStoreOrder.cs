@@ -305,7 +305,7 @@ internal static class AzuStoreOrder
             catch (Exception error) when (OptionalFailure.Recoverable(error)) { waiting.RemoveAt(at); Quiet(error); continue; }
             if (!done) continue;
             waiting.RemoveAt(at);
-            Plugin.Instance?.Results.Publish(run.Watch.Report);
+            Plugin.Instance?.Results.Publish(run.Watch.Report, run.Chests);
         }
     }
 

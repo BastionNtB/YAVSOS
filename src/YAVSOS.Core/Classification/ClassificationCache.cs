@@ -108,7 +108,7 @@ public sealed class ClassificationCache : IDisposable
         => capturedPolicy != null
             ? schedule(() => {
                 token.ThrowIfCancellationRequested();
-                var resolved = ClassificationRuleSet.FromSchema1(capturedPolicy);
+                var resolved = ClassificationRuleSet.FromPolicy(capturedPolicy);
                 return ClassificationPipeline.Build(capturedCatalog, resolved, capturedSources, token);
             }, token)
             : build != null ? build(capturedCatalog, capturedRules!, capturedSources, token)

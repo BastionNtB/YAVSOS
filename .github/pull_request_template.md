@@ -1,11 +1,11 @@
 ## Behavior
 
-Describe the concrete problem and resulting behavior.
+The problem, and how the mod behaves after this change.
 
 ## Design implications
 
-Explain relevant performance, mod compatibility, extension points, saved-data, and multiplayer authority/concurrency implications. Link any recorded decision.
+What this changes for performance, compatibility with other mods, extension points, saved data, and multiplayer authority and concurrency. Name any design decision it follows.
 
 ## Validation
 
-State checks performed, observed results, and remaining untested boundaries. For inventory/network changes, include quantity/metadata conservation and concurrent-client evidence.
+The checks you ran, what you saw, and what is still untested. For a change to inventories or networking, show that item counts and item data are conserved and that clients connected at the same time behave correctly.

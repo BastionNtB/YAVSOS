@@ -10,12 +10,12 @@ For how to install and use YAVSOS, see the player guide (the README).
 
 ## 1. Goals and the four pillars
 
-YAVSOS gives chests rules and puts items where the rules say. A rule names categories, exact
-items and filters, and a chest has a priority. The store key moves items from the player's
-inventory into nearby chests. "Clean up nearby" moves items between nearby chests so each one
-ends up where it belongs.
+YAVSOS gives chests rules and puts items where the rules say. A rule names categories, Always
+and Never items, and filters, and a chest has a priority. The stash key moves items from the
+player's inventory into nearby chests. "Clean up nearby" moves items between nearby chests so
+each one ends up where it belongs.
 
-Four priorities guide every change:
+Four pillars guide every change:
 
 - **Efficiency.** Work happens when its inputs change, not every frame. Categories are built
   when items, recipes or the category settings change. Every scan and run has a bound: one
@@ -35,7 +35,7 @@ What YAVSOS is not:
 
 - Not a replacement stasher when AzuAutoStore is installed. AzuAutoStore keeps doing the
   stashing; YAVSOS tells it which chest each item belongs in.
-- Not a replacement chest screen. The rule panel sits beside the game's own chest window.
+- Not a replacement chest screen. The YAVSOS panel sits beside the game's own chest window.
 - Not an item database for other mods. Its categories serve storage (section 10).
 
 YAVSOS is licensed GPL-3.0-or-later. The bundled ServerSync and MultiUserChest code is MIT
@@ -45,24 +45,24 @@ Decisions: D042, D082.
 
 ## 2. Compatibility first
 
-**AzuAutoStore does the stashing.** When AzuAutoStore is installed, its store key,
-single-item key and ground pickup stay in charge. YAVSOS hooks the check AzuAutoStore makes
-before storing into a chest. On a chest with a rule, the rule replaces AzuAutoStore's "the
-chest must already hold this item" check. YAVSOS also runs AzuAutoStore's store key item by
+**AzuAutoStore does the stashing.** When AzuAutoStore is installed, its stash key, its key for
+a single stack and its ground pickup stay in charge. YAVSOS hooks the check AzuAutoStore makes
+before it stashes into a chest. On a chest with a rule, the rule replaces AzuAutoStore's "the
+chest must already hold this item" check. YAVSOS also runs AzuAutoStore's stash key item by
 item in YAVSOS's chest order (section 5). Every item still goes in through AzuAutoStore's own
 store call, so its messages, skip lists, exclusions and multiplayer handling are unchanged.
-Without AzuAutoStore, YAVSOS stashes itself, with the same order.
+Without AzuAutoStore, YAVSOS stashes by itself, in the same order.
 
 Why: players already know and trust AzuAutoStore. A storage mod that replaces it forces a
 choice between the two. The alternative, a YAVSOS stasher that is always active, was
 rejected for that reason.
 
-**A partner's behaviour is accepted.** A job handed to another mod follows that mod's model,
-and a fault inside it is that mod's to fix. YAVSOS documents such behaviour as inherited
+**A partner's behavior is accepted.** A job handed to another mod follows that mod's model,
+and a fault inside it is that mod's to fix. YAVSOS documents such behavior as inherited
 instead of rebuilding around it. Two examples:
 
-- AzuAutoStore's pause key stops only its ground pickup; its own store key ignores the pause.
-  YAVSOS does the same: cleanup and the ordered store key ignore the pause, and YAVSOS's
+- AzuAutoStore's pause key stops only its ground pickup; its own stash key ignores the pause.
+  YAVSOS does the same: cleanup and the ordered stash key ignore the pause, and YAVSOS's
   ground-pickup choice respects it.
 - A setting that belongs to a partner stays there. With AzuAutoStore installed, YAVSOS's
   `Stash` settings are shown read-only, with a note that AzuAutoStore controls them. Their
@@ -81,10 +81,12 @@ isolated patch that records when it can be removed. Examples:
 
 **Bundled code stays close to upstream.** ServerSync and MultiUserChest are bundled inside
 `YAVSOS.dll` at pinned versions. Both are kept as close to upstream as possible, so players
-get the same behaviour as from the standalone mods. When upstream already tracks a needed
-change, YAVSOS waits for upstream's fix instead of patching its copy. The one documented
-change to the MultiUserChest copy is its per-player item format (section 6). The bundled
-MultiUserChest steps aside when the standalone mod or AzuAutoStore's copy is installed.
+get the same behavior as from the standalone mods. When upstream already tracks a needed
+change, YAVSOS waits for upstream's fix instead of patching its copy. Apart from a renamed
+namespace and YAVSOS's own loader in place of its plugin class, the one change to the
+MultiUserChest copy is how it handles each player's item format (section 6). The bundled
+MultiUserChest steps aside when the standalone mod or AzuAutoStore's copy is installed, and stays
+off with QuickStack, SimpleSort or QuickStore, which conflict with it.
 
 Decisions: D030, D042, D043, D047, D061, D070, D079, D090, D097.
 
@@ -110,11 +112,11 @@ and ships. Tombstones, containers on a creature, world-spawned containers (such 
 chests) and RossItemDrawers drawers are excluded; a drawer's own item reservation already acts
 as its rule. The alternative, a list of supported chests, would miss every new modded chest.
 
-**The runtime backstop refuses one write, not the mod.** If AzuAutoStore writes into a ruled
-chest by a path the rule did not approve, YAVSOS refuses that write and the item stays with
-the player. It logs once per path and keeps the integration running. Only the startup checks
-turn an integration off. Disabling the integration on the first surprise was rejected: one
-unusual path would make the whole mod useless.
+**The runtime backstop refuses one write, not the mod.** If AzuAutoStore writes into a chest
+with a rule by a path the rule did not approve, YAVSOS refuses that write and the item stays
+with the player. It logs once per path and keeps the integration running. Only the startup
+checks turn an integration off. Disabling the integration on the first surprise was rejected:
+one unusual path would make the whole mod useless.
 
 **A per-item round trip guards moves into another player's chest.** Such an item travels in
 the game's save format. Each one is saved and loaded before it moves. A durability change of
@@ -128,12 +130,12 @@ optional piece disables only itself:
 
 - one item whose data can't be read lands in Misc alone, named in the log;
 - a stack that can't be captured safely is skipped and the rest of the inventory is stashed;
-- if a category build step still fails after 3 tries, 3 seconds apart, the Categories mark
-  says so, and exact items keep working.
+- if a category build step still fails after 3 retries, 3 seconds apart, the Categories mark
+  says so, and Always and Never items keep working.
 
 The status marks at the top right of the panel use four states: a tick (working), amber
 ("This chest:" a caution about the open chest, or "Partly working:" one optional part is
-off), a cross ("Not working:") and a grey dash ("Off:" a setting turned it off). A mod that
+off), a cross ("Not working:") and a gray dash ("Off:" a setting turned it off). A mod that
 is not installed gets no mark.
 
 Decisions: D045, D046, D058, D068, D086, D087.
@@ -162,9 +164,10 @@ umbrella. Ticking an umbrella equals ticking all its subcategories. Both propert
 computed, not listed by hand. The taxonomy keeps growing as new mods and useful distinctions
 appear; a category ID stays the same while its meaning stays compatible.
 
-**The admin's categories file replaces, not adds.** `com.bastionntb.yavsos.categories.xml`
-in the config folder can add categories and assign items. An assignment replaces that item's
-automatic categories, so no unexpected automatic membership remains. YAVSOS creates the file
+**The admin's categories file has the last word.** `com.bastionntb.yavsos.categories.xml` in
+the config folder can add categories and assign items. An assignment's `<member>` lines replace
+that item's automatic categories, so no unexpected automatic membership remains; since 1.2,
+`<add>` and `<remove>` lines change only the categories they name. YAVSOS creates the file
 empty and never overwrites it. A saved change applies without a restart; a file that can't be
 read keeps the last version that worked in use, and the log says why. There is one file for
 now; reading several (one per mod or pack) is later work.
@@ -184,20 +187,20 @@ Decisions: D001, D015, D020, D028, D029, D038, D049, D051, D081, D086, D094.
 
 ## 5. Rules and ranking
 
-**What a rule holds.** A chest's rule lists categories, exact items marked Always or Never,
-and filters. Filters judge either the item (food's main stat, eaten by a tame, can go
+**What a rule holds.** A chest's rule lists categories, Always and Never items, and
+filters. Filters judge either the item (food's main stat, eaten by a tame, can go
 through portals, item origin, used for, can be upgraded) or the actual stack (upgrade level,
 damaged, EpicLoot rarity, crafted by). Never always wins. Always accepts the item even when
 no ticked category or filter does. The editor offers only the filters and values that the
 ticked categories' items can have. A stack filter that can't read its evidence at that moment
-rejects the stack, so a "plain" rarity rule never takes an item it could not check.
+rejects the stack, so a "plain" rarity rule never accepts an item it could not check.
 
 **One ranking.** When several chests accept an item, they are ranked in this order:
 
 1. ordinary chests before overflow chests (a stored overflow flag is kept; there is no control
    for it);
 2. higher priority first;
-3. a closer kind of match: an exact item before a filtered category before a plain category;
+3. a closer kind of match: an Always item before a filtered category before a plain category;
 4. the more specific category (a subcategory before its umbrella);
 5. the smaller category (Metals before Crafting materials, which holds far more items);
 6. the chest's ID, so every player computes the same order.
@@ -206,7 +209,7 @@ Players see priority as levels 1 to 10, 1 first and 5 (Normal) the default. The 
 design compared specificity before priority. It was changed because a player who sets a
 priority means it to win.
 
-**One placement decision.** The store key (AzuAutoStore's or YAVSOS's) and "Clean up nearby"
+**One placement decision.** The stash key (AzuAutoStore's or YAVSOS's) and "Clean up nearby"
 ask the same question: where does this item belong? They use the same order, so after a
 stash, cleanup finds nothing to move. Always means "accepted here, ranked above categories at
 the same priority"; it does not mean "kept here".
@@ -214,24 +217,26 @@ the same priority"; it does not mean "kept here".
 Cleanup moves three kinds of stack:
 
 - a stack the chest's rule rejects;
-- a stack in a container without a rule (chests, carts and ships the players built), when a
-  ruled chest accepts it;
-- a stack a ruled chest accepts, when another chest ranks strictly higher for it.
+- a stack in a chest without a rule (chests, carts and ships the players built), when a chest
+  with a rule accepts it;
+- a stack in a chest with a rule that accepts it, when another chest ranks strictly higher
+  for it.
 
-Equally ranked chests never trade items. Cleanup never moves items into containers without a
-rule; the stash does fill an unruled chest that already holds the item. A chest can opt out
+Equally ranked chests never trade items. Cleanup never moves items into chests without a rule;
+the stash does fill a chest without a rule that already holds the item. A chest can opt out
 with "Don't clean up this chest".
 
 **Rules survive change.** A rule naming a category, filter or filter value this version
 doesn't know keeps that part unchanged. The unknown part matches nothing, so the rule can only
-take less, never more, and it works fully again when the part returns. A rule stored in a
-format this version can't read is kept untouched and takes nothing. Before categories are
-ready (just after joining, or during a rebuild with nothing to keep), a rule's exact items
-already work; only its category part waits.
+accept less, never more, and it works fully again when the part returns. A rule stored in a
+format this version can't read is kept untouched and accepts nothing. Before categories are
+ready (just after joining, or during a rebuild with nothing to keep), a rule's Always and
+Never items already work; only its category part waits.
 
 **Rules apply at once.** Every change in the panel is saved immediately; there is no Save
 button. Unticking the last part removes the rule, and Clear rule removes every part,
-priority included.
+priority included. Undo puts back the chest's rule from before the last change; pressed
+again, it redoes the change.
 
 **Who may edit.** Editing a rule uses the game's own access model, the same check as opening
 the chest: a private chest is its builder's alone, and inside an active ward only the ward's
@@ -311,10 +316,10 @@ Decisions: D004 (as amended), D005, D041, D042, D043, D057, D061, D065, D083, D0
 
 **Shared settings come from the server.** The `Server` settings and the categories file are
 synchronised from the server through ServerSync, bundled at a pinned version. While
-`Server/LockSharedPolicy` is on, only admins can change them. A client's change request is
-accepted only from the current connection and only for shared entries, then ServerSync's
-admin and lock rules decide. While a server's values are in force, a player's own config
-file keeps the player's own values, so leaving the server restores them.
+`Server/LockSharedPolicy` is on, only server admins can change them. A client's change request
+is accepted only from the current connection and only for shared entries, then ServerSync's
+admin and lock rules decide. While a server's values are in force, a player's own settings file
+keeps the player's own values, so leaving the server restores them.
 
 **Configuration sync grants no chest authority.** Synchronised settings say what players may
 do; they never let anyone write to a chest. Every move still needs the game's own access and
@@ -322,7 +327,7 @@ ownership (section 6).
 
 **Modes are detected, not chosen.**
 
-| Situation | Behaviour |
+| Situation | Behavior |
 | --- | --- |
 | Single-player, or the host of a Steam-hosted world | The game is its own server and classifies locally |
 | Server and client both have YAVSOS | The server's categories and shared settings apply |
@@ -344,7 +349,7 @@ other players' chests still go through MultiUserChest, which needs no server mod
 for cleanup and for YAVSOS's own stash. `Server/MaximumChests` (default 256, 16 to 256) is how
 many of the nearest chests one cleanup or YAVSOS stash handles; the result says when more
 were in range. Cleanup also takes items out of at most the 64 nearest chests that hold any.
-With AzuAutoStore installed, its store key uses its own range and finds chests itself, so
+With AzuAutoStore installed, its stash key uses its own range and finds chests itself, so
 both settings then limit cleanup only. Raising the bound to 512 was considered and not
 chosen: more planning cost per press, with no need reported. `Server/AllowStashing` and
 `Server/AllowCleanup` turn the two actions off.
@@ -376,9 +381,10 @@ old key is read once), and the item-format marker moved under the YAVSOS ID.
 
 **Rule data lasts across versions.** A chest's rule is stored on the chest in a versioned
 envelope. One principle applies to categories, rule filters, filter values and the values a
-server sends: keep what you don't recognise, and match nothing with it. A newer rule read by
-an older YAVSOS therefore takes less, never more, and nothing is lost when the chest is edited.
-A rule in a format this version can't read at all is kept untouched and takes nothing. A
+server sends: keep what you don't recognize, and match nothing with it. A newer rule read by
+an older YAVSOS therefore accepts less, never more, and nothing is lost when the chest is
+edited. A rule in a format this version can't read at all is kept untouched and accepts
+nothing. A
 release that must rename a category ID ships a mapping from the old ID.
 
 **A clean release.** Test fixtures build only in a separate test configuration and are absent
@@ -388,33 +394,37 @@ Decisions: D007, D050, D058, D077, D078, D081, D086.
 
 ## 9. Interface
 
-**One panel, built with Jotunn.** The rule panel uses Jotunn's GUI and appears beside the
+**One panel, built with Jotunn.** The YAVSOS panel uses Jotunn's GUI and appears beside the
 game's chest window. Jotunn is a required dependency. A fallback panel for games without
 Jotunn was rejected: two panels to maintain. If Jotunn's GUI doesn't pass YAVSOS's check,
 only the panels turn off; rules, stashing and cleanup keep working.
 
-The panel is stacked in sections: **Rule** (what the chest takes, with Clear rule), **Edit**
-(Categories, Items and Filters tabs), **This chest** (priority and the cleanup opt-out) and
-**Clean up nearby**. The status marks sit at the top right (section 3). In the Items tab, a
-click on an item cycles Always, Never and clear.
+Under the title, a strip shows the chest label, or the message from the player's last
+action. Below it the panel is stacked in sections: **Rule** (what the chest accepts, with
+undo, Copy, Paste, Clear rule and rule suggestions), **Edit** (Categories, Items and Filters
+tabs), **This chest** (priority) and a last row with the cleanup opt-out and **Clean up
+nearby**. The status marks sit at the top right (section 3). In the Items tab, a click on an
+item's icon cycles Always, Never and clear.
 
 **Explanations go where the player looks.**
 
 - An item's tooltip adds its smallest categories and facts worth knowing, such as
-  "Raw food, Animal feed · eaten by Boar, Hen".
-- For a stack in the inventory, the tooltip also says where storing that one stack would put
+  "Food ingredients, Animal feed · eaten by Boar, Hen".
+- For a stack in the inventory, the tooltip also says where stashing that one stack would put
   it, from the same placement decision: "Stash stack [Middle mouse]: Chest 3 m away". It names
-  the single-stack key that applies, AzuAutoStore's when AzuAutoStore does the storing.
-- A chest's hover text adds its rule in short words, such as
+  the stack key that applies, AzuAutoStore's when AzuAutoStore does the stashing.
+- A chest's hover text adds its chest label, the rule in short words, such as
   "Food › eaten by Boar · priority 2 (Urgent)". There is no "YAVSOS:" prefix.
-- A result panel after YAVSOS's own stash or cleanup says what moved, what stayed and why.
+- After YAVSOS's own stash or cleanup, a result panel says what moved, where it went, what
+  stayed and why. After AzuAutoStore's stash key, it says what moved and where.
 
 **Search lights chests.** Searching in the Categories tab or the Items tab lights the nearby
-chests whose rule could take the items found. A search has no real stack to judge, so filters
-on the stack (upgrade level, damaged, rarity, crafter) are set aside for the highlight;
+chests that hold the items found. With "Also show chests that accept it" on, chests whose rules
+could accept them light up too, in another color. A search has no real stack to judge, so
+filters on the stack (upgrade level, damaged, rarity, crafter) are set aside for that test;
 Always, Never, categories and item filters still decide. Chests stay lit while the search is
-active. After the chest closes they stay lit for `Controls/HighlightSecondsAfterClose`
-seconds (default 20, a local setting), so the player can walk to them.
+active. After the chest closes they stay lit for `Controls/HighlightSecondsAfterClose` seconds
+(default 20, a local setting), so the player can walk to them.
 
 **The display never writes.** Search, highlight, labels and explanations never change a
 chest, an inventory or a rule. A view that fails turns off alone.
@@ -432,7 +442,7 @@ Decisions: D062, D066, D069, D070, D071, D100.
 - **A public data API.** Sharing YAVSOS's item evidence and categories as a resource other
   mods can use and extend is a separate design question for later, together with reading
   several categories files.
-- **Ground pickup in YAVSOS's own stash.** Picking up dropped items is not organisation, and
+- **Ground pickup in YAVSOS's own stash.** Picking up dropped items is not organization, and
   many mods already do it. With AzuAutoStore, its ground pickup follows the rules.
 - **Automatic cleanup.** Cleanup runs only when a player asks for it. A bedtime trigger was
   considered and rejected as impractical.

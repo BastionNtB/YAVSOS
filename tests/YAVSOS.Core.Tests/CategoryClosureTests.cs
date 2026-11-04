@@ -133,7 +133,7 @@ public sealed class CategoryClosureTests
     {
         var catalog = CatalogSnapshot.Build(new[] { Item("Gloves", "Hands"), Item("Wood"), Item("Pick", "TwoHandedWeapon", "Pickaxes") });
         var policy = EmptyPolicy();
-        var snapshot = AuthoritativeAssignmentSnapshot.Create(catalog, ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy)), policy);
+        var snapshot = AuthoritativeAssignmentSnapshot.Create(catalog, ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy)), policy);
         var wire = AuthoritativeAssignmentsCodec.ToWire(snapshot);
         Assert.DoesNotContain(CategoryClosure.Source, Decoded(wire));
         Assert.Contains(snapshot.Items["Gloves"].Memberships, CategoryClosure.IsDerived);
@@ -149,7 +149,7 @@ public sealed class CategoryClosureTests
     {
         var policy = EmptyPolicy();
         var server = CatalogSnapshot.Build(new[] { Item("Wood") });
-        var snapshot = AuthoritativeAssignmentSnapshot.Create(server, ClassificationPipeline.Build(server, ClassificationRuleSet.FromSchema1(policy)), policy);
+        var snapshot = AuthoritativeAssignmentSnapshot.Create(server, ClassificationPipeline.Build(server, ClassificationRuleSet.FromPolicy(policy)), policy);
         var local = CatalogSnapshot.Build(new[] { Item("Wood"), Item("ClientOnly") });
         Assert.Equal(new[] { "misc" }, AllCategories(snapshot.Resolve("ClientOnly", local)!));
         Assert.Equal(new[] { "materials", "materials.wood" }, AllCategories(snapshot.Resolve("Wood", local)!).OrderBy(x => x, StringComparer.Ordinal));

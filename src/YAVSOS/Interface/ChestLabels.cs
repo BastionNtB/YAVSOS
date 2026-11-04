@@ -5,6 +5,7 @@ using HarmonyLib;
 using UnityEngine;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Integrations;
 using YAVSOS.Transfers;
 
@@ -12,8 +13,8 @@ namespace YAVSOS.Interface;
 
 /// <summary>
 /// P6-07 (D062 Q3): a chest with a rule shows an automatic label from it in its hover text, such as
-/// "Ores &amp; metals · priority 1" (no prefix, Q8). D122: a chest the search lit also says why ("holds Copper ×57",
-/// "takes Copper"), ruled or not. Appended, never rebuilt, after BetterUI's postfix (Harmony ID
+/// "Ores &amp; metals · priority 1" (no prefix, Q8). D122: a chest the search lit also says why ("Holds Copper ×57",
+/// "Accepts Copper"), ruled or not. Appended, never rebuilt, after BetterUI's postfix (Harmony ID
 /// <c>MK_BetterUI</c>; 2.5.13 replaces the text of a non-empty chest), so its "( 12/40 )" and the vanilla hints stay.
 /// The label is built once per chest and rule (payload) and category set; per hover frame it costs one payload read
 /// and a comparison. Read only. Ross ItemDrawers' drawers have their own hover text and get no label. With
@@ -24,7 +25,7 @@ namespace YAVSOS.Interface;
 internal static class ChestLabels
 {
     internal const string BetterUi = "MK_BetterUI";
-    private sealed class Cached { internal string Payload = "\0"; internal object? Taxonomy; internal string Line = ""; }
+    private sealed class Cached { internal string Payload = "\0"; internal object? Taxonomy; internal int Language = -1; internal string Line = ""; }
     private static readonly ConditionalWeakTable<Container, Cached> Cache = new ConditionalWeakTable<Container, Cached>();
     private static bool failed;
     internal static ManualLogSource? Log;
@@ -66,9 +67,10 @@ internal static class ChestLabels
             if (payload.Length == 0) { __result += why; return; }
             var taxonomy = plugin.RuleTaxonomy;
             var cached = Cache.GetOrCreateValue(__instance);
-            if (!ReferenceEquals(cached.Payload, payload) && !StringComparer.Ordinal.Equals(cached.Payload, payload) || !ReferenceEquals(cached.Taxonomy, taxonomy))
+            if (!ReferenceEquals(cached.Payload, payload) && !StringComparer.Ordinal.Equals(cached.Payload, payload) || !ReferenceEquals(cached.Taxonomy, taxonomy)
+                || cached.Language != Texts.Generation)
             {
-                cached.Payload = payload; cached.Taxonomy = taxonomy;
+                cached.Payload = payload; cached.Taxonomy = taxonomy; cached.Language = Texts.Generation;
                 var label = Label(plugin, payload, taxonomy);
                 // Q8: no "YAVSOS:" prefix; the colour sets the line apart.
                 cached.Line = label == null ? "" : "\n<color=" + ChestLabelPreview.Color + ">" + label + "</color>";
@@ -90,20 +92,23 @@ internal static class ChestLabels
     internal static string? Label(Plugin plugin, string payload, ClassificationTaxonomy taxonomy)
     {
         var read = plugin.RuleEvaluator.Read(payload, taxonomy);
-        return read.HasRule && RuleText.Label(read.Rules, taxonomy, RuleControls.ItemName, RuleControls.OpenValueName) is { } label ? Plain(label) : null;
+        // P10-04: the label's parts are messages, measured and cut in the player's language (case 9).
+        return read.HasRule && RuleText.Label(read.Rules, CategoryText.For(taxonomy), RuleControls.ItemName, Texts.Get, RuleControls.OpenValueName) is { } label
+            ? Plain(RuleText.Cut(Texts.Get(label), RuleText.MaximumLabel)) : null;
     }
 
-    // D122/D123: the lit chest's "holds …"/"takes …"/"keeps …" line, built again only when it or its colour changes
-    // (hover text is asked for every frame).
-    private static (ChestHighlight.Kind Kind, string Why, Color Color) whyKey;
+    // D122/D123: the lit chest's "Holds …"/"Accepts …"/"… stays here" line, formatted again only when it, its colour or
+    // the language changes (hover text is asked for every frame). B2-06: the highlight keeps a message, not English, so
+    // a language change redraws the line; the names in it are already escaped for rich text.
+    private static (ChestHighlight.Kind Kind, Message? Why, Color Color, int Language) whyKey;
     private static string whyLine = "";
-    private static string WhyLine(ChestHighlight.Kind kind, string why)
+    private static string WhyLine(ChestHighlight.Kind kind, Message why)
     {
         var color = ChestHighlight.ColorOf(kind);
-        if (whyKey.Kind != kind || !ReferenceEquals(whyKey.Why, why) || whyKey.Color != color)
+        if (whyKey.Kind != kind || !ReferenceEquals(whyKey.Why, why) || whyKey.Color != color || whyKey.Language != Texts.Generation)
         {
-            whyKey = (kind, why, color);
-            whyLine = "\n<color=#" + ColorUtility.ToHtmlStringRGB(color) + ">" + Plain(why) + "</color>";
+            whyKey = (kind, why, color, Texts.Generation);
+            whyLine = "\n<color=#" + ColorUtility.ToHtmlStringRGB(color) + ">" + Texts.Get(why) + "</color>";
         }
         return whyLine;
     }

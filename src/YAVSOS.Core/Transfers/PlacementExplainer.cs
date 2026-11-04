@@ -103,20 +103,26 @@ public sealed class PlacementExplanation
     public PlacementOutcome Outcome { get; }
     public string? ChosenId { get; }
     /// <summary>For <see cref="PlacementOutcome.Blocked"/>: the first gate that closed an accepting chest, as the run reports it.</summary>
-    public CleanupReason? Blocked { get; }
+    public RunReason? Blocked { get; }
     /// <summary>X1: why <see cref="ChosenId"/> takes it; <see cref="PlacementBasis.None"/> when nothing was chosen.</summary>
     public PlacementBasis Basis { get; }
-    /// <summary>For <see cref="PlacementBasis.Category"/>: the deciding category's display name, such as "Metals".</summary>
+    /// <summary>For <see cref="PlacementBasis.Category"/>: the deciding category's English source name, such as "Metals" (diagnostics).</summary>
     public string? Category { get; }
+    /// <summary>
+    /// For <see cref="PlacementBasis.Category"/>: the deciding category's name as players see it, a message or a name an
+    /// admin set (<see cref="CategoryNames.Of"/>).
+    /// </summary>
+    public object? CategoryName { get; }
     /// <summary>One line, e.g. "Copper → Metals chest: category Metals, priority 4 (Normal)".</summary>
     public string Summary { get; }
     /// <summary>Every chest passed in, in run order, then those out of range.</summary>
     public IReadOnlyList<ChestExplanation> Chests { get; }
-    internal PlacementExplanation(string prefab, PlacementOutcome outcome, string? chosen, CleanupReason? blocked, string summary, List<ChestExplanation> chests,
-        PlacementBasis basis = PlacementBasis.None, string? category = null)
+    internal PlacementExplanation(string prefab, PlacementOutcome outcome, string? chosen, RunReason? blocked, string summary, List<ChestExplanation> chests,
+        PlacementBasis basis = PlacementBasis.None, (string Source, object Shown)? category = null)
     {
         Prefab = prefab; Outcome = outcome; ChosenId = chosen; Blocked = blocked; Summary = summary; Chests = chests.AsReadOnly();
-        Basis = chosen == null ? PlacementBasis.None : basis; Category = Basis == PlacementBasis.Category ? category : null;
+        Basis = chosen == null ? PlacementBasis.None : basis;
+        if (Basis == PlacementBasis.Category && category is { } named) { Category = named.Source; CategoryName = named.Shown; }
     }
     public ChestExplanation? For(string chestId) => Chests.FirstOrDefault(x => StringComparer.Ordinal.Equals(x.ChestId, chestId));
 }
@@ -213,8 +219,8 @@ public static class PlacementExplainer
         var names = new Names(input.Taxonomy, chestName, itemName, openName);
         var prefab = stack.Identity.Prefab; var item = names.Item(prefab);
         var rows = new List<ChestExplanation>();
-        PlacementExplanation Done(PlacementOutcome outcome, string summary, string? chosen = null, CleanupReason? blocked = null,
-            (PlacementBasis Basis, string? Category) basis = default)
+        PlacementExplanation Done(PlacementOutcome outcome, string summary, string? chosen = null, RunReason? blocked = null,
+            (PlacementBasis Basis, (string, object)? Category) basis = default)
         {
             if (!detail) rows.Clear();
             else foreach (var id in outOfRange ?? Array.Empty<string>()) rows.Add(new ChestExplanation(id, ChestVerdict.OutOfRange, "out of range", null));
@@ -238,12 +244,12 @@ public static class PlacementExplainer
 
         // The planner's order: kept stacks and stacks no chest takes stay silently, then unsupported and held ones,
         // then the routes in order: gates first, then room.
-        StashPlanner.Route? chosen = null; var full = new HashSet<StashPlanner.Route>(); CleanupReason? blocked = null;
+        StashPlanner.Route? chosen = null; var full = new HashSet<StashPlanner.Route>(); RunReason? blocked = null;
         PlacementOutcome outcome; string summary;
         if (kept) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + (unselected ? "not selected" : "protected (equipped, quest item, hotbar or quick slot)"); }
         else if (routes.Count == 0) { outcome = PlacementOutcome.NoChest; summary = item + " stays: no chest in range takes it"; }
-        else if (!stack.TransferSupported) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + CleanupReport.Describe(CleanupReason.Unsupported); }
-        else if (input.Held.Contains(stack.Handle)) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + CleanupReport.Describe(CleanupReason.Held); }
+        else if (!stack.TransferSupported) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + Diagnostic(RunReason.Unsupported); }
+        else if (input.Held.Contains(stack.Handle)) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + Diagnostic(RunReason.Held); }
         else
         {
             foreach (var route in routes)
@@ -253,7 +259,7 @@ public static class PlacementExplainer
                 full.Add(route);
             }
             if (chosen != null) { outcome = PlacementOutcome.Goes; summary = item + " → " + names.Chest(chosen.Chest.Id) + ": " + Why(chosen); blocked = null; }
-            else if (blocked != null) { outcome = PlacementOutcome.Blocked; summary = item + " stays: " + CleanupReport.Describe(blocked.Value); }
+            else if (blocked != null) { outcome = PlacementOutcome.Blocked; summary = item + " stays: " + Diagnostic(blocked.Value); }
             else { outcome = PlacementOutcome.NoRoom; summary = item + " stays: the chests that take it are full"; }
         }
 
@@ -302,8 +308,8 @@ public static class PlacementExplainer
         var names = new Names(input.Taxonomy, chestName, itemName, openName);
         var prefab = stack.Identity.Prefab; var item = names.Item(prefab);
         var rows = new List<ChestExplanation>();
-        PlacementExplanation Done(PlacementOutcome outcome, string summary, string? chosen = null, CleanupReason? blocked = null,
-            (PlacementBasis Basis, string? Category) basis = default)
+        PlacementExplanation Done(PlacementOutcome outcome, string summary, string? chosen = null, RunReason? blocked = null,
+            (PlacementBasis Basis, (string, object)? Category) basis = default)
         {
             if (!detail) rows.Clear();
             else foreach (var id in outOfRange ?? Array.Empty<string>()) rows.Add(new ChestExplanation(id, ChestVerdict.OutOfRange, "out of range", null));
@@ -318,7 +324,7 @@ public static class PlacementExplainer
         // The planner's own limits (D086 D9): the nearest chests, then the nearest sources that are not opted out and hold items.
         var ordered = context.Ordered;
         if (!ordered.Contains(source) || !context.Sources.Contains(source.Id))
-        { Rest(ChestVerdict.NotConsidered, "not considered"); return Done(PlacementOutcome.Skipped, item + " stays: " + CleanupReport.Describe(CleanupReason.ChestLimit)); }
+        { Rest(ChestVerdict.NotConsidered, "not considered"); return Done(PlacementOutcome.Skipped, item + " stays: " + Diagnostic(RunReason.ChestLimit)); }
 
         var ruled = context.Ruled;
         var assessed = CleanupPlanner.Assess(input, evaluator, ruled, source, stack);
@@ -328,7 +334,7 @@ public static class PlacementExplainer
         var usable = assessed.Destinations.Where(x => x.Gate == CleanupGate.Usable).ToList();
         var blockedRow = assessed.Destinations.FirstOrDefault(x => x.Gate == CleanupGate.Blocked);
         CleanupPlanner.Destination? chosen = null; var full = new HashSet<CleanupPlanner.Destination>();
-        PlacementOutcome outcome; string summary; CleanupReason? blocked = null; var considered = true;
+        PlacementOutcome outcome; string summary; RunReason? blocked = null; var considered = true;
         var here = names.Chest(source.Id);
         if (assessed.Kind == null)
         { outcome = PlacementOutcome.Stays; summary = item + " stays: the rule of " + here + " can't be read by this version"; considered = false; }
@@ -345,13 +351,13 @@ public static class PlacementExplainer
         else if (usable.Count == 0)
         {
             if (assessed.Kind == CleanupKind.Resort) { outcome = PlacementOutcome.Stays; summary = item + " stays in " + here + ": no better chest takes it"; }
-            else if (blockedRow != null) { outcome = PlacementOutcome.Blocked; blocked = blockedRow.Blocked; summary = item + " stays: " + CleanupReport.Describe(blocked!.Value); }
+            else if (blockedRow != null) { outcome = PlacementOutcome.Blocked; blocked = blockedRow.Blocked; summary = item + " stays: " + Diagnostic(blocked!.Value); }
             else { outcome = PlacementOutcome.NoChest; summary = item + " stays: no chest in range takes it"; }
         }
         else if (stack.Protected || !stack.TransferSupported || source.Inventory.ProtectedCells.Contains(stack.Y * source.Inventory.Width + stack.X))
-        { outcome = PlacementOutcome.Kept; summary = item + " stays: " + CleanupReport.Describe(CleanupReason.Unsupported); }
+        { outcome = PlacementOutcome.Kept; summary = item + " stays: " + Diagnostic(RunReason.Unsupported); }
         else if (input.Held.Contains(stack.Handle))
-        { outcome = PlacementOutcome.Kept; summary = item + " stays: " + CleanupReport.Describe(CleanupReason.Held); }
+        { outcome = PlacementOutcome.Kept; summary = item + " stays: " + Diagnostic(RunReason.Held); }
         else
         {
             foreach (var row in usable)
@@ -398,17 +404,17 @@ public static class PlacementExplainer
         return Done(outcome, summary, chosen?.Chest.Id, blocked, chosen == null ? default : names.Basis(chosen.Ranked, resolved, facets));
     }
 
-    private static ChestExplanation Routed(string id, CleanupReason? blocked, bool chosen, bool backup, string why, RankedDestination? rank)
+    private static ChestExplanation Routed(string id, RunReason? blocked, bool chosen, bool backup, string why, RankedDestination? rank)
     {
         if (blocked != null)
             return new ChestExplanation(id, blocked switch
             {
-                CleanupReason.OtherOwnerNoMuc => ChestVerdict.OtherOwnerNoMuc, CleanupReason.OtherOwnerFormatUnknown => ChestVerdict.OtherOwnerFormatUnknown,
-                CleanupReason.OtherOwnerMucUnusable => ChestVerdict.OtherOwnerMucUnusable, CleanupReason.OtherOwnerMucSilent => ChestVerdict.OtherOwnerMucSilent,
-                CleanupReason.OtherOwnerMucChecking => ChestVerdict.OtherOwnerMucChecking,
-                CleanupReason.BothRemote => ChestVerdict.BothRemote, CleanupReason.AzuExcluded => ChestVerdict.AzuExcluded,
+                RunReason.OtherOwnerNoMuc => ChestVerdict.OtherOwnerNoMuc, RunReason.OtherOwnerFormatUnknown => ChestVerdict.OtherOwnerFormatUnknown,
+                RunReason.OtherOwnerMucUnusable => ChestVerdict.OtherOwnerMucUnusable, RunReason.OtherOwnerMucSilent => ChestVerdict.OtherOwnerMucSilent,
+                RunReason.OtherOwnerMucChecking => ChestVerdict.OtherOwnerMucChecking,
+                RunReason.BothRemote => ChestVerdict.BothRemote, RunReason.AzuExcluded => ChestVerdict.AzuExcluded,
                 _ => ChestVerdict.RuleRejects
-            }, why + "; but " + CleanupReport.Describe(blocked.Value), rank);
+            }, why + "; but " + Diagnostic(blocked.Value), rank);
         if (chosen) return new ChestExplanation(id, ChestVerdict.Chosen, why, rank);
         return backup ? new ChestExplanation(id, ChestVerdict.Backup, why + "; ranked lower", rank)
             : new ChestExplanation(id, ChestVerdict.Full, why + "; no room", rank);
@@ -448,6 +454,30 @@ public static class PlacementExplainer
         return "its rule doesn't take it";
     }
 
+    // P10-04: diagnostic English for Summary and ChestExplanation.Text, which no player reads (tests and Lab only), like a
+    // log line. The item tooltip says these causes with RunReport.Reason (ExplanationView).
+    private static string Diagnostic(RunReason reason) => reason switch
+    {
+        RunReason.NoCapacity => "no room",
+        RunReason.NoDestination => "no chest takes it",
+        RunReason.AzuExcluded => "AzuAutoStore's config excludes it",
+        RunReason.Held => "in use",
+        RunReason.Unsupported => "protected",
+        RunReason.MucBusy => "other player's chest busy, run again",
+        RunReason.Budget => "run limit reached, run again",
+        RunReason.ChestLimit => "in a chest farther than the nearest " + CleanupPlanner.MaximumSources + " with items; clean up again closer to it",
+        RunReason.OtherOwnerNoMuc => "another player's chest, no MultiUserChest",
+        RunReason.BothRemote => "both chests are other players'",
+        RunReason.OtherOwnerMucUnusable => "another player's chest; their MultiUserChest can't take requests",
+        RunReason.OtherOwnerMucSilent => "another player's chest; no MultiUserChest answered",
+        RunReason.OtherOwnerMucChecking => "another player's chest; still checking their MultiUserChest, run again in a moment",
+        RunReason.OtherOwnerFormatUnknown => "another player's chest; their MultiUserChest format is unknown",
+        RunReason.CategoriesPending => "waiting for categories to load, run again shortly",
+        RunReason.OptedOut => "its chest was set to be left alone",
+        RunReason.ChestUnreadable => "couldn't be read (see the log)",
+        _ => reason.ToString()
+    };
+
     private static void Lap(Action<string, double>? timed, Stopwatch? clock, string step)
     {
         if (timed == null || clock == null) return;
@@ -467,9 +497,9 @@ public static class PlacementExplainer
         internal string Chest(string id) => Bounded(chest?.Invoke(id), id);
         internal string Item(string prefab) => Bounded(item?.Invoke(prefab), prefab);
         internal string Category(string id) => taxonomy.Categories.TryGetValue(id, out var row) ? row.Name : id;
-        /// <summary>A filter value as players see it: a tame's name, "me" for the crafter, "plain" for no rarity.</summary>
+        /// <summary>A filter value: an open one by the caller's name for it (a tame's name, "me" for the crafter), else as stored.</summary>
         internal static string Value(string dimension, string value, Func<string, string, string>? open) =>
-            value != "unknown" && ClassificationFilters.Values(dimension) == null && open != null ? open(dimension, value) : RuleText.ValueName(dimension, value);
+            value != "unknown" && ClassificationFilters.Values(dimension) == null && open != null ? open(dimension, value) : value;
         internal static string Dimension(string id) => id switch
         {
             "mod" => "origin mod", "related-mod" => "related mod", "construction-mod" => "building mod",
@@ -490,12 +520,12 @@ public static class PlacementExplainer
         }
 
         /// <summary>X1: the basis of <see cref="Why"/> without its detail, for the tooltip's "counts as Metals".</summary>
-        internal (PlacementBasis, string?) Basis(RankedDestination rank, ClassificationResult? item, FacetEvidence[]? facets)
+        internal (PlacementBasis, (string, object)?) Basis(RankedDestination rank, ClassificationResult? item, FacetEvidence[]? facets)
         {
             if (rank.ExistingItemFallback) return (PlacementBasis.Holds, null);
             if (rank.Match == AcceptanceMatch.ExactItem) return (PlacementBasis.Always, null);
             var category = Decider(rank, item, facets).Category;
-            if (category != null) return (PlacementBasis.Category, Category(category));
+            if (category != null) return (PlacementBasis.Category, (Category(category), CategoryNames.Of(taxonomy, category)));
             return (rank.Match == AcceptanceMatch.Any ? PlacementBasis.Anything : PlacementBasis.Filters, null);
         }
 
@@ -509,12 +539,13 @@ public static class PlacementExplainer
             {
                 var (rule, category) = Decider(rank, item, facets);
                 part = category != null ? "category " + Category(category) : rank.Match == AcceptanceMatch.Any ? "takes anything" : "its filters";
-                // The chest label's words ("eaten by Boar or Lox", "crafted by me"), not raw tokens (runtime 2026-10-21).
-                var filters = rule == null ? "" : RuleText.Short(rule.Filters, open);
-                if (filters.Length != 0) part += (category != null ? RuleText.FilterMark : " ") + filters;
+                // P10-04: the filters as stored, open values by name ("eaten by Boar/Lox"); the chest label's words are messages now.
+                var filters = rule == null ? "" : string.Join(", ", rule.Filters.Where(x => x.Value.Count != 0)
+                    .Select(x => Dimension(x.Key) + " " + string.Join("/", x.Value.Select(v => Value(x.Key, v, open)))));
+                if (filters.Length != 0) part += (category != null ? " › " : " ") + filters;
                 if (rank.Generality > 0) part += ", " + rank.Generality + " level" + (rank.Generality == 1 ? "" : "s") + " above the item's own category";
             }
-            if (rules.Priority != 0) part += ", " + ChestPriority.Short(rules.Priority);
+            if (rules.Priority != 0) part += ", priority " + ChestPriority.Level(rules.Priority);
             if (rules.Overflow) part += ", overflow";
             return part;
         }

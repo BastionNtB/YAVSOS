@@ -19,9 +19,15 @@ public sealed class ClassificationCategory
     public string? Parent { get; }
     /// <summary>An "Other" subcategory the taxonomy derived; rebuilt by every taxonomy, never an input.</summary>
     public bool Generated { get; }
+    /// <summary>
+    /// P10-04 (S13): the message key of a built-in category's name, so players see it in their language
+    /// (<see cref="CategoryNames"/>). Null for a name an admin set, which is shown as written. <see cref="Name"/> stays the
+    /// English source name: the fingerprint, logs and diagnostics use it.
+    /// </summary>
+    public string? NameKey { get; }
     public ClassificationCategory(string id, string name, int displayRank, string? parent = null)
-        : this(id, name, displayRank, parent, false) { }
-    private ClassificationCategory(string id, string name, int displayRank, string? parent, bool generated)
+        : this(id, name, displayRank, parent, false, null) { }
+    private ClassificationCategory(string id, string name, int displayRank, string? parent, bool generated, string? nameKey)
     {
         ClassificationValidation.Category(id); ClassificationValidation.Text(name, 128);
         if (displayRank < 0 || displayRank > 999) throw new ArgumentOutOfRangeException(nameof(displayRank));
@@ -30,10 +36,18 @@ public sealed class ClassificationCategory
             ClassificationValidation.Category(parent);
             if (parent == id) throw new ArgumentException("A category cannot be its own parent.");
         }
-        Id = id; Name = name; DisplayRank = displayRank; Parent = parent; Generated = generated;
+        Id = id; Name = name; DisplayRank = displayRank; Parent = parent; Generated = generated; NameKey = nameKey;
     }
+    /// <summary>A built-in category whose name players see through <paramref name="nameKey"/>.</summary>
+    internal static ClassificationCategory BuiltIn(string id, string nameKey, string name, int displayRank, string? parent = null) =>
+        new ClassificationCategory(id, name, displayRank, parent, false, nameKey ?? throw new ArgumentNullException(nameof(nameKey)));
     internal static ClassificationCategory Other(ClassificationCategory umbrella, string id) =>
-        new ClassificationCategory(id, umbrella.Name.Length <= 120 ? umbrella.Name + " · Other" : "Other", OtherRank, umbrella.Id, true);
+        new ClassificationCategory(id, OtherName(umbrella), OtherRank, umbrella.Id, true, null);
+    /// <summary>The source name of <paramref name="umbrella"/>'s derived Other subcategory.</summary>
+    internal static string OtherName(ClassificationCategory umbrella) =>
+        umbrella.Name.Length <= OtherNameLimit ? umbrella.Name + " · Other" : "Other";
+    /// <summary>The longest umbrella name an Other subcategory's name repeats; a longer one makes it plain "Other".</summary>
+    internal const int OtherNameLimit = 120;
     internal const int OtherRank = 998;
 }
 
@@ -141,7 +155,9 @@ public sealed class ClassificationTaxonomy
         var definitions = Categories.Values.Where(x => !x.Generated).ToDictionary(x => x.Id, x => x, StringComparer.Ordinal);
         foreach (var category in policy.Categories)
             definitions[category.Id] = definitions.TryGetValue(category.Id, out var known)
-                ? new ClassificationCategory(category.Id, category.DisplayName, known.DisplayRank, known.Parent)
+                // A built-in ID listed with its built-in name keeps that row, so its name stays a message (P10-04, S13).
+                ? StringComparer.Ordinal.Equals(category.DisplayName, known.Name) ? known
+                    : new ClassificationCategory(category.Id, category.DisplayName, known.DisplayRank, known.Parent)
                 : new ClassificationCategory(category.Id, category.DisplayName,
                     category.Id.EndsWith(OtherSuffix, StringComparison.Ordinal) && Categories.TryGetValue(category.Id, out var other) && other.Generated
                         ? ClassificationCategory.OtherRank : 500);
@@ -242,26 +258,39 @@ public sealed class ClassificationOverride
     public string Selector { get; }
     public OverrideOperation Operation { get; }
     public IReadOnlyList<string> Memberships { get; }
+    /// <summary>
+    /// X48 (D130): categories an Add override takes away before it adds <see cref="Memberships"/>, so one override can
+    /// move an item ("remove Swords, add Drinkware") and keep its other automatic categories. Empty for Replace and Remove.
+    /// </summary>
+    public IReadOnlyList<string> Removals { get; }
     public string? Primary { get; }
     public IReadOnlyList<FacetOverride> Facets { get; }
     internal PrefabPattern Pattern { get; }
     public ClassificationOverride(string match, string selector, OverrideOperation operation,
-        IEnumerable<string> memberships, string? primary = null, IEnumerable<FacetOverride>? facets = null)
+        IEnumerable<string> memberships, string? primary = null, IEnumerable<FacetOverride>? facets = null,
+        IEnumerable<string>? removals = null)
     {
         ClassificationValidation.Operation(operation);
         Pattern = new PrefabPattern(match, selector);
         var selected = ClassificationValidation.Bounded(memberships, 256).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
         foreach (var id in selected) ClassificationValidation.Category(id);
+        var removed = ClassificationValidation.Bounded(removals ?? Array.Empty<string>(), 256).Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        foreach (var id in removed) ClassificationValidation.Category(id);
+        if (removed.Length != 0 && operation != OverrideOperation.Add)
+            throw new ArgumentException("Only an Add override can also remove categories.");
+        if (removed.Intersect(selected, StringComparer.Ordinal).Any())
+            throw new ArgumentException("An override cannot both add and remove the same category.");
         if (primary != null) ClassificationValidation.Category(primary);
         if (operation == OverrideOperation.Replace && primary != null && !selected.Contains(primary, StringComparer.Ordinal) ||
-            operation == OverrideOperation.Remove && primary != null)
+            operation == OverrideOperation.Remove && primary != null || primary != null && removed.Contains(primary, StringComparer.Ordinal))
             throw new ArgumentException("Replacement primary must be a member; removal cannot select a primary.");
         var edits = ClassificationValidation.Bounded(facets ?? Array.Empty<FacetOverride>(), ClassificationFilters.Dimensions.Count);
         if (edits.Any(x => x == null) || edits.Select(x => x.Dimension).Distinct(StringComparer.Ordinal).Count() != edits.Length)
             throw new ArgumentException("Duplicate or null facet edit.");
-        if (operation != OverrideOperation.Replace && selected.Length == 0 && primary == null && edits.Length == 0)
+        if (operation != OverrideOperation.Replace && selected.Length == 0 && removed.Length == 0 && primary == null && edits.Length == 0)
             throw new ArgumentException("Override must change memberships, primary or facets.");
         Match = match; Selector = selector; Operation = operation; Memberships = Array.AsReadOnly(selected);
+        Removals = Array.AsReadOnly(removed);
         Primary = primary; Facets = Array.AsReadOnly(edits.OrderBy(x => x.Dimension, StringComparer.Ordinal).ToArray());
     }
 }

@@ -13,7 +13,7 @@ public enum DelegatedMoveState { Pending, Moved, Refused, Unconfirmed }
 public sealed class DelegatedMoveObserver
 {
     public const double DefaultWindowSeconds = 40;
-    public CleanupRoute Route { get; }
+    public MoveRoute Route { get; }
     public int Units { get; }
     public DelegatedMoveState State { get; private set; } = DelegatedMoveState.Pending;
     /// <summary>Units seen arriving in the other chest; with a partial refund the rest stayed in place.</summary>
@@ -27,10 +27,10 @@ public sealed class DelegatedMoveObserver
     /// <param name="sourceBefore">Units of the identity in the source before the request.</param>
     /// <param name="destinationBefore">Units of the identity in the destination before the request.</param>
     /// <param name="otherDestinationBefore">Units of every other identity in the destination before the request.</param>
-    public DelegatedMoveObserver(CleanupRoute route, int units, int sourceBefore, int destinationBefore, int otherDestinationBefore,
+    public DelegatedMoveObserver(MoveRoute route, int units, int sourceBefore, int destinationBefore, int otherDestinationBefore,
         double now, double windowSeconds = DefaultWindowSeconds)
     {
-        if (route == CleanupRoute.Direct) throw new ArgumentException("Direct moves are verified synchronously.", nameof(route));
+        if (route == MoveRoute.Direct) throw new ArgumentException("Direct moves are verified synchronously.", nameof(route));
         if (units < 1 || sourceBefore < units || destinationBefore < 0 || otherDestinationBefore < 0) throw new ArgumentOutOfRangeException(nameof(units));
         if (double.IsNaN(now) || double.IsInfinity(now) || windowSeconds <= 0) throw new ArgumentOutOfRangeException(nameof(now));
         Route = route; Units = units; this.sourceBefore = sourceBefore; this.destinationBefore = destinationBefore;
@@ -60,7 +60,7 @@ public sealed class DelegatedMoveObserver
         if (!sessionCurrent) return Finish(DelegatedMoveState.Unconfirmed, 0, "the session ended while MultiUserChest was moving it");
         var arrived = Math.Max(0, destination - destinationBefore);
         var left = sourceBefore - source; // units gone from the source
-        if (Route == CleanupRoute.MucAdd)
+        if (Route == MoveRoute.MucAdd)
         {
             // MultiUserChest takes the item out of the local source first; the owner then adds it, or the rest is refunded.
             if (left > 0) taken = true;

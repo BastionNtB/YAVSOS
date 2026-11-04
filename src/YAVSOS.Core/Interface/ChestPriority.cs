@@ -1,4 +1,5 @@
 using System;
+using YAVSOS.Core.Messages;
 
 namespace YAVSOS.Core.Interface;
 
@@ -16,27 +17,31 @@ public static class ChestPriority
 
     public static int Rank(int level) => Default - Math.Max(Highest, Math.Min(Lowest, level));
 
-    public static string Name(int level) => level switch
+    /// <summary>The level's name (the guide quotes Critical, Urgent, Normal and Fuhgeddaboudit).</summary>
+    public static Message Name(int level) => Message.Of(level switch
     {
-        <= 1 => "Critical", 2 or 3 => "Urgent", 4 or 5 => "Normal", 6 or 7 => "Moderate", 8 or 9 => "Minor", _ => "Fuhgeddaboudit"
-    };
+        <= 1 => "yavsos_priority_critical", 2 or 3 => "yavsos_priority_urgent", 4 or 5 => "yavsos_priority_normal",
+        6 or 7 => "yavsos_priority_moderate", 8 or 9 => "yavsos_priority_minor", _ => "yavsos_priority_fuhgeddaboudit"
+    });
 
     /// <summary>The "This chest" heading (D101): the chosen level's name once the chest has a rule.</summary>
-    public static string Heading(int rank, bool ruled) => ruled ? "This chest · " + Name(Level(rank)) : "This chest";
+    public static Message Heading(int rank, bool ruled) =>
+        ruled ? Message.Of("yavsos_chest_heading_priority").With("priority", Name(Level(rank))) : Message.Of("yavsos_chest_heading");
 
     /// <summary>One number's tooltip on the 1–10 bar (D101), in place of the panel's old priority sentence and legend.</summary>
-    public static (string Topic, string Text) Tooltip(int level, int chosen, bool ruled) =>
-        ("Priority " + level + ": " + Name(level) + (ruled && level == chosen ? " (this chest)" : ""),
-         "Lower numbers fill first. At the same priority, the most specific rule fills first." + (ruled ? "" : "\nSet a rule first: priority belongs to the rule."));
+    public static Tooltip Tip(int level, int chosen, bool ruled) =>
+        Tooltip.Of(Message.Of(ruled && level == chosen ? "yavsos_priority_heading_chosen" : "yavsos_priority_heading").With("level", level).With("name", Name(level)),
+            Message.Of(ruled ? "yavsos_priority_tip" : "yavsos_priority_tip_norule"));
 
     /// <summary>The colour band of a level on the panel's 1–10 bar (D071): one band per name, 0 (Critical) to 5.</summary>
     public static int Band(int level) => level switch { <= 1 => 0, 2 or 3 => 1, 4 or 5 => 2, 6 or 7 => 3, 8 or 9 => 4, _ => 5 };
 
-    /// <summary>"priority 2 (Urgent)", for labels and explanations; empty for the default level.</summary>
-    public static string Short(int rank)
+    /// <summary>"priority 2 (Urgent)", for labels and explanations; null for the default level.</summary>
+    public static Message? Phrase(int rank)
     {
+        if (rank == 0) return null;
         var level = Level(rank);
-        return rank == 0 ? "" : "priority " + level + " (" + Name(level) + ")";
+        return Message.Of("yavsos_priority_short").With("level", level).With("name", Name(level));
     }
 
     /// <summary>The rank one level up (step −1) or down (step +1), or null at either end.</summary>

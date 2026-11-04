@@ -2,20 +2,28 @@ using System;
 using HarmonyLib;
 using UnityEngine;
 using YAVSOS.Core.Classification;
+using YAVSOS.Core.Messages;
 using YAVSOS.Core.Transfers;
 
 namespace YAVSOS.Transfers;
 
 internal enum RuleEligibility { Eligible, Missing, Tombstone, ItemDrawer, NotPlayerBuilt, OnCharacter }
 
+/// <summary>
+/// A rule read or edit: the refusal, if any, and the message the YAVSOS panel shows for it (null on success: D101,
+/// successes say nothing). The panel formats the message when it draws (P10-04).
+/// </summary>
 internal sealed class ChestRuleResult
 {
     internal TransferRefusal Reason { get; }
-    internal string Message { get; }
+    internal Message? Message { get; }
     internal ContainerPolicyRead? Policy { get; }
     internal bool Succeeded => Reason == TransferRefusal.None;
-    internal ChestRuleResult(TransferRefusal reason, string message, ContainerPolicyRead? policy = null)
+    private ChestRuleResult(TransferRefusal reason, Message? message, ContainerPolicyRead? policy)
     { Reason = reason; Message = message; Policy = policy; }
+    internal static ChestRuleResult Done(ContainerPolicyRead? policy = null) => new(TransferRefusal.None, null, policy);
+    internal static ChestRuleResult Refused(TransferRefusal reason, string key, ContainerPolicyRead? policy = null) =>
+        new(reason, YAVSOS.Core.Messages.Message.Of(key), policy);
 }
 
 /// <summary>
@@ -93,24 +101,18 @@ internal sealed class ChestRuleStore
         return false;
     }
 
-    internal static string Describe(RuleEligibility eligibility) => eligibility switch
-    {
-        RuleEligibility.Eligible => "",
-        RuleEligibility.Tombstone => "Tombstones cannot have YAVSOS rules.",
-        RuleEligibility.ItemDrawer => "Item drawers use their own item assignment instead of a YAVSOS rule.",
-        RuleEligibility.NotPlayerBuilt => "Only player-built containers can have YAVSOS rules.",
-        RuleEligibility.OnCharacter => "Containers carried by a creature cannot have YAVSOS rules.",
-        _ => "This container is not available."
-    };
-
     /// <summary>Any peer: the replicated stored payload, parsed against the current taxonomy.</summary>
     internal ChestRuleResult Read(Container container)
     {
         var eligibility = Eligibility(container);
-        if (eligibility != RuleEligibility.Eligible) return new ChestRuleResult(TransferRefusal.UnsupportedCapability, Describe(eligibility));
+        if (eligibility != RuleEligibility.Eligible) return Ineligible();
         var payload = Payload(container);
-        return new ChestRuleResult(TransferRefusal.None, "", ContainerPolicyEnvelope.Read(payload, taxonomy()));
+        return ChestRuleResult.Done(ContainerPolicyEnvelope.Read(payload, taxonomy()));
     }
+
+    // The panel shows only on eligible chests, so this reaches a player only if a chest changed under an open panel.
+    // Callers that need the cause read Eligibility (the Lab bridge logs it).
+    private static ChestRuleResult Ineligible() => ChestRuleResult.Refused(TransferRefusal.UnsupportedCapability, "yavsos_edit_not_eligible");
 
     internal static string Payload(Container container) =>
         View(container)?.GetZDO()?.GetString(ContainerPolicyEnvelope.ZdoKey, "") ?? "";
@@ -125,54 +127,90 @@ internal sealed class ChestRuleStore
     internal ChestRuleResult TrySetCleanupOptOut(Container container, bool optOut)
     {
         var eligibility = Eligibility(container);
-        if (eligibility != RuleEligibility.Eligible) return new ChestRuleResult(TransferRefusal.UnsupportedCapability, Describe(eligibility));
+        if (eligibility != RuleEligibility.Eligible) return Ineligible();
         var player = Player.m_localPlayer;
-        if (!player || player.IsDead()) return new ChestRuleResult(TransferRefusal.Disconnected, "No local player.");
+        if (!player || player.IsDead()) return ChestRuleResult.Refused(TransferRefusal.Disconnected, "yavsos_edit_no_player");
         var view = View(container)!;
-        if (!view.IsOwner()) return new ChestRuleResult(TransferRefusal.UnsupportedAuthority, "Another player is using this chest. Change it after they close it.");
-        if (!HasAccess(container, player)) return new ChestRuleResult(TransferRefusal.AccessDenied, "You do not have access to this chest.");
+#if YAVSOS_LAB
+        if (FaultLab.RefuseEdits) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use"); // Lab fault "edits".
+#endif
+        if (!view.IsOwner()) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use");
+        if (!HasAccess(container, player)) return ChestRuleResult.Refused(TransferRefusal.AccessDenied, "yavsos_edit_no_access");
         view.GetZDO().Set(CleanupOptOutKey, optOut);
-        return CleanupOptOut(container) == optOut
-            ? new ChestRuleResult(TransferRefusal.None, optOut ? "Cleanup leaves this container alone." : "Cleanup may take misplaced items out of this container.")
-            : new ChestRuleResult(TransferRefusal.Unconfirmed, "The setting could not be confirmed. Reopen the chest to check it.");
+        return CleanupOptOut(container) == optOut ? ChestRuleResult.Done() : ChestRuleResult.Refused(TransferRefusal.Unconfirmed, "yavsos_edit_unconfirmed");
     }
 
     /// <param name="edit">Categories and exact items (D048); null clears the rule. An edit that leaves nothing clears it too.</param>
     internal ChestRuleResult TryEdit(Container container, string expectedPayload, ChestRuleEdit? edit)
     {
         if (expectedPayload == null) throw new ArgumentNullException(nameof(expectedPayload));
-        var eligibility = Eligibility(container);
-        if (eligibility != RuleEligibility.Eligible) return new ChestRuleResult(TransferRefusal.UnsupportedCapability, Describe(eligibility));
-        if (!policyReady()) return new ChestRuleResult(TransferRefusal.UnsupportedCapability, "YAVSOS is still loading its settings. Try again shortly.");
-        var player = Player.m_localPlayer;
-        if (!player || player.IsDead()) return new ChestRuleResult(TransferRefusal.Disconnected, "No local player.");
+        if (Writable(container) is { } refused) return refused;
         var view = View(container)!; var zdo = view.GetZDO();
-        // With MultiUserChest, other viewers see the chest without owning it. Only the owner writes.
-        if (!view.IsOwner()) return new ChestRuleResult(TransferRefusal.UnsupportedAuthority,
-            "Another player is using this chest. Edit its rule after they close it.");
-        if (!CheckAccess!(container, player.GetPlayerID()) ||
-            container.m_checkGuardStone && !PrivateArea.CheckAccess(container.transform.position, 0f, true, false))
-            return new ChestRuleResult(TransferRefusal.AccessDenied, "You do not have access to this chest.");
         var current = zdo.GetString(ContainerPolicyEnvelope.ZdoKey, "");
         var currentTaxonomy = taxonomy();
         var refusal = ContainerPolicyEnvelope.TryEdit(current, expectedPayload, currentTaxonomy, edit, out var updated, out var problem);
         if (refusal == TransferRefusal.PolicyChanged)
-            return new ChestRuleResult(refusal, "The rule changed since you opened it. Reopen it and try again.", ContainerPolicyEnvelope.Read(current, currentTaxonomy));
+            return ChestRuleResult.Refused(refusal, "yavsos_edit_rule_changed", ContainerPolicyEnvelope.Read(current, currentTaxonomy));
         if (refusal != TransferRefusal.None)
-            return new ChestRuleResult(refusal, problem switch
+            return ChestRuleResult.Refused(refusal, problem switch
             {
-                // B4.7: each cause in its own words; only an unreadable rule is about another version or category set.
-                ChestRuleEditProblem.UnknownCategory => "A chosen category is no longer in this game's category set; reopen the chest and choose again. The rule was left unchanged.",
-                ChestRuleEditProblem.TooLarge => "The rule is too large to store (too many items or filters); it was left unchanged.",
-                ChestRuleEditProblem.RevisionExhausted => "This chest's rule can't be edited any more; clear it and set it again.",
-                ChestRuleEditProblem.Invalid => "The rule could not be stored (an invalid filter or value); it was left unchanged.",
-                _ => "This chest has a rule from a different YAVSOS version or category set; it was left unchanged."
+                // B4.7: each cause in its own words; only an unreadable rule is about another version or category settings.
+                ChestRuleEditProblem.UnknownCategory => "yavsos_edit_unknown_category",
+                ChestRuleEditProblem.TooLarge => "yavsos_edit_too_large",
+                ChestRuleEditProblem.RevisionExhausted => "yavsos_edit_exhausted",
+                ChestRuleEditProblem.Invalid => "yavsos_edit_invalid",
+                _ => "yavsos_edit_other_version"
             }, ContainerPolicyEnvelope.Read(current, currentTaxonomy));
-        zdo.Set(ContainerPolicyEnvelope.ZdoKey, updated!);
+        return Commit(view, updated!, currentTaxonomy);
+    }
+
+    /// <summary>
+    /// X26 (A2-09): an undo or redo puts back <paramref name="previousPayload"/>, whole, through the same checks and
+    /// owner-only compare-and-set as an edit: refused when the chest no longer holds <paramref name="expectedPayload"/>
+    /// (<paramref name="redo"/> picks the words), while another player is using the chest, or without access.
+    /// </summary>
+    internal ChestRuleResult TryRestore(Container container, string expectedPayload, string previousPayload, bool redo)
+    {
+        if (expectedPayload == null) throw new ArgumentNullException(nameof(expectedPayload));
+        if (previousPayload == null) throw new ArgumentNullException(nameof(previousPayload));
+        if (Writable(container) is { } refused) return refused;
+        var view = View(container)!;
+        var current = view.GetZDO().GetString(ContainerPolicyEnvelope.ZdoKey, "");
+        var currentTaxonomy = taxonomy();
+        if (ContainerPolicyEnvelope.TryRestore(current, expectedPayload, previousPayload, out var updated) != TransferRefusal.None)
+            return ChestRuleResult.Refused(TransferRefusal.PolicyChanged, redo ? "yavsos_edit_redo_changed" : "yavsos_edit_undo_changed",
+                ContainerPolicyEnvelope.Read(current, currentTaxonomy));
+        return Commit(view, updated!, currentTaxonomy);
+    }
+
+    // The checks every rule write makes before comparing payloads; null: this player may write the chest's rule now.
+    private ChestRuleResult? Writable(Container container)
+    {
+        var eligibility = Eligibility(container);
+        if (eligibility != RuleEligibility.Eligible) return Ineligible();
+        if (!policyReady()) return ChestRuleResult.Refused(TransferRefusal.UnsupportedCapability, "yavsos_edit_loading");
+        var player = Player.m_localPlayer;
+        if (!player || player.IsDead()) return ChestRuleResult.Refused(TransferRefusal.Disconnected, "yavsos_edit_no_player");
+        var view = View(container)!;
+#if YAVSOS_LAB
+        if (FaultLab.RefuseEdits) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use"); // Lab fault "edits".
+#endif
+        // With MultiUserChest, other viewers see the chest without owning it. Only the owner writes.
+        if (!view.IsOwner()) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use");
+        if (!CheckAccess!(container, player.GetPlayerID()) ||
+            container.m_checkGuardStone && !PrivateArea.CheckAccess(container.transform.position, 0f, true, false))
+            return ChestRuleResult.Refused(TransferRefusal.AccessDenied, "yavsos_edit_no_access");
+        return null;
+    }
+
+    // Writes the payload and confirms it by reading it back while still the owner.
+    private static ChestRuleResult Commit(ZNetView view, string updated, ClassificationTaxonomy currentTaxonomy)
+    {
+        var zdo = view.GetZDO();
+        zdo.Set(ContainerPolicyEnvelope.ZdoKey, updated);
         var written = zdo.GetString(ContainerPolicyEnvelope.ZdoKey, "");
         if (!view.IsOwner() || !StringComparer.Ordinal.Equals(written, updated))
-            return new ChestRuleResult(TransferRefusal.Unconfirmed, "The rule could not be confirmed. Reopen the chest to check it.",
-                ContainerPolicyEnvelope.Read(written, currentTaxonomy));
-        return new ChestRuleResult(TransferRefusal.None, updated!.Length == 0 ? "Rule cleared." : "Rule saved.", ContainerPolicyEnvelope.Read(written, currentTaxonomy));
+            return ChestRuleResult.Refused(TransferRefusal.Unconfirmed, "yavsos_edit_unconfirmed", ContainerPolicyEnvelope.Read(written, currentTaxonomy));
+        return ChestRuleResult.Done(ContainerPolicyEnvelope.Read(written, currentTaxonomy));
     }
 }

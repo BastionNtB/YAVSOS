@@ -25,7 +25,7 @@ public sealed class StorageFirstTests
     private static LoadedSourceReceipt Ordinary(CatalogSnapshot catalog, params LoadedSourceFact[] rows) =>
         LoadedSourceReceipt.Build(catalog, rows);
     private static ClassifiedCatalog Classify(CatalogSnapshot catalog, LoadedSourceReceipt receipt, CategoryPolicy? policy = null) =>
-        ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy ?? Policy()), receipt.Snapshot);
+        ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy ?? Policy()), receipt.Snapshot);
     private static LoadedSourceFact Fuel(bool enabled = true) => new(LoadedSourceFactKind.ItemUse, "new-burner:fuel",
         "NewMaterial", route: "new-burner", method: "fuel", eligible: enabled);
 

@@ -216,7 +216,10 @@ public sealed class Phase6FilterTests
         // D086 D6: a crafter value this version can't read is kept and matches no stack.
         Assert.False(Accepts(sword, Filter("crafter", "me"), By(7))); Assert.False(Accepts(sword, Filter("crafter", "by:0:x"), By(7)));
         Assert.Throws<ArgumentOutOfRangeException>(() => ClassificationFilters.CrafterValue(true, 0, "x"));
-        Assert.Equal("anyone but Lin", RuleText.ValueName("crafter", ClassificationFilters.CrafterValue(false, 9, "Lin")));
+        Assert.Equal("anyone but Lin", Shown(RuleText.ValueName("crafter", ClassificationFilters.CrafterValue(false, 9, "Lin"))));
+        Assert.Equal("anyone but me", Shown(RuleText.CrafterName(false, "Lin", me: true)));
+        Assert.Equal("the player who set it", Shown(RuleText.CrafterName(true, "")));
+        Assert.Equal("Lin", RuleText.CrafterName(true, "Lin")); // A player's name is shown as it is.
     }
 
     [Fact]
@@ -268,6 +271,26 @@ public sealed class Phase6FilterTests
             new[] { new CleanupChest("armoury", armoury, Snapshot("armoury", sword), true), new CleanupChest("loot", loot, Snapshot("loot"), true) }, instanceFacets: facets);
         Assert.Empty(CleanupPlanner.Plan(Cleanup(null)).Moves);
         Assert.Equal("loot", Assert.Single(CleanupPlanner.Plan(Cleanup(_ => new[] { Rarity("epic") })).Moves).DestinationId);
+    }
+
+    // Q10 (D132): cleanup ranks once per item and its instance evidence, so two swords of one kind with different rarity
+    // still go to different chests in one plan.
+    [Fact]
+    public void Cleanup_SameItemWithDifferentInstanceEvidence_IsRankedApart()
+    {
+        var index = Build(new[] { Item("SwordIron", "OneHandedWeapon") });
+        var answers = new Answers(index);
+        string Payload(ClassificationFilterRule rule) => ContainerPolicyEnvelope.Serialize(1, new ChestRules(Taxonomy, ChestRuleState.Configured, new[] { rule }));
+        var epic = new TransferStack(Guid.NewGuid(), 0, 0, 1, 1, Identity("SwordIron"));
+        var plain = new TransferStack(Guid.NewGuid(), 1, 0, 1, 1, Identity("SwordIron"));
+        var input = new CleanupInput(Taxonomy, answers, new[] {
+                new CleanupChest("armoury", Payload(Rule(new[] { "weapons" })), Snapshot("armoury"), true),
+                new CleanupChest("box", "", Snapshot("box", epic, plain), true),
+                new CleanupChest("loot", Payload(Rule(new[] { "weapons" }, ("rarity", new[] { "epic" }))), Snapshot("loot"), true) },
+            instanceFacets: stack => stack.Handle == epic.Handle ? new[] { Rarity("epic") } : Array.Empty<FacetEvidence>());
+        var moves = CleanupPlanner.Plan(input).Moves;
+        Assert.Equal("loot", Assert.Single(moves, x => x.Handle == epic.Handle).DestinationId);
+        Assert.Equal("armoury", Assert.Single(moves, x => x.Handle == plain.Handle).DestinationId);
     }
 
     [Fact]
@@ -398,9 +421,9 @@ public sealed class Phase6FilterTests
         Assert.False(Accepts(egg, Filter("upgradable", "yes"), ClassificationFilters.Condition(2, false, 0, 0)));
         Assert.Equal(new[] { "2", "3", "4", "5+" }, ClassificationFilters.LevelsFor(new[] { "yes" }));
         Assert.Equal(new[] { "1" }, ClassificationFilters.LevelsFor(new[] { "no" }));
-        Assert.Equal("Upgrade level", RuleText.FilterName("quality"));
-        Assert.Equal("Can be upgraded", RuleText.FilterName("upgradable"));
-        Assert.Equal("upgrade level 2 or 3", RuleText.Short(new Dictionary<string, IReadOnlyList<string>> { ["quality"] = new[] { "2", "3" } }));
+        Assert.Equal("Upgrade level", EnglishText.Of(RuleText.FilterName("quality")!));
+        Assert.Equal("Can be upgraded", EnglishText.Of(RuleText.FilterName("upgradable")!));
+        Assert.Equal("upgrade level 2 or 3", Phase6InterfaceTests.Short(new Dictionary<string, IReadOnlyList<string>> { ["quality"] = new[] { "2", "3" } }));
     }
 
     // P6-21: "Item origin" names the base game positively ("vanilla"); missing evidence is "origin not known", never vanilla.
@@ -412,10 +435,37 @@ public sealed class Phase6FilterTests
         var rows = OptionalDefinitionEvidence.Build(catalog, capability,
             new[] { new OptionalDefinitionObservation(OptionalDefinitionKind.ItemRegistration, "Wood", RuleText.Vanilla, "Wood") });
         Assert.Contains(rows, x => x.Kind == LoadedSourceFactKind.FacetEvidence && x.Method == "mod" && x.Detail == RuleText.Vanilla && x.Output == "Wood");
-        Assert.Equal("Item origin", RuleText.FilterName("mod"));
-        Assert.Equal("Base game", RuleText.ValueName("mod", RuleText.Vanilla));
-        Assert.Equal("origin not known", RuleText.ValueName("mod", "unknown"));
-        Assert.Equal("from the base game", RuleText.Short(new Dictionary<string, IReadOnlyList<string>> { ["mod"] = new[] { RuleText.Vanilla } }));
-        Assert.Equal("from Therzie.Warfare", RuleText.Short(new Dictionary<string, IReadOnlyList<string>> { ["mod"] = new[] { "Therzie.Warfare" } }));
+        Assert.Equal("Item origin", EnglishText.Of(RuleText.FilterName("mod")!));
+        Assert.Equal("Base game", Shown(RuleText.ValueName("mod", RuleText.Vanilla)));
+        Assert.Equal("origin not known", Shown(RuleText.ValueName("mod", "unknown")));
+        Assert.Equal("from the base game", Phase6InterfaceTests.Short(new Dictionary<string, IReadOnlyList<string>> { ["mod"] = new[] { RuleText.Vanilla } }));
+        Assert.Equal("from Therzie.Warfare", Phase6InterfaceTests.Short(new Dictionary<string, IReadOnlyList<string>> { ["mod"] = new[] { "Therzie.Warfare" } }));
+        Assert.Equal("from Therzie.Warfare or the base game",
+            Phase6InterfaceTests.Short(new Dictionary<string, IReadOnlyList<string>> { ["mod"] = new[] { "Therzie.Warfare", RuleText.Vanilla } }));
     }
+
+    // Case 6: a stored token keeps its value in the rule; the panel shows its display name from the English file.
+    [Fact]
+    public void ClosedValues_HaveDisplayNames_AndUnknownTokensShowAsStored()
+    {
+        foreach (var dimension in RuleText.EditableFilters)
+            foreach (var value in (ClassificationFilters.Values(dimension) ?? Array.Empty<string>()).Append("unknown"))
+            {
+                var shown = RuleText.ValueName(dimension, value);
+                Assert.IsType<YAVSOS.Core.Messages.Message>(shown);
+                Assert.DoesNotContain("[", Shown(shown));
+            }
+        Assert.Equal("legendary", Shown(RuleText.ValueName("rarity", "legendary")));
+        Assert.Equal("level 5+", Shown(RuleText.ValueName("quality", "5+")));
+        Assert.Equal("plain", Shown(RuleText.ValueName("rarity", "unknown")));
+        Assert.Equal("cosmic", RuleText.ValueName("rarity", "cosmic")); // A later version's token: shown as stored.
+        Assert.Null(RuleText.FilterName("related-mod"));
+        // Case 4: "unknown" for a filter has its own words, never a lower-cased filter name.
+        Assert.Equal("condition not known", Phase6InterfaceTests.Short(new Dictionary<string, IReadOnlyList<string>> { ["damaged"] = new[] { "unknown" } }));
+        Assert.Equal("related-mod not known", Phase6InterfaceTests.Short(new Dictionary<string, IReadOnlyList<string>> { ["related-mod"] = new[] { "unknown" } }));
+        Assert.Equal("undamaged or condition not known",
+            Phase6InterfaceTests.Short(new Dictionary<string, IReadOnlyList<string>> { ["damaged"] = new[] { "no", "unknown" } }));
+    }
+
+    private static string Shown(object value) => value is YAVSOS.Core.Messages.Message message ? EnglishText.Of(message) : (string)value;
 }

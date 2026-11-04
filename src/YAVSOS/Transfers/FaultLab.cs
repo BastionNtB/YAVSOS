@@ -20,11 +20,13 @@ internal static class FaultLab
     internal static int ChestLimit { get; private set; }
     /// <summary>SF3: every chest the stash gathers fails to be read.</summary>
     internal static bool UnreadableChests { get; private set; }
+    /// <summary>P10-25 hand test: every rule write and the opt-out are refused as if another player had taken the chest, so each control's refusal shows in the strip.</summary>
+    internal static bool RefuseEdits { get; private set; }
     // SF1, SF4: the one-shot fault armed for the next frame that reaches that part ("panel", "explanations", "search", "highlight", "glow").
     private static string armed = "";
 
     public static string Status() =>
-        $"uncapturable={Uncapturable}; chestLimit={ChestLimit}; armed={armed}; chestsUnbound={ChestRuleStore.LabUnbound}; unreadableChests={UnreadableChests}; " +
+        $"uncapturable={Uncapturable}; chestLimit={ChestLimit}; armed={armed}; chestsUnbound={ChestRuleStore.LabUnbound}; unreadableChests={UnreadableChests}; refuseEdits={RefuseEdits}; " +
         $"display={string.Join(",", Interface.DisplayFaults.Off)}; " +
         $"azuExclusions={AzuExclusions.State}; azuErrors={AzuExclusions.Errors}; azuPause={AzuExclusions.PauseState}; " +
         $"categoriesGaveUp={Plugin.Instance?.CategoriesGaveUp ?? "-"}";
@@ -56,7 +58,8 @@ internal static class FaultLab
     /// D087 silent-failure checks (SF1-SF4). One-shot: <c>panel</c> (the rule panel's drawing throws once, SF1),
     /// <c>explanations</c> or <c>search</c> (that display part throws once, SF4). Until <c>none</c>: <c>chests</c> (every
     /// chest reads as if Container.m_nview/CheckAccess were not bound, SF2), <c>unreadable</c> (every chest the stash
-    /// gathers fails to be read, SF3). A part turned off by a one-shot fault stays off until the game restarts, as in a
+    /// gathers fails to be read, SF3), <c>edits</c> (every rule write and the opt-out refused as "another player is using
+    /// this chest", for the P10-25 strip). A part turned off by a one-shot fault stays off until the game restarts, as in a
     /// real failure.
     /// </summary>
     public static string Fault(string name)
@@ -66,7 +69,8 @@ internal static class FaultLab
             case "panel": case "explanations": case "search": case "highlight": case "glow": armed = name; break;
             case "chests": ChestRuleStore.LabUnbound = true; break;
             case "unreadable": UnreadableChests = true; break;
-            case "none": armed = ""; ChestRuleStore.LabUnbound = false; UnreadableChests = false; break;
+            case "edits": RefuseEdits = true; break;
+            case "none": armed = ""; ChestRuleStore.LabUnbound = false; UnreadableChests = false; RefuseEdits = false; break;
             default: return "unknown fault: " + name;
         }
         return Status();

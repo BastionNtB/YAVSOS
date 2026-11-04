@@ -7,6 +7,7 @@ using YAVSOS.Core.Classification;
 using YAVSOS.Cleanup;
 using YAVSOS.Core;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Transfers;
 
 namespace YAVSOS.Interface;
@@ -16,8 +17,9 @@ namespace YAVSOS.Interface;
 /// chest window's real rectangle (ZenUI may scale or rotate the chest grid). One column of sections; each owns its
 /// widgets and refreshes from <see cref="RuleControls"/>. Rows are rebuilt only when what they show changes.
 /// D101: while the panel is in use its height doesn't change: every area that shows changing text has a fixed size
-/// (chips two rows, one tab body height, message spots of two lines), and teaching text lives in tooltips on the controls.
-/// Folding (X2) changes the height only at its click.
+/// (chips two rows, the suggestion row, one tab body height, the strip under the header), and teaching text lives in
+/// tooltips on the controls. Folding (X2) changes the height only at its click. P10-25 (D132): every message shows in
+/// the strip under the header, and the control it came from keeps an amber outline until the next action.
 /// Unity game thread only.
 /// </summary>
 internal sealed class RulePanel
@@ -42,12 +44,12 @@ internal sealed class RulePanel
         this.rule = rule; this.parent = parent;
         root = ui.Panel(parent, Width);
         root.gameObject.SetActive(false);
-        // Display order, layout A (D071): header with status marks, problem banners, Rule, Edit (tabs, then the open
-        // tab's picker or filters, in one body of fixed height, D101), This chest, Clean up nearby. Search (P6-06) lives in
-        // the Categories tab; run results have their own panel (P6-04); "Where would it go?" is in the item tooltip (P6-23).
-        // Folded (X2), only the header, banners and the label line show.
+        // Display order, layout A (D071): header with status marks, the strip (P10-25: messages, banners, chest label), Rule,
+        // Edit (tabs, then the open tab's picker or filters, in one body of fixed height, D101), This chest, Clean up nearby.
+        // Search (P6-06) lives in the Categories tab; run results have their own panel (P6-04); "Where would it go?" is in
+        // the item tooltip (P6-23). Folded (X2), only the header and the strip show.
         var header = new HeaderSection(); var picker = new PickerSection();
-        sections = new PanelSection[] { header, new BannerSection(), new LabelSection(), new RuleSection(), picker, new FilterSection(), new ChestSection(), new CleanupSection() };
+        sections = new PanelSection[] { header, new StripSection(), new RuleSection(), picker, new FilterSection(), new ChestSection(), new CleanupSection() };
         try
         {
             foreach (var section in sections)
@@ -193,9 +195,20 @@ internal abstract class PanelSection
     protected static void Tip(Component part, string topic, string text) => Tip(part, () => (topic, text));
 
     /// <summary>
-    /// D101: a message spot, two lines high whether or not it says anything, so a refusal never moves the controls. A
-    /// longer text is cut with "…"; its tooltip has the whole text.
+    /// P10-04: a typed tooltip (heading and body), formatted in the player's language each time it opens, so it follows a
+    /// language change. Null shows no tooltip.
     /// </summary>
+    protected static void Tip(Component part, System.Func<Tooltip?> fill) => Tip(part, () => fill() is { } tip ? Texts.Get(tip) : null);
+
+    protected static void Tip(Component part, Tooltip tooltip) => Tip(part, () => (Tooltip?)tooltip);
+
+    /// <summary>
+    /// D101: a status line, two lines high whether or not it says anything, so it never moves the controls. A longer text
+    /// is cut with "…"; its tooltip has the whole text.
+    /// </summary>
+    protected static Text Spot(JotunnWidgets ui, Transform parent, System.Func<Tooltip?> tooltip) =>
+        Spot(ui, parent, () => tooltip() is { } tip ? Texts.Get(tip) : null);
+
     protected static Text Spot(JotunnWidgets ui, Transform parent, System.Func<(string Topic, string Text)?> tooltip)
     {
         var text = ui.Label(parent, "", JotunnWidgets.SmallSize, ui.Orange);
@@ -209,18 +222,18 @@ internal abstract class PanelSection
         return text;
     }
 
-    /// <summary>A spot's tooltip: the whole message at <paramref name="at"/>, when there is one.</summary>
-    protected static System.Func<(string Topic, string Text)?> Whole(RuleControls rule, MessageSpot at) =>
-        () => rule.Messages.At(at) is { Length: > 0 } said ? ("", said) : null;
+    /// <summary>P10-25 (D132): an amber outline on a control, shown while the strip's refusal came from it.</summary>
+    protected static GameObject Flag(Component control) => JotunnWidgets.Frame((RectTransform)control.transform, Amber);
 
-    /// <summary>Shows the message for <paramref name="at"/> in its spot, amber for a refusal.</summary>
-    protected void Say(Text spot, RuleControls rule, MessageSpot at, Color refusal, Color summary)
+    /// <summary>Shows <paramref name="flag"/> while <paramref name="control"/> was refused, until the next action.</summary>
+    protected void Flagged(GameObject flag, RuleControls rule, PanelControl control) => Show(flag, rule.Messages.Flagged(control));
+
+    /// <summary>A part of a row that takes the room the others leave, so the controls after it sit at the right.</summary>
+    protected static void Spacer(Transform row)
     {
-        var said = rule.Messages.At(at);
-        var color = rule.Messages.Kind == MessageKind.Refusal ? refusal : summary;
-        if (spot.color != color) spot.color = color;
-        var width = spot.rectTransform.rect.width;
-        Set(spot, said.Length == 0 ? "" : JotunnWidgets.Fit(spot, said, width > 0 ? width : RulePanel.Width - 28, 2));
+        var go = new GameObject("Gap", typeof(RectTransform), typeof(LayoutElement));
+        go.transform.SetParent(row, false);
+        var layout = go.GetComponent<LayoutElement>(); layout.flexibleWidth = 1; layout.minWidth = 0;
     }
 
     internal static readonly Color Amber = new Color(0.95f, 0.76f, 0.31f);
@@ -251,10 +264,12 @@ internal sealed class HeaderSection : PanelSection
         arrow.SetParent(fold.transform, false);
         arrow.anchorMin = arrow.anchorMax = arrow.pivot = new Vector2(0.5f, 0.5f); arrow.sizeDelta = new Vector2(12, 12);
         var image = go.GetComponent<Image>(); image.sprite = PanelArt.Down; image.color = ui.Beige; image.raycastTarget = false;
-        Tip(fold, () => (PanelFold.ButtonTopic(rule.Folded.Value), PanelFold.ButtonTooltip(rule.Folded.Value)));
+        Tip(fold, () => (Tooltip?)PanelFold.ButtonTooltip(rule.Folded.Value));
         foldTip = fold.GetComponent<TipFill>();
-        Title = ui.Label(line, "YAVSOS", JotunnWidgets.TextSize + 4, ui.Orange);
-        Tip(Title, "YAVSOS " + ProjectIdentity.Version, ProjectIdentity.Name + "\nDrag to move the panel."); // X53: say what the name stands for.
+        Title = ui.Label(line, "YAVSOS", JotunnWidgets.TextSize + 4, ui.Orange); // The mod's name, not translated.
+        // X53: say what the name stands for (the English name, as a name).
+        Tip(Title, Tooltip.Of(Message.Of("yavsos_panel_title_heading").With("version", ProjectIdentity.Version),
+            Message.Of("yavsos_panel_title_tip").With("name", ProjectIdentity.Name)));
         row = ui.Row(line, 4);
         row.GetComponent<HorizontalLayoutGroup>().childAlignment = TextAnchor.MiddleRight;
     }
@@ -278,7 +293,7 @@ internal sealed class HeaderSection : PanelSection
 
     private void Mark(IntegrationMark mark)
     {
-        var go = new GameObject("Mark " + mark.Name, typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+        var go = new GameObject("Mark " + mark.Kind, typeof(RectTransform), typeof(Image), typeof(LayoutElement));
         go.transform.SetParent(row, false);
         var layout = go.GetComponent<LayoutElement>(); layout.minWidth = layout.preferredWidth = layout.minHeight = layout.preferredHeight = 24;
         var disc = go.GetComponent<Image>(); disc.sprite = PanelArt.Disc; disc.color = new Color(0, 0, 0, 0.5f); // Catches the pointer for the tooltip.
@@ -290,79 +305,77 @@ internal sealed class HeaderSection : PanelSection
         // A caution is an amber tick: the integration works, with something to know about this chest.
         image.sprite = mark.State switch { MarkState.Working => PanelArt.Check, MarkState.Caution or MarkState.Limited => PanelArt.Bang, MarkState.Broken => PanelArt.Cross, _ => PanelArt.Dash };
         image.color = mark.State switch { MarkState.Working => Ok, MarkState.Broken => Bad, MarkState.Caution or MarkState.Limited => Caution, _ => Off };
-        var text = string.Join("\n", mark.Lines.Select(x => "<color=" + (x.State switch { MarkState.Working => "#7FD47F", MarkState.Broken => "#EF6B5B", MarkState.Caution or MarkState.Limited => "#F0C050", _ => "#A0957F" }) + ">" +
-            PanelMarks.Word(x.State).Trim() + "</color> " + Plain(x.Text)));
-        GameTooltip.Attach(go, () => (mark.Name, text));
+        // The heading is the mark's name; each line starts with its state word in the state's color (Core picks the tone).
+        var tip = mark.Tooltip;
+        GameTooltip.Attach(go, () => Texts.Get(tip));
     }
-
-    private static string Plain(string text) => text.Replace("<", "‹").Replace(">", "›");
 }
 
-// D071: problem states at the top, both set when the chest opens: another player has the chest open, or an unreadable
-// rule. Categories still loading is an amber Categories mark (D101); AzuAutoStore's config keeping some of the rule's
-// items out of this chest type (D056) is a caution on its mark.
-internal sealed class BannerSection : PanelSection
+// P10-25 (D132, variant B): one strip under the header for every message: a refusal (amber, its control outlined) or a
+// cleanup summary until the next action, else a banner (another player is using the chest; a rule from another version),
+// else the chest label, faint, or "No rule". Two lines high, three for a rule from another version, whose panel shows no
+// chips. Folded (X2), it is the line under the header. Cut with "…"; the tooltip has the whole text.
+internal sealed class StripSection : PanelSection
 {
-    private static readonly Color Tint = new Color(0.23f, 0.18f, 0.07f, 0.85f);
-    private Text readOnly = null!, unreadable = null!;
-    internal override string Name => "Banners";
-    internal override PanelPart Part => PanelPart.Banners;
-
-    internal override void Build(JotunnWidgets ui, RuleControls rule)
-    {
-        readOnly = ui.Banner(Root, "Another player is using this chest. You can view its rule; edit it after they close it.", Tint, Amber);
-        unreadable = ui.Banner(Root, "", Tint, Amber);
-    }
-
-    protected override void Refresh(RuleControls rule, RulePanelMode mode, bool structural)
-    {
-        Banner(readOnly, mode == RulePanelMode.ReadOnly);
-        Banner(unreadable, mode == RulePanelMode.Unreadable);
-        if (mode == RulePanelMode.Unreadable)
-            Set(unreadable, "This chest has a rule from a different YAVSOS version or category set. It accepts nothing from " + RuleControls.Stasher + " until replaced.");
-        Show(Root, mode is RulePanelMode.ReadOnly or RulePanelMode.Unreadable);
-    }
-
-    private void Banner(Text text, bool on) => Show(text.transform.parent.gameObject, on);
-}
-
-// X2 (D116, variant C): the folded panel's one line under the header: the chest's label in its hover colour, or a faint
-// "No rule". Cut with "…" to one line; the tooltip has it whole.
-internal sealed class LabelSection : PanelSection
-{
-    private static readonly Color LabelColor = new Color32(0xE8, 0xB0, 0x4A, 0xFF);
+    private static readonly Color Tint = new Color(0.23f, 0.18f, 0.07f, 0.85f), Quiet = new Color(0, 0, 0, 0.12f), Plain = new Color(0, 0, 0, 0.19f),
+        LabelColor = new Color32(0xE8, 0xB0, 0x4A, 0xFF);
     private JotunnWidgets ui = null!;
+    private Image band = null!;
     private Text line = null!;
-    internal override string Name => "Label";
-    internal override PanelPart Part => PanelPart.Label;
+    private LayoutElement size = null!;
+    private int lines;
+    internal override string Name => "Strip";
+    internal override PanelPart Part => PanelPart.Strip;
 
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {
         this.ui = ui;
-        line = ui.Label(Root, "", JotunnWidgets.SmallSize, LabelColor);
-        // Overflow, not Truncate: one line's height is a little under the font's line, and Truncate then drew nothing
-        // (batch E, 2026-10-30). Fit already cuts the text to one line's width.
-        line.verticalOverflow = VerticalWrapMode.Overflow;
-        var layout = line.GetComponent<LayoutElement>();
-        layout.minHeight = layout.preferredHeight = JotunnWidgets.LinesHeight(line, 1);
-        Tip(line, () => (ChestLabelPreview.Topic, (PanelFold.Line(rule.Label(), rule.Mode == RulePanelMode.Unreadable) is { IsLabel: true } shown
-            ? "<color=" + ChestLabelPreview.Color + ">" + shown.Text + "</color>\n" : "") + PanelFold.LineTooltip));
+        var go = new GameObject("Strip", typeof(RectTransform), typeof(Image), typeof(LayoutElement));
+        go.transform.SetParent(Root, false);
+        band = go.GetComponent<Image>(); band.color = Quiet;
+        size = go.GetComponent<LayoutElement>(); size.flexibleWidth = 1;
+        line = ui.Label(go.transform, "", JotunnWidgets.SmallSize, ui.Faint);
+        line.GetComponent<LayoutElement>().ignoreLayout = true;
+        line.verticalOverflow = VerticalWrapMode.Overflow; // Fit cuts it to the lines; Truncate can hide a last line drawn a little taller.
+        line.alignment = TextAnchor.MiddleLeft;
+        var rect = line.rectTransform; rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one; rect.offsetMin = new Vector2(7, 1); rect.offsetMax = new Vector2(-7, -1);
+        Lines(PanelStrip.Lines);
+        Tip(band, () => (Tooltip?)rule.Strip(rule.Mode).Tip);
+    }
+
+    private void Lines(int count)
+    {
+        if (lines == count) return;
+        lines = count;
+        size.minHeight = size.preferredHeight = JotunnWidgets.LinesHeight(line, count) + 2;
+        Rebuilt();
     }
 
     protected override void Refresh(RuleControls rule, RulePanelMode mode, bool structural)
     {
-        var shown = PanelFold.Line(rule.Label(), mode == RulePanelMode.Unreadable);
-        Show(Root, shown != null);
-        if (shown is not { } text) return;
-        var color = text.IsLabel ? LabelColor : ui.Faint;
+        var strip = rule.Strip(mode);
+        Lines(strip.Lines);
+        var (back, color) = strip.Kind switch
+        {
+            StripKind.Refusal or StripKind.Banner => (Tint, Amber),
+            StripKind.Summary => (Plain, ui.Orange),
+            // D132: the idle label faint while the panel is open; as the folded panel's one line, in full (X2).
+            StripKind.Label => (Quiet, rule.Folded.Value ? LabelColor : new Color(LabelColor.r, LabelColor.g, LabelColor.b, 0.7f)),
+            _ => (Quiet, ui.Faint)
+        };
+        if (band.color != back) band.color = back;
         if (line.color != color) line.color = color;
+        // Shown without markup: the label is plain text, and a message's tinted values would show their tags here.
+        var text = strip.Label ?? (strip.Text is { } said ? Texts.Plain(said) : "");
+        if (strip.Kind == StripKind.Label) text = rule.Label() ?? text; // Unescaped: this label shows tags as written.
         var width = line.rectTransform.rect.width;
-        Set(line, JotunnWidgets.Fit(line, text.Text, width > 0 ? width : RulePanel.Width - 28, 1));
+        Set(line, JotunnWidgets.Fit(line, text, width > 0 ? width : RulePanel.Width - 28 - 14, strip.Lines));
     }
 }
 
-// D071: what the chest takes, as chips, with Copy, Paste (X2) and Clear rule in the section's header. D101: the chips area is two rows high
-// with or without a rule; what doesn't fit folds into "+N more", and a chest without a rule says what stashing does with it.
+// D071: what the chest takes, as chips, with ↶ (X26), Copy, Paste (X2) and Clear rule in the section's header. D101: the chips area is two
+// rows high with or without a rule; what doesn't fit folds into "+N more", and a chest without a rule says what stashing does with it.
+// X22 (D130, D132): the suggestion chips on their own row under them.
 internal sealed class RuleSection : PanelSection
 {
     private const float Gap = 4;
@@ -370,10 +383,13 @@ internal sealed class RuleSection : PanelSection
         AlwaysMark = new Color(0.5f, 0.85f, 0.5f), NeverMark = new Color(0.94f, 0.42f, 0.36f), CautionBack = new Color(0.23f, 0.18f, 0.07f, 0.85f);
     private JotunnWidgets ui = null!;
     private Button clear = null!;
-    private CanvasGroup clearShown = null!, copyShown = null!, pasteShown = null!;
-    private Text spot = null!;
-    private RectTransform flow = null!, area = null!;
-    private string key = "\0";
+    private CanvasGroup clearShown = null!, copyShown = null!, pasteShown = null!, undoShown = null!;
+    private GameObject undoFlag = null!, pasteFlag = null!, clearFlag = null!, suggestFlag = null!;
+    private RectTransform flow = null!, area = null!, undoArrow = null!, suggestions = null!;
+    private TipFill? undoTip;
+    private bool? redoShown;
+    private string key = "\0", suggestedKey = "\0";
+    private static readonly Color SuggestBack = new Color(0.24f, 0.18f, 0.07f, 0.9f);
     internal override string Name => "Rule";
     internal override PanelPart Part => PanelPart.Rule;
 
@@ -382,20 +398,33 @@ internal sealed class RuleSection : PanelSection
         this.ui = ui;
         var head = ui.Row(Root);
         // X2 (D116, variant C): the chest's hover label is in the tooltip of the heading and the chips.
-        Tip(ui.Label(head, "Rule", JotunnWidgets.TextSize, ui.Orange, false), rule.LabelTooltip);
-        spot = Spot(ui, head, Whole(rule, MessageSpot.Clear));
-        spot.alignment = TextAnchor.MiddleRight;
+        Tip(ui.Label(head, Texts.Get("yavsos_rule_heading"), JotunnWidgets.TextSize, ui.Orange, false), rule.LabelTooltip);
+        Spacer(head); // P10-25: the Rule spot is gone (messages are in the strip); the buttons stay at the right.
+        // X26 (D130, variant A): ↶ beside Copy, drawn (the game's font may lack the glyph); ↷ after an undo.
+        var undo = ui.Button(head, "", rule.Undo, 30);
+        var go0 = new GameObject("Arrow", typeof(RectTransform), typeof(Image));
+        undoArrow = (RectTransform)go0.transform;
+        undoArrow.SetParent(undo.transform, false);
+        undoArrow.anchorMin = undoArrow.anchorMax = undoArrow.pivot = new Vector2(0.5f, 0.5f); undoArrow.sizeDelta = new Vector2(16, 16);
+        var arrowImage = go0.GetComponent<Image>(); arrowImage.sprite = PanelArt.Undo; arrowImage.color = ui.Beige; arrowImage.raycastTarget = false;
+        Tip(undo, () => (Tooltip?)rule.UndoTooltip());
+        undoTip = undo.GetComponent<TipFill>();
+        undoShown = undo.gameObject.AddComponent<CanvasGroup>();
+        undoFlag = Flag(undo);
         // X2 (variant A): Copy and Paste beside Clear rule; disabled, they keep their place and tooltip.
-        var copy = ui.Button(head, "Copy", rule.CopyRule, 64);
-        Tip(copy, () => (RuleCopy.CopyTopic, RuleCopy.CopyTooltip(rule.CanCopy, rule.HiddenParts)));
+        var copy = ui.Button(head, Texts.Get("yavsos_copy_button"), rule.CopyRule, 64);
+        Tip(copy, () => (Tooltip?)RuleCopy.CopyTooltip(rule.CanCopy, rule.HiddenParts));
         copyShown = copy.gameObject.AddComponent<CanvasGroup>();
-        var paste = ui.Button(head, "Paste", rule.PasteRule, 64);
-        Tip(paste, () => (RuleCopy.PasteTopic, RuleCopy.PasteTooltip(rule.Copied, rule.Mode == RulePanelMode.Edit, rule.Stored)));
+        var paste = ui.Button(head, Texts.Get("yavsos_copy_paste_button"), rule.PasteRule, 64);
+        Tip(paste, () => (Tooltip?)RuleCopy.PasteTooltip(rule.Copied, rule.Mode == RulePanelMode.Edit, rule.Stored));
         pasteShown = paste.gameObject.AddComponent<CanvasGroup>();
-        clear = ui.Button(head, "Clear rule", rule.ClearRule, 120);
-        Tip(clear, "Clear rule", "Removes the whole rule, priority included. The chest goes back to working without a rule.");
+        pasteFlag = Flag(paste);
+        var clearText = Message.Of("yavsos_rule_clear");
+        clear = ui.Button(head, Texts.Get(clearText), rule.ClearRule, 120);
+        Tip(clear, Tooltip.Of(clearText, Message.Of("yavsos_rule_clear_tip")));
         // Hidden without a rule, but keeping its place, so the row never changes.
         clearShown = clear.gameObject.AddComponent<CanvasGroup>();
+        clearFlag = Flag(clear);
         var go = new GameObject("Chips", typeof(RectTransform), typeof(LayoutElement));
         go.transform.SetParent(Root, false);
         area = (RectTransform)go.transform;
@@ -409,6 +438,12 @@ internal sealed class RuleSection : PanelSection
         var chips = new GameObject("Flow", typeof(RectTransform));
         flow = (RectTransform)chips.transform;
         Stretch(flow, area);
+        // X22 (D130, D132, D139): two reserved chip rows under the rule's chips, so a click on a suggestion never changes the height.
+        var row = new GameObject("Suggestions", typeof(RectTransform), typeof(LayoutElement));
+        row.transform.SetParent(Root, false);
+        suggestions = (RectTransform)row.transform;
+        var rowSize = row.GetComponent<LayoutElement>(); rowSize.flexibleWidth = 1; rowSize.minHeight = rowSize.preferredHeight = 2 * JotunnWidgets.ChipHeight + Gap;
+        suggestFlag = Flag(suggestions);
     }
 
     private static void Stretch(RectTransform rect, Transform parent)
@@ -435,13 +470,81 @@ internal sealed class RuleSection : PanelSection
         if (!viewing && !clearing) return;
         var on = clearing && (!edit || rule.Stored); // No rule: nothing to clear (runtime 2026-10-23, D086 B3.4).
         if (clearShown.interactable != on) { clearShown.alpha = on ? 1 : 0; clearShown.interactable = clearShown.blocksRaycasts = on; }
+        // X26: shown wherever Copy or Clear rule is; clickable with a record while this game may write the rule.
+        var record = rule.UndoRecord;
+        Enable(undoShown, viewing || clearing, clearing && record != null);
+        var redo = record?.Redo == true;
+        if (redoShown != redo)
+        {
+            redoShown = redo;
+            undoArrow.localScale = new Vector3(redo ? -1 : 1, 1, 1); // ↷: the undo arrow mirrored.
+            undoTip?.Refresh();
+        }
         Enable(copyShown, viewing, rule.CanCopy);
         Enable(pasteShown, viewing, edit && rule.Copied != null);
-        Say(spot, rule, MessageSpot.Clear, Amber, ui.Orange);
+        Flagged(undoFlag, rule, PanelControl.Undo); Flagged(pasteFlag, rule, PanelControl.Paste); Flagged(clearFlag, rule, PanelControl.Clear);
         Show(area, viewing);
+        Show(suggestions, viewing);
+        Flagged(suggestFlag, rule, PanelControl.Suggestion);
         var chips = viewing ? rule.Chips(Plugin.Instance!.RuleTaxonomy) : System.Array.Empty<RuleChip>();
-        var next = string.Join("\n", chips.Select(x => x.Kind + ":" + x.Text));
+        var next = string.Join("\n", chips.Select(x => x.Kind + ":" + ChipText(x)));
         if (next != key) { key = next; Flow(chips); }
+        if (viewing) Suggest(rule);
+    }
+
+    // X22: "✦ Set rule: {category}", "✓ Always: these items" and ✕, rebuilt only when what is offered changes. D139
+    // (Q12, variant B): a row each (RuleSuggestion.Rows); a chip wider than its row is cut with "…", the tooltip has it whole.
+    private void Suggest(RuleControls rule)
+    {
+        var offer = rule.Suggestions();
+        var taxonomy = Plugin.Instance!.RuleTaxonomy;
+        var name = offer.Category is { } id ? RuleControls.CategoryName(taxonomy, id) : "";
+        var next = offer.Any ? offer.Signature + "|" + name + "|" + Texts.Generation + "|" + rule.Stored : "";
+        if (next == suggestedKey) return;
+        suggestedKey = next;
+        JotunnWidgets.Clear(suggestions, keep: suggestFlag); Rebuilt(); // The amber frame is a child of the row (P10-25).
+        if (!offer.Any) return;
+        var width = RulePanel.Width - 28;
+        RectTransform? set = null, always = null; float setWidth = 0, alwaysWidth = 0;
+        if (offer.Category is { } category)
+        {
+            set = SuggestChip(Texts.Get(RuleSuggestion.SetText(name)), PanelArt.Sparkle, ui.Orange, RuleSuggestion.SetTip(name, offer.Stacks, offer.Total), () => rule.SuggestCategory(category), out setWidth);
+        }
+        if (offer.Missed.Count != 0)
+        {
+            var items = offer.Missed;
+            var names = items.Select(x => Texts.Escape(RuleControls.ItemName(x))).ToList();
+            always = SuggestChip(Texts.Get(RuleSuggestion.AlwaysText), PanelArt.Check, AlwaysMark, RuleSuggestion.AlwaysTip(names, rule.Stored), () => rule.AcceptContents(items), out alwaysWidth);
+        }
+        var signature = offer.Signature;
+        var dismiss = SuggestChip("", PanelArt.Cross, ui.Faint, RuleSuggestion.DismissTip, () => rule.DismissSuggestions(signature), out var dismissWidth);
+        var (setShown, alwaysShown, alwaysRow) = RuleSuggestion.Rows(setWidth, alwaysWidth, dismissWidth, width, Gap);
+        if (set != null) Cut(set, setShown);
+        if (always != null) { Cut(always, alwaysShown); always.anchoredPosition = new Vector2(0, -alwaysRow * (JotunnWidgets.ChipHeight + Gap)); }
+        dismiss.anchoredPosition = new Vector2(width - dismissWidth, 0); // ✕ at the first row's end.
+    }
+
+    private RectTransform SuggestChip(string text, Sprite icon, Color tint, Tooltip tip, System.Action click, out float width)
+    {
+        var rect = ui.Chip(suggestions, text, SuggestBack, icon, tint, out width);
+        var label = rect.GetComponentInChildren<Text>();
+        if (label) label.color = ui.Orange;
+        var image = rect.GetComponent<Image>(); image.raycastTarget = true;
+        var button = rect.gameObject.AddComponent<Button>(); button.targetGraphic = image; button.onClick.AddListener(() => click());
+        Tip(image, tip);
+        rect.anchoredPosition = Vector2.zero;
+        return rect;
+    }
+
+    // A chip narrowed to its share of the row, its text cut with "…" to one line (D132: long category names).
+    private static void Cut(RectTransform chip, float width)
+    {
+        if (Mathf.Approximately(chip.sizeDelta.x, width) || chip.sizeDelta.x <= width) return;
+        chip.sizeDelta = new Vector2(width, JotunnWidgets.ChipHeight);
+        var label = chip.GetComponentInChildren<Text>();
+        if (!label) return;
+        label.horizontalOverflow = HorizontalWrapMode.Wrap;
+        label.text = JotunnWidgets.Fit(label, label.text, Mathf.Max(1, width - 24 - 8), 1); // The chip's icon and padding (JotunnWidgets.Chip).
     }
 
     // Chips left to right, wrapping at the panel's inner width; Unity's layout groups have no wrapping row. Only as many
@@ -460,7 +563,7 @@ internal sealed class RuleSection : PanelSection
             made.Add((rect, size)); used += Mathf.Min(size, width) + Gap;
         }
         var shown = RuleChips.Fit(made.Select(x => x.Width).ToList(), width, Gap,
-            n => { var probe = Chip(new RuleChip("+" + n + " more", ChipKind.Note), out var w); Object.Destroy(probe.gameObject); probe.gameObject.SetActive(false); return w; },
+            n => { var probe = Chip(RuleChips.Folded(n), out var w); Object.Destroy(probe.gameObject); probe.gameObject.SetActive(false); return w; },
             out var places, out var more);
         for (var i = 0; i < made.Count; i++)
         {
@@ -469,10 +572,17 @@ internal sealed class RuleSection : PanelSection
         }
         if (more is { } at)
         {
-            var rest = new RuleChip("+" + (chips.Count - shown) + " more", ChipKind.Note, RuleChips.More(chips, shown));
-            var rect = Chip(rest, out var size);
+            var rect = Chip(RuleChips.Folded(chips, shown), out var size);
             Place(rect, Mathf.Min(size, width), at);
         }
+    }
+
+    /// <summary>A chip's text in the player's language: a name as it is, else its message; the filters chip cut as before (D101).</summary>
+    internal static string ChipText(RuleChip chip)
+    {
+        if (chip.Said is not { } said) return chip.Name;
+        var text = Texts.Get(said);
+        return chip.Kind == ChipKind.Filter ? RuleChips.Cut(text) : text;
     }
 
     private RectTransform Chip(RuleChip chip, out float size)
@@ -484,15 +594,11 @@ internal sealed class RuleSection : PanelSection
             ChipKind.Caution => (CautionBack, (Sprite?)null, Color.white),
             _ => (Back, (Sprite?)null, Color.white)
         };
-        var rect = ui.Chip(flow, chip.Text, back, icon, tint, out size);
+        var rect = ui.Chip(flow, ChipText(chip), back, icon, tint, out size);
         var text = rect.GetComponentInChildren<Text>();
         if (chip.Kind is ChipKind.Filter or ChipKind.Note or ChipKind.Caution)
             text.color = chip.Kind switch { ChipKind.Filter => ui.Orange, ChipKind.Caution => Amber, _ => ui.Faint };
-        if (chip.Detail.Length != 0)
-        {
-            var lines = chip.Detail.Split(new[] { '\n' }, 2);
-            Tip(rect.GetComponent<Image>(), lines[0], lines.Length > 1 ? lines[1] : "");
-        }
+        if (chip.Tip is { } tip) Tip(rect.GetComponent<Image>(), tip);
         return rect;
     }
 
@@ -504,7 +610,8 @@ internal sealed class RuleSection : PanelSection
 }
 
 // P4-00c (D051/D054): the category tree, exact items, and D050's ignored unknown categories. D101: the three tabs share
-// one body of fixed height, with one status line under it (search result or an edit's refusal).
+// one body of fixed height, with one status line under it (the search result). P10-25: an edit's refusal shows in the
+// strip, and the body keeps an amber outline until the next action.
 internal sealed class PickerSection : PanelSection
 {
     private const float Search = JotunnWidgets.RowHeight + 4, Spacing = 2, Grid = 46 * 6 + 24;
@@ -514,6 +621,7 @@ internal sealed class PickerSection : PanelSection
     private Button categories = null!, items = null!, filters = null!;
     private RectTransform unknown = null!, tree = null!, categoryPart = null!, itemPart = null!;
     private Text status = null!, gridEmpty = null!;
+    private GameObject bodyFlag = null!;
     private SearchBox search = null!, itemSearch = null!;
     private readonly List<(Image Tag, TipFill? Tip)> takers = new();
     private (bool On, Color Color)? takersShown;
@@ -527,43 +635,47 @@ internal sealed class PickerSection : PanelSection
     internal override void Build(JotunnWidgets ui, RuleControls rule)
     {
         this.ui = ui;
-        ui.Label(Root, "Edit", JotunnWidgets.TextSize, ui.Orange);
+        ui.Label(Root, Texts.Get("yavsos_tab_heading"), JotunnWidgets.TextSize, ui.Orange);
         var tabs = ui.Row(Root);
-        categories = ui.Button(tabs, "Categories", rule.ShowCategories);
-        Tip(categories, "Categories", "Tick the kinds of item this chest takes. Search finds categories and items, and lights up nearby chests that hold them.");
-        items = ui.Button(tabs, "Items", rule.ShowItems);
-        Tip(items, "Items", "Every item the rule takes. Click an icon to make it Always here, then Never here, then clear. Dimmed icons are not taken; " +
-            "an amber one is taken by the rule, but AzuAutoStore's config keeps it out of this chest type. Search adds any item.");
-        filters = ui.Button(tabs, "Filters", rule.ShowFilters);
-        Tip(filters, "Filters", "Narrow the ticked categories. An item must match every filter that has a ticked value; values within one filter are " +
-            "alternatives. Rarity, upgrade level, damaged and crafter are checked on each stack.");
+        // P10-04: the tab names are keys that other messages quote ("Its icon on the Items tab is amber").
+        var categoriesTab = Message.Of("yavsos_tab_categories");
+        categories = ui.Button(tabs, Texts.Get(categoriesTab), rule.ShowCategories);
+        Tip(categories, Tooltip.Of(categoriesTab, Message.Of("yavsos_tab_categories_tip")));
+        var itemsTab = Message.Of("yavsos_tab_items");
+        items = ui.Button(tabs, Texts.Get(itemsTab), rule.ShowItems);
+        Tip(items, Tooltip.Of(itemsTab, Message.Of("yavsos_tab_items_tip").With("always", ItemGrid.Always).With("never", ItemGrid.Never)));
+        var filtersTab = Message.Of("yavsos_tab_filters");
+        filters = ui.Button(tabs, Texts.Get(filtersTab), rule.ShowFilters);
+        Tip(filters, Tooltip.Of(filtersTab, Message.Of("yavsos_tab_filters_tip")));
         unknown = ui.Column(Root, "Ignored categories", 2);
         Body = ui.Column(Root, "Body", Spacing);
         var size = Body.gameObject.AddComponent<LayoutElement>(); size.minHeight = size.preferredHeight = BodyHeight;
         // P6-06: search over category and item names; the tree shows what matches and lights up nearby chests.
         categoryPart = ui.Column(Body, "Categories", Spacing);
         var searchRow = ui.Row(categoryPart, 4);
-        search = ui.Search(searchRow, "Search categories and items…", rule.SearchFor);
-        Tip(search.Field, "Search", "Search category and item names. The tree shows only what matches; point at a row to light up the nearby chests that hold it.");
+        search = ui.Search(searchRow, Texts.Get("yavsos_search_categories_hint"), rule.SearchFor);
+        Tip(search.Field, Tooltip.Of(Message.Of("yavsos_search_heading"), Message.Of("yavsos_search_categories_tip")));
         Takers(ui, rule, searchRow);
         tree = ui.ScrollList(categoryPart, Grid);
-        // P6-18: every item the rule takes as icons; a click cycles Always → Never → clear.
+        // P6-18: every item the rule accepts as icons; a click cycles Always → Never → clear.
         itemPart = ui.Column(Body, "Items", Spacing);
         var itemRow = ui.Row(itemPart, 4);
-        itemSearch = ui.Search(itemRow, "Search all items…", rule.SearchItems);
-        Tip(itemSearch.Field, "Search", "Search every item. Matching items show in the grid; the nearby chests that hold them light up.");
+        itemSearch = ui.Search(itemRow, Texts.Get("yavsos_search_items_hint"), rule.SearchItems);
+        Tip(itemSearch.Field, Tooltip.Of(Message.Of("yavsos_search_heading"), Message.Of("yavsos_search_items_tip")));
         Takers(ui, rule, itemRow);
         grid = new ItemGridView(ui, itemPart, Grid, rule.CycleMark, rule.GridIcon, rule.GridTooltip, rule.KeptOut);
         // Drawn inside the grid, so the empty grid keeps its size.
-        gridEmpty = ui.Label(grid.Frame, "Nothing here yet: tick categories, or search to add items.", JotunnWidgets.SmallSize, ui.Faint);
+        gridEmpty = ui.Label(grid.Frame, Texts.Get("yavsos_grid_empty"), JotunnWidgets.SmallSize, ui.Faint);
         gridEmpty.GetComponent<LayoutElement>().ignoreLayout = true; gridEmpty.alignment = TextAnchor.MiddleCenter;
         var empty = gridEmpty.rectTransform; empty.anchorMin = Vector2.zero; empty.anchorMax = Vector2.one; empty.offsetMin = new Vector2(16, 0); empty.offsetMax = new Vector2(-16, 0);
-        // The status line's tooltip: the whole refusal, or the chests the search lit with their distances (C7).
-        status = Spot(ui, Root, () => Whole(rule, MessageSpot.Tab)() ?? rule.HighlightTooltip());
+        // The status line's tooltip: the chests the search lit with their distances (C7).
+        status = Spot(ui, Root, rule.HighlightTooltip);
         status.color = ui.Faint;
+        bodyFlag = Flag(Body);
     }
 
-    // D122: the rule-tag button at the end of a search box; on, the search also lights the chests that would take a match.
+    // D122: the "Also show chests that accept it" button at the end of a search box; on, the search also lights the
+    // chests whose rules accept a match.
     private void Takers(JotunnWidgets ui, RuleControls rule, Transform row)
     {
         var button = ui.Button(row, "", rule.ToggleTakers, JotunnWidgets.RowHeight + 4);
@@ -572,7 +684,7 @@ internal sealed class PickerSection : PanelSection
         rect.SetParent(button.transform, false);
         rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f); rect.sizeDelta = new Vector2(16, 16);
         var image = go.GetComponent<Image>(); image.sprite = PanelArt.Tag; image.color = ui.Faint; image.raycastTarget = false;
-        Tip(button, () => HighlightText.TakesToggle(rule.ShowsTakers));
+        Tip(button, () => (Tooltip?)HighlightText.TakesToggle(rule.ShowsTakers));
         takers.Add((image, button.GetComponent<TipFill>()));
     }
 
@@ -593,7 +705,7 @@ internal sealed class PickerSection : PanelSection
             foreach (var (tag, tip) in takers) { tag.color = rule.ShowsTakers ? ChestHighlight.ColorOf(ChestHighlight.Kind.Takes) : ui.Faint; tip?.Refresh(); }
         }
         var plugin = Plugin.Instance!;
-        var line = "";
+        Message? line = null;
         if (rule.PickingCategories)
         {
             if (!search.Field.isFocused && search.Field.text != rule.Typed) search.Field.SetTextWithoutNotify(rule.Typed);
@@ -601,7 +713,7 @@ internal sealed class PickerSection : PanelSection
             var taxonomy = plugin.RuleTaxonomy;
             key = rule.Revision + "|" + rule.SearchRevision + "|" + plugin.ClassificationEvidenceReady + "|" + RuntimeHelpers.GetHashCode(taxonomy);
             if (key != treeKey) { treeKey = key; Tree(rule, taxonomy); }
-            line = rule.Search.Active && rule.Search.Hits.Count == 0 ? "Nothing found." : rule.HighlightStatus();
+            line = rule.Search.Active && rule.Search.Hits.Count == 0 ? Message.Of("yavsos_search_none") : rule.HighlightStatus();
         }
         else treeKey = "\0";
         if (rule.PickingItems)
@@ -610,19 +722,15 @@ internal sealed class PickerSection : PanelSection
             if (itemSearch.Refresh()) Rebuilt();
             var entries = rule.GridEntries();
             rule.GridPointer(grid.Hovered);
-            line = rule.GridQuery.Trim().Length != 0 ? rule.HighlightStatus() : "";
+            line = rule.GridQuery.Trim().Length != 0 ? rule.HighlightStatus() : null;
             if (gridShown != rule.GridRevision) { gridShown = rule.GridRevision; grid.Set(entries, RuleControls.GridTitle); }
             else grid.Refresh();
             Show(gridEmpty, entries.Count == 0);
         }
         else { gridShown = -1; rule.GridPointer(null); }
-        // D101 (C6): an edit's refusal takes the line until the next action; otherwise the open tab's search result.
-        if (rule.Messages.At(MessageSpot.Tab).Length != 0) Say(status, rule, MessageSpot.Tab, Amber, ui.Faint);
-        else
-        {
-            if (status.color != ui.Faint) status.color = ui.Faint;
-            Set(status, line);
-        }
+        // The open tab's search result; P10-25 (D132): an edit's refusal is in the strip, the tab body outlined.
+        Set(status, line == null ? "" : Texts.Get(line));
+        Flagged(bodyFlag, rule, PanelControl.Edit);
     }
 
     private void Tab(Button tab, bool active)
@@ -635,34 +743,34 @@ internal sealed class PickerSection : PanelSection
     private void Unknown(RuleControls rule)
     {
         JotunnWidgets.Clear(unknown); Rebuilt();
+        // The stored IDs are shown as they are (inventory case 6), escaped for rich text.
+        var remove = Texts.Get("yavsos_tree_remove");
         foreach (var ignored in rule.Unknown)
         {
             var row = ui.Row(unknown);
-            ui.Label(row, $"Ignored category '{ignored}' (removed or from another version)", JotunnWidgets.SmallSize);
+            ui.Label(row, Texts.Get(Message.Of("yavsos_tree_ignored_category").With("id", Texts.Escape(ignored))), JotunnWidgets.SmallSize);
             var id = ignored;
-            ui.Button(row, "Remove", () => rule.RemoveUnknown(id), 80);
+            ui.Button(row, remove, () => rule.RemoveUnknown(id), 80);
         }
-        // D077 B01: a filter this version doesn't know is kept and takes nothing.
+        // D077 B01: a filter this version doesn't know is kept and accepts nothing.
         foreach (var dimension in rule.UnknownFilters)
         {
             var row = ui.Row(unknown);
-            ui.Label(row, $"Ignored filter '{dimension}' (another version or add-on; takes nothing)", JotunnWidgets.SmallSize);
+            ui.Label(row, Texts.Get(Message.Of("yavsos_tree_ignored_filter").With("filter", Texts.Escape(dimension))), JotunnWidgets.SmallSize);
             var id = dimension;
-            ui.Button(row, "Remove", () => rule.RemoveFilter(id), 80);
+            ui.Button(row, remove, () => rule.RemoveFilter(id), 80);
         }
         // D086 D6: a value of a known filter this version doesn't know is kept the same way.
         foreach (var (dimension, value) in rule.UnknownFilterValues)
         {
             var row = ui.Row(unknown);
-            ui.Label(row, $"Ignored filter value '{dimension}: {value}' (another version; takes nothing)", JotunnWidgets.SmallSize);
+            ui.Label(row, Texts.Get(Message.Of("yavsos_tree_ignored_value").With("filter", Texts.Escape(dimension)).With("value", Texts.Escape(value))), JotunnWidgets.SmallSize);
             var d = dimension; var v = value;
-            ui.Button(row, "Remove", () => rule.RemoveFilterValue(d, v), 80);
+            ui.Button(row, remove, () => rule.RemoveFilterValue(d, v), 80);
         }
         // D086 D5: no hidden rule parts. What this panel can't show is named here and kept; Clear rule removes it.
         if (rule.HiddenParts != 0)
-            ui.Label(ui.Row(unknown), rule.HiddenParts == 1
-                ? "This rule has 1 more part this version can't show or edit. It is kept; Clear rule removes it."
-                : $"This rule has {rule.HiddenParts} more parts this version can't show or edit. They are kept; Clear rule removes them.", JotunnWidgets.SmallSize);
+            ui.Label(ui.Row(unknown), Texts.Get(Message.Of("yavsos_tree_hidden").With("button", Message.Of("yavsos_rule_clear")).Count(rule.HiddenParts)), JotunnWidgets.SmallSize);
         Show(unknown, rule.Unknown.Count + rule.UnknownFilters.Count + rule.UnknownFilterValues.Count + rule.HiddenParts != 0);
     }
 
@@ -689,23 +797,25 @@ internal sealed class PickerSection : PanelSection
             {
                 // The room left for the note: the tree's inner width less the indent, fold button and checkbox.
                 var room = RulePanel.Width - 28 - 8 - 14 - row.Depth * 18 - 24 - 2 - 26;
-                var note = "";
+                var escaped = names.Select(Texts.Escape).ToList();
+                Message? note = null;
                 for (var shown = CategorySearch.NoteNames; shown >= 0; shown--)
                 {
-                    note = " · " + CategorySearch.Note(names, shown);
-                    if (JotunnWidgets.LineWidth(label, row.Name + note) <= room) break;
+                    note = CategorySearch.Note(Texts.Escape(row.Name), escaped, shown);
+                    if (note == null || JotunnWidgets.LineWidth(label, Texts.Plain(note)) <= room) break;
                 }
                 label.supportRichText = true;
-                label.text = Plain(row.Name) + "<color=#A0957F>" + Plain(note) + "</color>";
+                if (note != null) label.text = Texts.Get(note);
             }
-            Tip(check.Root.GetComponent<Toggle>(), row.Name, (names.Count != 0 ? "Has " + string.Join(", ", names) + ".\n" : hit ? "" : "Shown because something under it matches.\n") +
-                "Tick to take the whole category. Point at a row to light up the nearby chests that hold it.");
+            // The row's tooltip: what the search found in it, or why it shows, then what ticking does.
+            var tip = Message.Of("yavsos_tree_tip");
+            Tip(check.Root.GetComponent<Toggle>(), Tooltip.Named(row.Name, names.Count != 0
+                ? Message.Of("yavsos_tree_tip_has").With("names", MessageList.Of(ListKind.And, names)).With("tip", tip)
+                : hit ? tip : Message.Of("yavsos_tree_tip_shown").With("tip", tip)));
             var report = check.Root.AddComponent<PointerReport>();
             report.Changed = on => rule.RowPointer(id, on);
         }
     }
-
-    private static string Plain(string text) => text.Replace("<", "‹").Replace(">", "›");
 }
 
 // P6-07b (D062 Q6): built-in filters for the edited alternative. Values within one filter are alternatives; an item must
@@ -738,14 +848,14 @@ internal sealed class FilterSection : PanelSection
         if (next == key) return;
         key = next;
         JotunnWidgets.Clear(list); Rebuilt();
-        if (choices.Count == 0) ui.Label(list, "No filter applies to these categories.", JotunnWidgets.SmallSize, ui.Faint);
+        if (choices.Count == 0) ui.Label(list, Texts.Get("yavsos_filtertab_none"), JotunnWidgets.SmallSize, ui.Faint);
         foreach (var choice in choices)
         {
             var dimension = choice.Dimension;
-            var name = ui.Label(list, RuleText.FilterName(dimension) + (choice.Applies ? "" : " (doesn't apply to these categories)"), JotunnWidgets.SmallSize,
+            var filterName = RuleControls.FilterNameText(dimension);
+            var name = ui.Label(list, choice.Applies ? filterName : Texts.Get(Message.Of("yavsos_filtertab_inapplicable").With("filter", filterName)), JotunnWidgets.SmallSize,
                 choice.Applies ? ui.Orange : ui.Faint);
-            Tip(name, RuleText.FilterName(dimension), "Tick values to narrow the ticked categories. Values within one filter are alternatives; an item must " +
-                "match every filter that has a ticked value." + (ClassificationFilters.InstanceDimensions.Contains(dimension) ? " Checked on each stack as it moves." : ""));
+            Tip(name, Tooltip.Named(filterName, Message.Of(ClassificationFilters.InstanceDimensions.Contains(dimension) ? "yavsos_filtertab_filter_tip_stack" : "yavsos_filtertab_filter_tip")));
             rule.Filters.TryGetValue(dimension, out var ticked);
             if (dimension == "quality" && choice.Applies) { Levels(rule, choice, ticked); continue; }
             RectTransform? row = null;
@@ -753,8 +863,8 @@ internal sealed class FilterSection : PanelSection
             {
                 if (i % 3 == 0) row = ui.Row(list, 2);
                 var value = choice.Values[i]; var dim = dimension;
-                var text = value != "unknown" && ClassificationFilters.Values(dimension) == null ? RuleControls.OpenValueName(dimension, value) : RuleText.ValueName(dimension, value);
-                if (choice.Applies && choice.Stale.Contains(value)) text += " (none here)";
+                var text = RuleControls.ValueText(dimension, value);
+                if (choice.Applies && choice.Stale.Contains(value)) text = Texts.Get(Message.Of("yavsos_filtertab_value_unused").With("value", text));
                 ui.Check(row!, text, () => rule.ToggleFilter(dim, value), Cell).Set(ticked?.Contains(value) == true ? CheckboxState.Ticked : CheckboxState.Empty);
             }
         }
@@ -791,7 +901,8 @@ internal sealed class FilterSection : PanelSection
             if (value == "5+") ui.Label(go.transform, "+", JotunnWidgets.SmallSize, on ? Color.white : ui.Faint, false);
         }
         if (choice.Stale.Count != 0)
-            ui.Label(list, "Saved levels none of these items reach: " + string.Join(", ", choice.Stale), JotunnWidgets.SmallSize, ui.Faint);
+            ui.Label(list, Texts.Get(Message.Of("yavsos_filtertab_levels_unused").With("levels", MessageList.Of(ListKind.Comma, choice.Stale)).Count(choice.Stale.Count)),
+                JotunnWidgets.SmallSize, ui.Faint);
     }
 }
 
@@ -806,7 +917,8 @@ internal sealed class ChestSection : PanelSection
         new Color32(0x3f, 0x5a, 0x33, 0xff), new Color32(0x33, 0x4a, 0x5a, 0xff), new Color32(0x3c, 0x3c, 0x48, 0xff)
     };
     private JotunnWidgets ui = null!;
-    private Text heading = null!, spot = null!;
+    private Text heading = null!;
+    private GameObject barFlag = null!;
     private CanvasGroup bar = null!;
     private readonly List<(Image Back, Text Text, Outline Edge)> levels = new();
     private int shownLevel = -1;
@@ -818,18 +930,17 @@ internal sealed class ChestSection : PanelSection
     {
         this.ui = ui;
         var head = ui.Row(Root);
-        heading = ui.Label(head, "This chest", JotunnWidgets.TextSize, ui.Orange, false);
-        spot = Spot(ui, head, Whole(rule, MessageSpot.Chest));
-        spot.alignment = TextAnchor.MiddleRight;
+        heading = ui.Label(head, Texts.Get(ChestPriority.Heading(0, false)), JotunnWidgets.TextSize, ui.Orange, false);
         var row = ui.Row(Root, 2);
         bar = row.gameObject.AddComponent<CanvasGroup>();
+        barFlag = Flag(row);
         for (var level = ChestPriority.Highest; level <= ChestPriority.Lowest; level++)
         {
             var chosen = level;
             var (button, back, text) = ui.Swatch(row, level.ToString(), Bands[ChestPriority.Band(level)], () => rule.SetLevel(chosen));
             var edge = back.gameObject.AddComponent<Outline>(); edge.effectColor = ui.Orange; edge.effectDistance = new Vector2(2, -2); edge.enabled = false;
             levels.Add((back, text, edge));
-            Tip(button, () => ChestPriority.Tooltip(chosen, ChestPriority.Level(rule.Priority), rule.Stored));
+            Tip(button, () => (Tooltip?)ChestPriority.Tip(chosen, ChestPriority.Level(rule.Priority), rule.Stored));
         }
     }
 
@@ -839,8 +950,8 @@ internal sealed class ChestSection : PanelSection
         Show(Root, edit);
         if (!edit) return;
         var ruled = rule.Stored && rule.Categories.Count + rule.Includes.Count + rule.Unknown.Count + rule.Filters.Count + rule.HiddenParts != 0;
-        Set(heading, ChestPriority.Heading(rule.Priority, ruled));
-        Say(spot, rule, MessageSpot.Chest, Amber, ui.Orange);
+        Set(heading, Texts.Get(ChestPriority.Heading(rule.Priority, ruled)));
+        Flagged(barFlag, rule, PanelControl.Priority);
         var level = ChestPriority.Level(rule.Priority);
         if (level != shownLevel || ruled != shownRuled)
         {
@@ -857,14 +968,14 @@ internal sealed class ChestSection : PanelSection
     }
 }
 
-// D071: "Clean up nearby" at the bottom, on one row with the chest's clean-up opt-out (maintainer, H4 client check). D101:
-// a refusal, or the summary of a run with nothing to move, on the line under them until the next action; a started run
-// says nothing here (the button turns to "Cleaning up…" and the result panel follows).
+// D071: "Clean up nearby" at the bottom, on one row with the chest's clean-up opt-out (maintainer, H4 client check). D101,
+// D132: a refusal, or the summary of a run with nothing to move, in the strip until the next action, the refused control
+// outlined; a started run says nothing (the button turns to "Cleaning up…" and the result panel follows).
 internal sealed class CleanupSection : PanelSection
 {
     private JotunnWidgets ui = null!;
     private Button cleanup = null!;
-    private Text spot = null!;
+    private GameObject cleanupFlag = null!, optOutFlag = null!;
     private TriStateToggle optOut = null!;
     internal override string Name => "Cleanup";
     internal override PanelPart Part => PanelPart.Cleanup;
@@ -873,18 +984,21 @@ internal sealed class CleanupSection : PanelSection
     {
         this.ui = ui;
         var row = ui.Row(Root);
-        optOut = ui.Check(row, "Don't clean up this chest", rule.ToggleCleanupOptOut);
-        Tip(optOut.Root.GetComponent<Toggle>(), "Don't clean up this chest", "Clean up nearby leaves this chest's items where they are. Items can still be stashed here.");
-        cleanup = ui.Button(row, "Clean up nearby", rule.CleanUpNearby, 170);
+        var optOutText = Message.Of("yavsos_cleanup_optout");
+        optOut = ui.Check(row, Texts.Get(optOutText), rule.ToggleCleanupOptOut);
+        Tip(optOut.Root.GetComponent<Toggle>(), Tooltip.Of(optOutText, Message.Of("yavsos_cleanup_optout_tip")));
+        var button = Message.Of("yavsos_cleanup_button");
+        cleanup = ui.Button(row, Texts.Get(button), rule.CleanUpNearby, 170);
         Tip(cleanup, () =>
         {
             var settings = Plugin.Instance?.Settings;
-            var key = settings == null ? "" : CleanupTriggers.KeyName(settings.CleanupShortcut);
-            return ("Clean up nearby" + (key.Length == 0 ? "" : " [" + key + "]"), "Moves misplaced items from chests within " +
-                (settings?.EffectiveCleanupRange ?? 0).ToString("0", System.Globalization.CultureInfo.InvariantCulture) +
-                " m to the chests whose rules take them. A result panel lists what went where.");
+            var key = settings == null ? null : CleanupTriggers.KeyName(settings.CleanupShortcut);
+            var meters = (long)System.Math.Round(settings?.EffectiveCleanupRange ?? 0, System.MidpointRounding.AwayFromZero);
+            return (Tooltip?)Tooltip.Of(key == null ? button : Message.Of("yavsos_cleanup_button_key").With("button", button).With("key", key),
+                Message.Of("yavsos_cleanup_button_tip").With("meters", meters));
         });
-        spot = Spot(ui, Root, Whole(rule, MessageSpot.Cleanup));
+        cleanupFlag = Flag(cleanup);
+        optOutFlag = JotunnWidgets.Frame((RectTransform)optOut.Root.transform, Amber);
     }
 
     protected override void Refresh(RuleControls rule, RulePanelMode mode, bool structural)
@@ -892,8 +1006,8 @@ internal sealed class CleanupSection : PanelSection
         var edit = mode == RulePanelMode.Edit;
         Show(Root, edit);
         if (!edit) return;
-        Set(cleanup, rule.Cleanup.Running ? "Cleaning up…" : "Clean up nearby");
+        Set(cleanup, Texts.Get(rule.Cleanup.Running ? "yavsos_cleanup_running" : "yavsos_cleanup_button"));
         optOut.Set(ChestRuleStore.CleanupOptOut(rule.Chest!) ? CheckboxState.Ticked : CheckboxState.Empty);
-        Say(spot, rule, MessageSpot.Cleanup, Amber, ui.Orange);
+        Flagged(cleanupFlag, rule, PanelControl.Cleanup); Flagged(optOutFlag, rule, PanelControl.OptOut);
     }
 }

@@ -13,17 +13,17 @@ namespace YAVSOS.Cleanup;
 /// </summary>
 internal static class StashLab
 {
-    public static string Run(float radius) => Plugin.Instance?.Stash.Start(radius > 0 ? radius : null) ?? "not loaded";
+    public static string Run(float radius) => Plugin.Instance?.Stash.Start(radius > 0 ? radius : null).ToString() ?? "not loaded";
 
     /// <summary>The single-item key on the first stack of the item in the player's inventory.</summary>
     public static string RunSingle(string prefab)
     {
         var item = Find(prefab);
-        return item == null ? "not in inventory" : Plugin.Instance?.Stash.Start(single: item) ?? "not loaded";
+        return item == null ? "not in inventory" : Plugin.Instance?.Stash.Start(single: item).ToString() ?? "not loaded";
     }
 
     public static string Status() => Plugin.Instance?.Stash is { } runner
-        ? $"enabled={StashRunner.Enabled}; running={runner.Running}; progress={runner.Progress}; last={runner.LastSummary}; " +
+        ? $"enabled={StashRunner.Enabled}; running={runner.Running}; progress={runner.Progress}; last={(runner.LastSummary is { } last ? Interface.Texts.English(last) : "")}; " +
           $"muc={(MucRoute.Available(out var source) ? source : "none")}; bundled={MucRoute.BundledStatus}; active={BundledCopy.Active}; probe={NativeInventoryProbe.Status}"
         : "not loaded";
 

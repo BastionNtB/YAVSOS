@@ -16,6 +16,11 @@ public static class CategoryPolicyCodec
     public const int MaxPayloadBytes = 262144;
     public const int MaxCategories = 256;
     public const int MaxAssignments = 2048;
+    /// <summary>
+    /// The first YAVSOS version whose reader accepts schema 2 (`&lt;add&gt;`/`&lt;remove&gt;` lines, X48, D130). An older
+    /// client refuses such a policy, so its category rules take nothing until it updates; the server logs it (option C).
+    /// </summary>
+    public const string Schema2ReaderVersion = "1.2.0";
     public static string EmptyDocument => $"<policy xmlns=\"{Namespace}\" schema=\"1\" revision=\"1\"><categories/><assignments/></policy>";
 
     [Flags]
@@ -39,7 +44,9 @@ public static class CategoryPolicyCodec
             Require(reader.NodeType == XmlNodeType.Element && reader.LocalName == "policy" && reader.NamespaceURI == Namespace,
                 "Expected the YAVSOS policy namespace/root.");
             CheckAttributes(reader, Attributes.Schema | Attributes.Revision);
-            Require(reader.GetAttribute("schema") == "1", "Unsupported policy schema; expected 1. Update compatible YAVSOS clients before applying it.");
+            // X48 option A (D130): either schema is read; the content decides which one the canonical form declares.
+            var declaredSchema = reader.GetAttribute("schema");
+            Require(declaredSchema == "1" || declaredSchema == "2", "Unsupported policy schema; expected 1 or 2. Update compatible YAVSOS clients before applying it.");
             Require(long.TryParse(reader.GetAttribute("revision"), NumberStyles.None, CultureInfo.InvariantCulture, out var revision)
                     && revision > 0, "revision must be a positive 64-bit integer.");
             var categories = new List<CategoryDefinition>();
@@ -79,13 +86,18 @@ public static class CategoryPolicyCodec
             // Sections can appear in either order. Resolve references after both
             // are read without retaining an XML object graph or provisional policy.
             foreach (var assignment in assignments)
+            {
                 foreach (var id in assignment.Memberships)
                     if (!ids.Contains(id)) throw new InvalidDataException($"Unknown membership category '{id}'; define it in categories.");
+                foreach (var id in assignment.Removals)
+                    if (!ids.Contains(id)) throw new InvalidDataException($"Unknown membership category '{id}'; define it in categories.");
+            }
+            var schema = assignments.TrueForAll(x => x.Replaces) ? 1 : 2;
             var sortedCategories = categories.ToArray();
             var sortedAssignments = assignments.ToArray();
             Array.Sort(sortedCategories, (left, right) => string.CompareOrdinal(left.Id, right.Id));
             Array.Sort(sortedAssignments, CompareAssignments);
-            var canonical = Canonical(revision, sortedCategories, sortedAssignments, payload.Length);
+            var canonical = Canonical(schema, revision, sortedCategories, sortedAssignments, payload.Length);
             // D086 M5 (B1.6): what is published is the canonical form, which can be longer than the file (spaced empty
             // tags). Every client refuses one over the limit, so it is refused here and the last accepted policy stays.
             var canonicalBytes = Encoding.UTF8.GetByteCount(canonical);
@@ -96,7 +108,7 @@ public static class CategoryPolicyCodec
             var hex = new char[hash.Length * 2];
             const string digits = "0123456789abcdef";
             for (var i = 0; i < hash.Length; i++) { hex[i * 2] = digits[hash[i] >> 4]; hex[i * 2 + 1] = digits[hash[i] & 15]; }
-            policy = new CategoryPolicy(revision, Array.AsReadOnly(sortedCategories), Array.AsReadOnly(sortedAssignments), canonical, new string(hex));
+            policy = new CategoryPolicy(schema, revision, Array.AsReadOnly(sortedCategories), Array.AsReadOnly(sortedAssignments), canonical, new string(hex));
             diagnostic = "";
             return true;
         }
@@ -147,34 +159,50 @@ public static class CategoryPolicyCodec
             Require(match != "glob" || wildcard, "Glob selectors must contain * or ?.");
             if (!selectors.Add(match + ":" + selector)) throw new InvalidDataException($"Duplicate {match} selector '{selector}'.");
             var primary = reader.GetAttribute("primary");
+            // <member> lines replace; <add>/<remove> lines edit (X48, D130). The design's rules 1-4 are checked here.
             var memberships = new HashSet<string>(StringComparer.Ordinal);
+            var removals = new HashSet<string>(StringComparer.Ordinal);
+            var replaceLines = false;
+            var editLines = false;
             var entryDepth = reader.Depth;
             var emptyEntry = reader.IsEmptyElement;
             reader.Read();
             while (!emptyEntry && NextChild(reader, entryDepth, "assignment"))
             {
-                Require(reader.LocalName == "member" && reader.NamespaceURI == Namespace, "Unknown element in assignment.");
+                var line = reader.LocalName;
+                Require(line is "member" or "add" or "remove" && reader.NamespaceURI == Namespace, "Unknown element in assignment.");
+                if (line == "member") replaceLines = true; else editLines = true;
+                Require(!(replaceLines && editLines), $"Assignment for '{selector}' mixes member lines with add or remove lines; use one kind.");
                 CheckAttributes(reader, Attributes.Category);
                 var id = Required(reader, "category");
-                if (!memberships.Add(id)) throw new InvalidDataException($"Duplicate membership '{id}'.");
-                ReadLeaf(reader, "member");
+                if (memberships.Contains(id) || removals.Contains(id))
+                    throw new InvalidDataException(editLines ? $"Category '{id}' appears twice in the assignment for '{selector}'." : $"Duplicate membership '{id}'.");
+                (line == "remove" ? removals : memberships).Add(id);
+                ReadLeaf(reader, line);
             }
-            Require(memberships.Count > 0, "Each assignment needs at least one membership.");
-            Require(primary == null || memberships.Contains(primary), "primary must be one of the assignment's memberships.");
-            var orderedMemberships = new string[memberships.Count];
-            memberships.CopyTo(orderedMemberships);
-            Array.Sort(orderedMemberships, StringComparer.Ordinal);
-            assignments.Add(new CategoryAssignment(match, selector, Array.AsReadOnly(orderedMemberships), primary));
+            Require(memberships.Count + removals.Count > 0, "Each assignment needs at least one membership.");
+            Require(primary == null || memberships.Contains(primary), replaceLines
+                ? "primary must be one of the assignment's memberships."
+                : $"primary on the assignment for '{selector}' must be one of its add lines.");
+            assignments.Add(new CategoryAssignment(match, selector, replaceLines, Sorted(memberships), Sorted(removals), primary));
         }
     }
 
-    private static string Canonical(long revision, CategoryDefinition[] categories, CategoryAssignment[] assignments, int capacity)
+    private static IReadOnlyList<string> Sorted(HashSet<string> values)
+    {
+        var ordered = new string[values.Count];
+        values.CopyTo(ordered);
+        Array.Sort(ordered, StringComparer.Ordinal);
+        return Array.AsReadOnly(ordered);
+    }
+
+    private static string Canonical(int schema, long revision, CategoryDefinition[] categories, CategoryAssignment[] assignments, int capacity)
     {
         var output = new StringBuilder(capacity);
         using (var writer = XmlWriter.Create(output, new XmlWriterSettings { OmitXmlDeclaration = true, Indent = false }))
         {
             writer.WriteStartElement("policy", Namespace);
-            writer.WriteAttributeString("schema", "1");
+            writer.WriteAttributeString("schema", schema.ToString(CultureInfo.InvariantCulture));
             writer.WriteAttributeString("revision", revision.ToString(CultureInfo.InvariantCulture));
             // Match schema-1 XElement's attribute order and spaced empty tags exactly.
             writer.WriteAttributeString("xmlns", Namespace);
@@ -194,18 +222,22 @@ public static class CategoryPolicyCodec
                 writer.WriteAttributeString("match", assignment.Match);
                 writer.WriteAttributeString("selector", assignment.Selector);
                 if (assignment.Primary != null) writer.WriteAttributeString("primary", assignment.Primary);
-                foreach (var id in assignment.Memberships)
-                {
-                    writer.WriteStartElement("member", Namespace);
-                    writer.WriteAttributeString("category", id);
-                    writer.WriteEndElement();
-                }
+                // An edit writes its removals first, the order they apply in; a replace writes <member> lines as schema 1 did.
+                foreach (var id in assignment.Removals) Line(writer, "remove", id);
+                foreach (var id in assignment.Memberships) Line(writer, assignment.Replaces ? "member" : "add", id);
                 writer.WriteEndElement();
             }
             writer.WriteEndElement();
             writer.WriteEndElement();
         }
         return output.ToString();
+    }
+
+    private static void Line(XmlWriter writer, string name, string category)
+    {
+        writer.WriteStartElement(name, Namespace);
+        writer.WriteAttributeString("category", category);
+        writer.WriteEndElement();
     }
 
     private static int CompareAssignments(CategoryAssignment left, CategoryAssignment right)

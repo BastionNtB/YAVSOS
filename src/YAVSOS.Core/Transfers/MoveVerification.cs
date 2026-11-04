@@ -65,6 +65,19 @@ public static class MoveVerification
             StringComparer.Ordinal.Equals(destinationBefore.ContentFingerprint, destinationAfter.ContentFingerprint));
     }
 
+    /// <summary>
+    /// Verifies one direct move by its counts: the source's decrease of the key equals the destination's increase (more
+    /// than 0, at most planned), every other key is unchanged on both sides, and owners and session are current.
+    /// F13 (D129): the planned cell is not required. A mod's inventory may put the item in a slot of its own (Storehouse's
+    /// weapon, armor and utility stores use typed slots), and the counts already prove conservation, as they do for
+    /// MultiUserChest moves. The caller still logs <see cref="DirectMoveObservation.CellHoldsKey"/>.
+    /// </summary>
+    public static TransferRefusal Verify(TransferOperation operation, DirectMoveObservation seen, bool ownersCurrent)
+    {
+        if (operation == null) throw new ArgumentNullException(nameof(operation));
+        return operation.Verify(seen.Decrease, seen.Increase, seen.OthersUnchanged, ownersCurrent, finalStateMatchesPlan: true);
+    }
+
     /// <summary>The counts a <see cref="DelegatedMoveObserver"/> compares: the key in the source and destination, and everything else in the destination.</summary>
     public static (int Source, int Destination, int OtherDestination) Counts(TransferInventorySnapshot source, TransferInventorySnapshot destination, string key)
     {

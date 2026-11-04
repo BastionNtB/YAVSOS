@@ -24,12 +24,12 @@ public enum OwnerMucState
 public static class OwnerMucStates
 {
     /// <summary>The skip reason for a state; null for <see cref="OwnerMucState.Usable"/>.</summary>
-    public static CleanupReason? Skip(this OwnerMucState state) => state switch
+    public static RunReason? Skip(this OwnerMucState state) => state switch
     {
         OwnerMucState.Usable => null,
-        OwnerMucState.CantTakeRequests => CleanupReason.OtherOwnerMucUnusable,
-        OwnerMucState.NoAnswer => CleanupReason.OtherOwnerMucSilent,
-        OwnerMucState.Checking => CleanupReason.OtherOwnerMucChecking,
-        _ => CleanupReason.OtherOwnerFormatUnknown
+        OwnerMucState.CantTakeRequests => RunReason.OtherOwnerMucUnusable,
+        OwnerMucState.NoAnswer => RunReason.OtherOwnerMucSilent,
+        OwnerMucState.Checking => RunReason.OtherOwnerMucChecking,
+        _ => RunReason.OtherOwnerFormatUnknown
     };
 }

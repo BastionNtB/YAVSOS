@@ -158,7 +158,7 @@ public sealed class PolicyLifecycleTests
         var payload = caseId switch
         {
             "malformed" => "<policy>",
-            "unsupported-schema" => Remote(3).Replace("schema=\"1\"", "schema=\"2\""),
+            "unsupported-schema" => Remote(3).Replace("schema=\"1\"", "schema=\"3\""),
             "rollback" => Remote(1),
             _ => Local(2)
         };
@@ -313,7 +313,7 @@ public sealed class PolicyLifecycleTests
         state.ApplyLocal(Local());
         state.BeginSession(PolicyMode.AwaitingServer);
         Assert.Equal(PolicyUpdate.Rejected, state.ApplyRemote(state.Stamp.Session,
-            Remote().Replace("schema=\"1\"", "schema=\"2\"")));
+            Remote().Replace("schema=\"1\"", "schema=\"3\"")));
         Assert.Equal(PolicyMode.ManagedClient, state.Mode);
         Assert.Null(state.Effective);
         Assert.Equal("local", state.Local!.Categories[0].Id);

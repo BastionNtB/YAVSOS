@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.0 (2026-11-04)
+
+### Changed
+
+- Click ↶ beside Copy, or press Ctrl + Z, to undo your last change to a chest's rule, including Paste and Clear rule. Do it again to redo. Each chest keeps its last change until you leave the world.
+- The panel now suggests a rule from what the chest holds: "Set rule: Metals" on a chest without a rule where most stacks share a category, and "Always: these items" on a chest holding items its rule doesn't accept. Click ✕ to hide them on that chest until they change.
+- The panel now shows its messages in one strip under its title, such as why a change wasn't made or that another player is using the chest. A refused control is outlined in amber, and when there's no message the strip shows the chest label.
+- The result panel now lists each chest or drawer that got items and what went in, then "+N more places" when they don't all fit. This works for YAVSOS's stash and cleanup and for AzuAutoStore's stash key.
+- When a search matches several items, a chest lit because its rule accepts some of them now names them, such as "Accepts Copper, Tin".
+- Changed wording throughout the documentation and interface to be more consistent. Two category names were changed: "Moulds" is now "Molds", and "Epic Loot" is now "EpicLoot".
+- Server admins and modders can now add an item to a category, or remove it from one, with `<add>` and `<remove>` lines in the categories file, and the item keeps its other categories. Every player then needs YAVSOS 1.2: on an older version, categories in rules accept nothing until they update, and the server log names them.
+
+### Fixed
+
+- Cleanup no longer stutters on its first press after you start the game, and pauses less in large bases.
+- Items that YAVSOS's stash or cleanup puts in storage that sorts them into its own slots, such as Storehouse's armor stands, now count as moved instead of unconfirmed.
+
 ## 1.1.0 (2026-11-02)
 
 ### Changed

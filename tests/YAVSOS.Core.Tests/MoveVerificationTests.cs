@@ -48,6 +48,50 @@ public sealed class MoveVerificationTests
         Assert.True(refused.NothingChanged); Assert.Equal(0, refused.Decrease);
     }
 
+    private static TransferOperation Applying(TransferInventorySnapshot source, TransferInventorySnapshot destination, Guid handle, int units)
+    {
+        Assert.Equal(TransferRefusal.None, DepositPlan.TryCreateAt(Guid.NewGuid(), Guid.NewGuid(), "policy", "rule", source, destination,
+            handle, units, 0, 0, null, 0, 5, out var plan));
+        var operation = new TransferOperation(Assert.IsType<DepositPlan>(plan));
+        Assert.Equal(TransferRefusal.None, operation.BeginApplying(TransferRefusal.None));
+        return operation;
+    }
+
+    [Fact]
+    public void Verify_ConservedMoveIntoAnotherCell_IsMoved()
+    {
+        // F13 (D129): a mod's inventory (Storehouse's typed slots) places the item elsewhere; the counts still prove the move.
+        var handle = Guid.NewGuid();
+        var sourceBefore = Snapshot("player", Stack(0, 10, handle: handle), Stack(1, 3, Item("Stone"), "Stone"));
+        var destinationBefore = Snapshot("chest");
+        var key = MoveVerification.MergeKey(sourceBefore, handle, Item());
+        var seen = MoveVerification.Observe(sourceBefore, destinationBefore,
+            Snapshot("player", Stack(1, 3, Item("Stone"), "Stone")), Snapshot("chest", Stack(2, 10)), key, 0, 0);
+        Assert.False(seen.CellHoldsKey);
+        var operation = Applying(sourceBefore, destinationBefore, handle, 10);
+        Assert.Equal(TransferRefusal.None, MoveVerification.Verify(operation, seen, ownersCurrent: true));
+        Assert.Equal(TransferExecutionState.Verified, operation.State); Assert.Equal(10, operation.VerifiedMovedUnits);
+    }
+
+    [Fact]
+    public void Verify_WithoutTheCellCheck_StillRefusesChangedCountsAndOwners()
+    {
+        var handle = Guid.NewGuid();
+        var sourceBefore = Snapshot("player", Stack(0, 10, handle: handle), Stack(1, 3, Item("Stone"), "Stone"));
+        var destinationBefore = Snapshot("chest");
+        var key = MoveVerification.MergeKey(sourceBefore, handle, Item());
+        var moved = MoveVerification.Observe(sourceBefore, destinationBefore,
+            Snapshot("player", Stack(1, 3, Item("Stone"), "Stone")), Snapshot("chest", Stack(2, 10)), key, 0, 0);
+        var otherLost = MoveVerification.Observe(sourceBefore, destinationBefore,
+            Snapshot("player", Stack(1, 2, Item("Stone"), "Stone")), Snapshot("chest", Stack(2, 10)), key, 0, 0);
+        var unitsLost = MoveVerification.Observe(sourceBefore, destinationBefore,
+            Snapshot("player", Stack(1, 3, Item("Stone"), "Stone")), Snapshot("chest", Stack(2, 9)), key, 0, 0);
+        Assert.Equal(TransferRefusal.Unconfirmed, MoveVerification.Verify(Applying(sourceBefore, destinationBefore, handle, 10), otherLost, true));
+        Assert.Equal(TransferRefusal.Unconfirmed, MoveVerification.Verify(Applying(sourceBefore, destinationBefore, handle, 10), unitsLost, true));
+        Assert.Equal(TransferRefusal.Unconfirmed, MoveVerification.Verify(Applying(sourceBefore, destinationBefore, handle, 10), moved, false));
+        Assert.Throws<ArgumentNullException>(() => MoveVerification.Verify(null!, moved, true));
+    }
+
     [Fact]
     public void MergeKey_FallsBackToTheIdentityWhenTheStackIsGone_AndCountsSplitDelegatedState()
     {

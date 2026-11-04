@@ -100,10 +100,10 @@ public sealed class LoadedSourceReceiptTests
         Assert.DoesNotContain(index.Items["Wood"].Facets, x => x.Dimension == "eaten-by");
         // Q8 item tooltip line: smallest categories, then the tames that eat it, in the player's language.
         var taxonomy = DefaultClassificationTaxonomy.Create();
-        var line = RuleText.ItemLine(carrot, taxonomy, (_, token) => token == "$enemy_boar" ? "Boar" : token);
+        var line = EnglishText.Of(RuleText.ItemLine(carrot, EnglishText.Names(taxonomy), EnglishText.Of, (_, token) => token == "$enemy_boar" ? "Boar" : token)!);
         Assert.Contains("eaten by Boar", line);
         Assert.DoesNotContain("Food & farming,", line); // no umbrella next to its own subcategory
-        Assert.Equal("", RuleText.ItemLine(null, taxonomy));
+        Assert.Null(RuleText.ItemLine(null, EnglishText.Names(taxonomy), EnglishText.Of));
         // The filter only shows where some item in scope is eaten by a tame.
         var choices = FilterChoices.Compute(index.Items.Values, new[] { "food" }, (_, _) => false, new Dictionary<string, IReadOnlyList<string>>());
         Assert.Equal(new[] { "$enemy_boar", "$enemy_prowler" }, choices.Single(x => x.Dimension == "eaten-by").Values);

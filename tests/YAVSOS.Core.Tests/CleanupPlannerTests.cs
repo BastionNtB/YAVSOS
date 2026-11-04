@@ -86,6 +86,44 @@ public sealed class CleanupPlannerTests
         IEnumerable<Guid>? held = null, Func<string, int>? size = null) =>
         CleanupPlanner.Plan(new CleanupInput(Taxonomy, answers ?? new Answers(), world.Snapshot(), size, muc, azu, held));
 
+    // Q10 (D132): one ranking per item serves every stack of it, and each source chest is left out of its own stacks' ranking.
+    [Fact]
+    public void RouteCache_OneItemInSeveralChests_EachGoesToTheBestOtherChest()
+    {
+        var world = new World();
+        var materials = world.Add("a-materials", Rule(new[] { "materials" }));
+        var metal = world.Add("b-metal", Rule(new[] { "materials.metal" }));
+        var box = world.Add("c-box", "");
+        var inMaterials = Put(materials, "Copper", 4); var inMetal = Put(metal, "Copper", 6); var inBox = Put(box, "Copper", 3);
+        var plan = Plan(world);
+        // Materials and the unruled box give their Copper to Metals; the Metals chest's own Copper stays.
+        Assert.Equal(new[] { inMaterials.Handle, inBox.Handle }.OrderBy(x => x), plan.Moves.Select(x => x.Handle).OrderBy(x => x));
+        Assert.All(plan.Moves, x => Assert.Equal("b-metal", x.DestinationId));
+        Assert.DoesNotContain(plan.Moves, x => x.Handle == inMetal.Handle);
+    }
+
+    // A2-01 part 2: the Lab clock reports each part once per run and leaves the plan as it is.
+    [Fact]
+    public void Timed_ReportsEachPartOncePerRun_AndLeavesThePlanUnchanged()
+    {
+        var world = new World();
+        var wood = world.Add("wood", Rule(new[] { "materials.wood" }), width: 3);
+        Put(wood, "Copper", 7); Put(wood, "Wood", 4);
+        world.Add("metal", Rule(new[] { "materials.metal" }), width: 2);
+        world.Add("overflow", Rule(overflow: true), width: 2);
+        var parts = new List<(string Step, double Ms)>();
+        var azuCalls = 0;
+        bool Azu(string chest, TransferItemIdentity item) { azuCalls++; return true; }
+        var timed = CleanupPlanner.Plan(new CleanupInput(Taxonomy, new Answers(), world.Snapshot(), azuAllows: Azu, timed: (step, ms) => parts.Add((step, ms))));
+        var plain = CleanupPlanner.Plan(new CleanupInput(Taxonomy, new Answers(), world.Snapshot(), azuAllows: Azu));
+        Assert.Equal(Describe(plain), Describe(timed));
+        Assert.NotEmpty(timed.Moves);
+        Assert.True(azuCalls > 0);
+        Assert.Equal(new[] { "facets", "evaluate", "rank", "azu", "other", "total" }, parts.Select(x => x.Step));
+        Assert.All(parts, x => Assert.True(x.Ms >= 0, x.Step));
+        Assert.True(parts.Single(x => x.Step == "total").Ms >= parts.Where(x => x.Step != "total" && x.Step != "other").Sum(x => x.Ms));
+    }
+
     // F8 (D086 D16(a) for chests, B1.23): a stack the adapter couldn't capture stays where it is and holds its slot; the rest
     // of its chest still takes part, as a source and as a destination.
     [Fact]
@@ -104,7 +142,7 @@ public sealed class CleanupPlannerTests
         Assert.Equal(7, move.Units);
         Assert.Equal(1, move.DestinationX); // Not merged into, nor placed over, the uncapturable stack.
         Assert.Null(move.MergeHandle); Assert.False(move.MergesPlanned);
-        Assert.Contains(plan.Remainders, x => x.Handle == odd.Handle && x.Reason == CleanupReason.Unsupported);
+        Assert.Contains(plan.Remainders, x => x.Handle == odd.Handle && x.Reason == RunReason.Unsupported);
         world.Apply(plan);
         Assert.Contains(odd, wood.Slots); Assert.Contains(held, metal.Slots);
         Assert.Equal(before.Values.Sum(), world.Totals().Values.Sum());
@@ -123,7 +161,7 @@ public sealed class CleanupPlannerTests
         // Over the limit with items in every chest: the rest are reported, not hidden, and the reason says so.
         foreach (var chest in world.Chests.Where(x => x.Id != "z-wood")) Put(chest, "Copper", 1);
         Assert.Equal(11, Plan(world).SkippedChests);
-        Assert.DoesNotContain("run again", CleanupReport.Describe(CleanupReason.ChestLimit)); // It names where to stand instead (D086 D9).
+        Assert.DoesNotContain("try again", EnglishText.Of(RunReport.Reason(RunReason.ChestLimit))); // It names where to stand instead (D086 D9).
     }
 
     // D086 D9: the nearest sources give up items; the farthest are left and reported, and the report counts chests in range.
@@ -141,10 +179,11 @@ public sealed class CleanupPlannerTests
         var plan = Plan(world);
         Assert.Equal(2, plan.SkippedChests);
         Assert.DoesNotContain(plan.Moves, x => x.SourceId is "w000" or "w001"); // The two farthest.
-        Assert.Contains("closer", CleanupReport.Describe(CleanupReason.ChestLimit));
-        var report = new CleanupReport(); report.Range(300, 256);
-        Assert.EndsWith("300 chests in range; only the nearest 256 could be handled", report.Summary());
-        report.Range(12, 12); Assert.DoesNotContain("in range", report.Summary());
+        Assert.Equal("in a chest beyond the nearest " + CleanupPlanner.MaximumSources + " with items; clean up again closer to it",
+            EnglishText.Of(RunReport.Reason(RunReason.ChestLimit)));
+        var report = RunReport.ForCleanup(); report.Range(300, 256);
+        Assert.Equal("Nothing moved: YAVSOS read only the nearest 256 of 300 chests in range.", EnglishText.Of(report.Summary()));
+        report.Range(12, 12); Assert.Equal("Nothing to clean up.", EnglishText.Of(report.Summary()));
     }
 
     [Fact]
@@ -156,7 +195,7 @@ public sealed class CleanupPlannerTests
         world.Add("c-metal", Rule(new[] { "materials.metal" }));
         var plan = Plan(world);
         var move = Assert.Single(plan.Moves);
-        Assert.Equal(("a-wood", "c-metal", 20, CleanupRoute.Direct, CleanupKind.Rejected), (move.SourceId, move.DestinationId, move.Units, move.Route, move.Kind));
+        Assert.Equal(("a-wood", "c-metal", 20, MoveRoute.Direct, CleanupKind.Rejected), (move.SourceId, move.DestinationId, move.Units, move.Route, move.Kind));
         // D061: priority first.
         world["b-materials"].Payload = Rule(new[] { "materials" }, priority: 1);
         Assert.Equal("b-materials", Assert.Single(Plan(world).Moves).DestinationId);
@@ -250,7 +289,7 @@ public sealed class CleanupPlannerTests
         Assert.Equal(("b-always", "c-always", 3, CleanupKind.Resort), (move.SourceId, move.DestinationId, move.Units, move.Kind));
         // Without an Always chest, a rejected unresolved item is reported as having no destination, as before.
         var lone = new World(); Put(lone.Add("a-food", Rule(new[] { "food" })), "ModThing", 1);
-        Assert.Equal(CleanupReason.NoDestination, Assert.Single(Plan(lone).Remainders).Reason);
+        Assert.Equal(RunReason.NoDestination, Assert.Single(Plan(lone).Remainders).Reason);
     }
 
     [Fact]
@@ -267,7 +306,7 @@ public sealed class CleanupPlannerTests
         Assert.Equal(("a-cart", "b-metal", CleanupKind.Unruled), (move.SourceId, move.DestinationId, move.Kind));
         // Bread stays silently in the cart; the sword has no ruled destination and is reported.
         var rest = Assert.Single(plan.Remainders);
-        Assert.Equal(("c-wood", "SwordBronze", CleanupReason.NoDestination), (rest.SourceId, rest.Identity.Prefab, rest.Reason));
+        Assert.Equal(("c-wood", "SwordBronze", RunReason.NoDestination), (rest.SourceId, rest.Identity.Prefab, rest.Reason));
     }
 
     [Fact]
@@ -327,7 +366,7 @@ public sealed class CleanupPlannerTests
         var plan = Plan(world);
         var move = Assert.Single(plan.Moves);
         var rest = Assert.Single(plan.Remainders);
-        Assert.Equal((CleanupReason.NoCapacity, 10), (rest.Reason, rest.Units));
+        Assert.Equal((RunReason.NoCapacity, 10), (rest.Reason, rest.Units));
         Assert.NotEqual(move.Handle, rest.Handle);
     }
 
@@ -352,7 +391,7 @@ public sealed class CleanupPlannerTests
         var blocked = Plan(world, azu: (_, _) => false);
         Assert.Empty(blocked.Moves);
         var rest = Assert.Single(blocked.Remainders);
-        Assert.Equal((CleanupReason.AzuExcluded, "b-swords"), (rest.Reason, rest.DestinationId));
+        Assert.Equal((RunReason.AzuExcluded, "b-swords"), (rest.Reason, rest.DestinationId));
 
         world.Add("c-weapons", Rule(new[] { "weapons" }));
         var routed = Plan(world, azu: (chest, _) => chest != "b-swords");
@@ -378,17 +417,17 @@ public sealed class CleanupPlannerTests
         var world = new World();
         Put(world.Add("a-wood", Rule(new[] { "materials.wood" })), "Copper", 4);
         world.Add("b-metal", Rule(new[] { "materials.metal" }), local: false);
-        Assert.Equal(CleanupReason.OtherOwnerNoMuc, Assert.Single(Plan(world).Remainders).Reason);
-        Assert.Equal(CleanupRoute.MucAdd, Assert.Single(Plan(world, muc: true).Moves).Route);
+        Assert.Equal(RunReason.OtherOwnerNoMuc, Assert.Single(Plan(world).Remainders).Reason);
+        Assert.Equal(MoveRoute.MucAdd, Assert.Single(Plan(world, muc: true).Moves).Route);
 
         var remoteSource = new World();
         Put(remoteSource.Add("a-wood", Rule(new[] { "materials.wood" }), local: false), "Copper", 4);
         remoteSource.Add("b-metal", Rule(new[] { "materials.metal" }));
-        Assert.Equal(CleanupRoute.MucRemove, Assert.Single(Plan(remoteSource, muc: true).Moves).Route);
-        Assert.Equal(CleanupReason.OtherOwnerNoMuc, Assert.Single(Plan(remoteSource).Remainders).Reason);
+        Assert.Equal(MoveRoute.MucRemove, Assert.Single(Plan(remoteSource, muc: true).Moves).Route);
+        Assert.Equal(RunReason.OtherOwnerNoMuc, Assert.Single(Plan(remoteSource).Remainders).Reason);
 
         remoteSource["b-metal"].Local = false;
-        Assert.Equal(CleanupReason.BothRemote, Assert.Single(Plan(remoteSource, muc: true).Remainders).Reason);
+        Assert.Equal(RunReason.BothRemote, Assert.Single(Plan(remoteSource, muc: true).Remainders).Reason);
     }
 
     // B4.33 §3: an owner whose MultiUserChest can't be reached is known at plan time, so the plan (and the tooltip built
@@ -399,7 +438,7 @@ public sealed class CleanupPlannerTests
         var world = new World();
         Put(world.Add("a-wood", Rule(new[] { "materials.wood" })), "Copper", 4);
         world.Add("b-metal", Rule(new[] { "materials.metal" }, priority: 9), local: false).OwnerMuc = OwnerMucState.Checking;
-        Assert.Equal(CleanupReason.OtherOwnerMucChecking, Assert.Single(Plan(world, muc: true).Remainders).Reason);
+        Assert.Equal(RunReason.OtherOwnerMucChecking, Assert.Single(Plan(world, muc: true).Remainders).Reason);
         world.Add("c-metal", Rule(new[] { "materials.metal" }));
         Assert.Equal("c-metal", Assert.Single(Plan(world, muc: true).Moves).DestinationId);
 
@@ -408,7 +447,7 @@ public sealed class CleanupPlannerTests
         theirs.OwnerMuc = OwnerMucState.FormatUnknown;
         Put(theirs, "Copper", 4);
         remoteSource.Add("b-metal", Rule(new[] { "materials.metal" }));
-        Assert.Equal(CleanupReason.OtherOwnerFormatUnknown, Assert.Single(Plan(remoteSource, muc: true).Remainders).Reason);
+        Assert.Equal(RunReason.OtherOwnerFormatUnknown, Assert.Single(Plan(remoteSource, muc: true).Remainders).Reason);
     }
 
     [Fact]
@@ -420,9 +459,9 @@ public sealed class CleanupPlannerTests
         world.Add("b-metal", Rule(new[] { "materials.metal" }), local: false);
         world.Add("c-materials", Rule(new[] { "materials" }), width: 1);
         var plan = Plan(world, muc: true);
-        Assert.Equal(new[] { ("b-metal", CleanupRoute.MucAdd), ("c-materials", CleanupRoute.Direct) },
+        Assert.Equal(new[] { ("b-metal", MoveRoute.MucAdd), ("c-materials", MoveRoute.Direct) },
             plan.Moves.Select(m => (m.DestinationId, m.Route)));
-        Assert.Equal(CleanupReason.MucBusy, Assert.Single(plan.Remainders).Reason);
+        Assert.Equal(RunReason.MucBusy, Assert.Single(plan.Remainders).Reason);
     }
 
     [Fact]
@@ -435,7 +474,7 @@ public sealed class CleanupPlannerTests
         world.Add("b-metal", Rule(new[] { "materials.metal" }));
         var plan = Plan(world, held: new[] { held.Handle });
         Assert.Empty(plan.Moves);
-        Assert.Equal(new[] { CleanupReason.Unsupported, CleanupReason.Held }, plan.Remainders.Select(r => r.Reason));
+        Assert.Equal(new[] { RunReason.Unsupported, RunReason.Held }, plan.Remainders.Select(r => r.Reason));
     }
 
     [Fact]
@@ -464,7 +503,7 @@ public sealed class CleanupPlannerTests
         world.Chests[^1].Height = 4;
         var plan = Plan(world);
         Assert.Equal(CleanupPlanner.MaximumMoves, plan.Moves.Count);
-        Assert.Equal(600 - CleanupPlanner.MaximumMoves, plan.Remainders.Count(r => r.Reason == CleanupReason.Budget));
+        Assert.Equal(600 - CleanupPlanner.MaximumMoves, plan.Remainders.Count(r => r.Reason == RunReason.Budget));
     }
 
     [Fact]

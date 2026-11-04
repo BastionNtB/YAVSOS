@@ -4,6 +4,7 @@ using System.Diagnostics;
 using BepInEx.Logging;
 using UnityEngine;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Core.Transfers;
 using YAVSOS.Integrations;
 using YAVSOS.Interface;
@@ -17,10 +18,12 @@ internal abstract class MoveRun<TMove> where TMove : class
     internal object Session = null!;
     internal Dictionary<string, Container> Chests = null!;
     internal GameInventorySnapshotAdapter Adapter = null!;
-    internal CleanupReport Report = new();
+    internal RunReport Report = RunReport.ForCleanup();
     internal float Radius;
     internal int Next;
     internal bool PolicyChanged, MayHaveWritten;
+    /// <summary>F13 (D129): verified direct moves that a mod placed in another cell than planned; logged once at the end.</summary>
+    internal int OtherCell;
     internal readonly List<MovePending<TMove>> Delegated = new();
     /// <summary>D093: moves set aside because they conflict with a pending MultiUserChest request; they run once it ends.</summary>
     internal readonly List<TMove> Deferred = new();
@@ -39,6 +42,24 @@ internal sealed class MovePending<TMove> where TMove : class
     internal string Key = "";
 }
 
+/// <summary>How a press of the cleanup or store key, the Clean up nearby button or the console command ended.</summary>
+internal enum RunOutcome { Started, Summary, Refused }
+
+/// <summary>
+/// P10-04 (inventory case 3): what <c>Start</c> did and the message it showed, so callers decide by the outcome, not by
+/// comparing English. <see cref="Message"/> is null when a stash began (nothing shows it); the caller formats it.
+/// </summary>
+internal readonly struct RunStart
+{
+    internal RunStart(RunOutcome outcome, Message? message) { Outcome = outcome; Message = message; }
+    internal RunOutcome Outcome { get; }
+    internal Message? Message { get; }
+    /// <summary>A run that had nothing to move: its summary (<see cref="RunReport.Summary"/>).</summary>
+    internal static RunStart Summary(Message summary) => new(RunOutcome.Summary, summary);
+    /// <summary>For the Lab bridge and logs: the outcome, then the message's English.</summary>
+    public override string ToString() => Message == null ? Outcome.ToString() : Outcome + ": " + Texts.English(Message);
+}
+
 /// <summary>
 /// D07: the run lifecycle both runners share: a few moves per frame, MultiUserChest observation, the end of a run and its
 /// report. Once a game write or a MultiUserChest request may have happened, a failure is Unconfirmed; before that it
@@ -51,7 +72,8 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
     protected readonly ManualLogSource log;
     private readonly RunResults results;
     protected TRun? active;
-    internal string LastSummary { get; private set; } = "";
+    /// <summary>The last run's summary (<see cref="RunReport.Summary"/>); null before the first run.</summary>
+    internal Message? LastSummary { get; private set; }
     internal bool Running => active != null;
     internal string Progress => active is { } run ? $"{run.Next - run.Deferred.Count}/{run.Moves.Count} started, {run.Delegated.Count} pending, {run.Deferred.Count} set aside" : "idle";
 
@@ -59,8 +81,10 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
 
     protected abstract float PollSeconds { get; }
     protected abstract string Prefab(TMove move);
+    /// <summary>X55: the destination chest's ID in <see cref="MoveRun{TMove}.Chests"/>, for the result's place lines.</summary>
+    protected abstract string Destination(TMove move);
     protected abstract Guid Stack(TMove move);
-    protected abstract CleanupRoute Route(TMove move);
+    protected abstract MoveRoute Route(TMove move);
     /// <summary>
     /// D093: this move conflicts with a pending MultiUserChest request, so it is set aside until that request ends; the
     /// moves after it go ahead (no head-of-line wait). Must have no side effects: it is asked again every frame.
@@ -129,8 +153,8 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         switch (observer.State)
         {
             case DelegatedMoveState.Moved:
-                run.Report.Moved(observer.MovedUnits, viaMuc: true, Prefab(move), Stack(move));
-                if (observer.MovedUnits < observer.Units) run.Report.Remain(CleanupReason.NoCapacity, Prefab(move));
+                run.Report.Moved(observer.MovedUnits, viaMuc: true, Prefab(move), Stack(move), Destination(move));
+                if (observer.MovedUnits < observer.Units) run.Report.Remain(RunReason.NoCapacity, Prefab(move));
                 log.LogInfo(MovedViaMuc(move, observer));
                 if (observer.MovedUnits > 0) Arrived(pending.Destination);
                 break;
@@ -159,10 +183,13 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
     {
         var run = active!; active = null;
         try { run.Adapter.Dispose(); } catch { /* adapter only holds handles */ }
-        LastSummary = run.Report.Summary();
-        log.LogInfo(LastSummary + $" ({run.Clock.Elapsed.TotalMilliseconds:0} ms)");
-        CleanupRunner.Say(LastSummary);
-        results.Publish(run.Report);
+        var summary = run.Report.Summary();
+        LastSummary = summary;
+        log.LogInfo(Texts.English(summary) + $" ({run.Clock.Elapsed.TotalMilliseconds:0} ms)");
+        if (run.OtherCell > 0)
+            log.LogInfo($"{run.OtherCell} direct move(s) landed in another cell than planned (a mod's own slots, such as Storehouse's); counts matched, so they count as moved (F13).");
+        GameText.Say(summary);
+        results.Publish(run.Report, run.Chests);
         // Visual follow-ups only (D121, D123); nothing may escape into Plugin.Update or the world's end.
         try { Finished(run); }
         catch (Exception error) when (OptionalFailure.Recoverable(error))
@@ -183,7 +210,7 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         try { ExecuteChecked(run, move); }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            if (run.MayHaveWritten) { run.Report.Unconfirm(Route(move) != CleanupRoute.Direct, Prefab(move)); Log(move, "failed after the write (" + Cause(error) + "); result unconfirmed. Not corrected (D041)."); }
+            if (run.MayHaveWritten) { run.Report.Unconfirm(Route(move) != MoveRoute.Direct, Prefab(move)); Log(move, "failed after the write (" + Cause(error) + "); result unconfirmed. Not corrected (D041)."); }
             else { run.Report.Refuse(TransferRefusal.UnsupportedCapability, Prefab(move)); Log(move, "failed before any write: " + Cause(error)); }
         }
     }
@@ -191,7 +218,8 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
     /// <summary>
     /// D07: one direct move, written and verified the same way for both runners. The caller has rechecked the move and
     /// captured both inventories; this creates the plan from those captures, writes one vanilla <c>MoveItemToThis</c> as
-    /// the owner of both, recaptures and verifies conservation, identity, cell, owners and session.
+    /// the owner of both, recaptures and verifies conservation by stack key, owners and session. The planned cell is counted for
+    /// the log, not required (F13, D129).
     /// </summary>
     /// <param name="owners">Owner and owner revision of both inventories, read before and after the write.</param>
     /// <param name="ownersLocal">Both inventories are still owned by this peer.</param>
@@ -225,8 +253,12 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         var key = MoveVerification.MergeKey(before.Snapshot, handle, identity);
         var seen = MoveVerification.Observe(before.Snapshot, beforeDestination.Snapshot, after.Snapshot, afterDestination.Snapshot, key, plan.DestinationX, plan.DestinationY);
         var ownersCurrent = ownersBefore == owners() && ReferenceEquals(ZNet.instance, run.Session) && ownersLocal();
-        if (operation.Verify(seen.Decrease, seen.Increase, seen.OthersUnchanged, ownersCurrent, seen.CellHoldsKey) == TransferRefusal.None)
+        if (MoveVerification.Verify(operation, seen, ownersCurrent) == TransferRefusal.None)
+        {
+            // F13 (D129): counts prove the move; a mod may have placed the item in a slot of its own.
+            if (!seen.CellHoldsKey) run.OtherCell++;
             return DirectMoveResult.Moved(seen.Decrease, planned);
+        }
         // Nothing observable changed: the game refused the move, so nothing moved.
         if (seen.NothingChanged) return DirectMoveResult.Refused(TransferRefusal.NoCapacity, "the game refused the move; nothing changed");
         return DirectMoveResult.Unconfirmed($"unconfirmed: {labels.Source} -{seen.Decrease}, {labels.Destination} +{seen.Increase}, others unchanged {seen.OthersUnchanged}, " +
@@ -244,9 +276,9 @@ internal abstract class MoveRunner<TMove, TRun> where TMove : class where TRun :
         switch (result.Outcome)
         {
             case DirectMoveOutcome.Moved:
-                run.Report.Moved(result.Units, item: Prefab(move), stack: Stack(move));
+                run.Report.Moved(result.Units, item: Prefab(move), stack: Stack(move), destination: Destination(move));
                 // D086 M4 (B2.6): the plan clamps to the room left at the write; what didn't fit is reported, as on the MultiUserChest path.
-                if (result.Units < result.Planned) run.Report.Remain(CleanupReason.NoCapacity, Prefab(move));
+                if (result.Units < result.Planned) run.Report.Remain(RunReason.NoCapacity, Prefab(move));
                 return true;
             case DirectMoveOutcome.Refused: run.Report.Refuse(result.Refusal, Prefab(move)); break;
             default: run.Report.Unconfirm(item: Prefab(move)); break;

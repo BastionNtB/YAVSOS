@@ -1,54 +1,21 @@
-using System;
-using System.Collections.Generic;
-using BepInEx.Logging;
 using UnityEngine;
 using UnityEngine.UI;
-using YAVSOS.Cleanup;
-using YAVSOS.Core.Interface;
 using YAVSOS.Core.Transfers;
 
 namespace YAVSOS.Interface;
 
 /// <summary>
-/// P6-04: the latest stash or cleanup result, published once per run when it finishes. The detail
-/// (<see cref="CleanupReport.Detail"/>) is built then, never per frame. Read only. Unity game thread only.
-/// </summary>
-internal sealed class RunResults
-{
-    internal ResultSummary? Latest { get; private set; }
-    /// <summary>Bumped on every publish, so the panel rebuilds its lines only then.</summary>
-    internal int Revision { get; private set; }
-    private readonly ResultCountdown countdown = new ResultCountdown(); // P9-23
-
-    internal void Publish(CleanupReport report)
-    {
-        Latest = report.Detail(CleanupRunner.Name);
-        Revision++;
-        // An empty run has nothing to add to its one-line message. A published result is final (a stash or cleanup run
-        // ends only after MultiUserChest answers or the run gives up; AzuAutoStore's after nothing is still on its way),
-        // so the countdown starts with every line the result will have (D117).
-        if (Latest.Empty) countdown.Stop(); else countdown.Restart();
-    }
-
-    internal void Dismiss() => countdown.Stop();
-
-    /// <summary>
-    /// P9-23: up for the player's <paramref name="seconds"/>; with <paramref name="holdInInventory"/> on, the countdown
-    /// waits while the inventory is open. The Close button stays for closing it sooner.
-    /// </summary>
-    internal bool Visible(float elapsed, float seconds, bool inventoryOpen, bool holdInInventory) =>
-        countdown.Tick(elapsed, seconds, inventoryOpen, holdInInventory) && Latest != null;
-}
-
-/// <summary>
-/// P6-04: a short Jotunn wood panel at the bottom centre of Jotunn's overlay canvas, so it shows over the
+/// P6-04: a short Jotunn wood panel at the bottom center of Jotunn's overlay canvas, so it shows over the
 /// inventory screen too: what moved and what stayed, with reasons and item names. It closes by itself after the player's
 /// ResultPanelSeconds (P9-23), or sooner with its Close button; the one-line message in the corner is shown either way.
-/// Lines are rebuilt only when a new result is published.
+/// X55: after something moved, a line per chest or drawer that received items, indented, within the line bound.
+/// Lines are rebuilt only when a new result is published, and formatted from each line's fields (B2-09). A language
+/// change destroys the panel and the next frame builds it again (RuleControls.LanguageChanged).
 /// </summary>
 internal sealed class ResultPanel
 {
     internal const float Width = 520;
+    private const int PlaceIndent = 14;
     private readonly JotunnWidgets ui;
     private readonly RunResults results;
     private readonly RectTransform root, lines;
@@ -67,7 +34,7 @@ internal sealed class ResultPanel
         {
             var head = ui.Row(root);
             title = ui.Label(head, "", JotunnWidgets.TextSize + 2, ui.Orange);
-            ui.Button(head, "Close", results.Dismiss, 80);
+            ui.Button(head, Texts.Get("yavsos_result_close"), results.Dismiss, 80);
             lines = ui.Column(root, "Lines", 2);
             more = ui.Label(root, "", JotunnWidgets.SmallSize, ui.Faint);
         }
@@ -84,46 +51,29 @@ internal sealed class ResultPanel
         if (shown == results.Revision) return;
         shown = results.Revision;
         var summary = results.Latest!;
-        title.text = "YAVSOS " + summary.Title.ToLowerInvariant() + " result";
+        // B2-09: one title message per run kind; nothing is lower-cased in code.
+        title.text = Texts.Get(summary.Title);
         JotunnWidgets.Clear(lines);
+        RectTransform? places = null;
         foreach (var line in summary.Lines)
-            ui.Label(lines, line.Text, JotunnWidgets.SmallSize, line.Kind is ResultKind.Refused or ResultKind.Unconfirmed ? ui.Orange : (Color?)null);
+        {
+            // X55: the chests and drawers that received items sit indented under the moved line, in one group.
+            var place = line.Kind is ResultKind.Place or ResultKind.MorePlaces;
+            if (place && places == null)
+            {
+                places = ui.Column(lines, "Places", 2);
+                places.GetComponent<VerticalLayoutGroup>().padding = new RectOffset(PlaceIndent, 0, 0, 0);
+            }
+            ui.Label(place ? places! : lines, ResultSummary.Bound(Texts.Get(line.Text), ResultSummary.MaximumText), JotunnWidgets.SmallSize,
+                line.Kind switch { ResultKind.Refused or ResultKind.Unconfirmed => ui.Orange, ResultKind.MorePlaces => ui.Faint, _ => (Color?)null });
+        }
         // Lines past the bound are still counted in the one-line summary.
         more.gameObject.SetActive(summary.MoreLines != 0);
-        if (summary.MoreLines != 0) more.text = summary.Headline;
+        if (summary.MoreLines != 0) more.text = Texts.Get(summary.Headline);
         LayoutRebuilder.ForceRebuildLayoutImmediate(root);
     }
 
     internal void Hide() { if (Alive && root.gameObject.activeSelf) root.gameObject.SetActive(false); }
 
     internal void Destroy() { if (Alive) UnityEngine.Object.Destroy(root.gameObject); }
-}
-
-/// <summary>
-/// The stack under the pointer in one of the inventory screen's grids, through the public
-/// <c>InventoryGrid.GetItem(Vector2i)</c> screen-point lookup (works with grids other mods scale or rotate). Null when
-/// nothing is there or anything differs. Unity game thread only.
-/// </summary>
-internal static class GridHover
-{
-    internal static ManualLogSource? Log;
-    private static readonly HashSet<string> Reported = new(StringComparer.Ordinal);
-
-    internal static ItemDrop.ItemData? Item(InventoryGrid? grid)
-    {
-        if (!grid) return null;
-        try
-        {
-            var pointer = ZInput.pointerPosition;
-            return grid!.GetItem(new Vector2i((int)pointer.x, (int)pointer.y));
-        }
-        catch (Exception error) when (error is not OutOfMemoryException)
-        {
-            // SF8 (D087): runs every frame, so once per exception type.
-            if (Reported.Add(error.GetType().FullName ?? error.GetType().Name))
-                Log?.LogWarning($"Inventory slot lookup failed ({error.GetType().Name}: {error.Message}); the single-stack key and hover explanations don't work while it fails. " +
-                    "Another mod's inventory grid may cause this.");
-            return null;
-        }
-    }
 }

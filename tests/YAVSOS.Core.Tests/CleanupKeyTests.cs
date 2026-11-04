@@ -9,13 +9,13 @@ public sealed class CleanupKeyTests
     private static KeyChord Key(string main, params string[] modifiers) => new KeyChord(main, modifiers);
 
     [Fact]
-    public void DefaultIsCtrlPeriod() => Assert.Equal("Ctrl + .", CleanupKey.Default.ToString());
+    public void DefaultIsCtrlPeriod() => Assert.Equal("Ctrl + .", KeyNamesTests.Words(CleanupKey.Default.Name()));
 
     [Fact]
     public void WithAzuTakesTheModifierFromCleanupShortcutAndTheMainKeyFromAzu()
     {
         var chord = CleanupKey.WithAzu(Key("Period", "LeftControl"), Key("Comma"));
-        Assert.Equal("Ctrl + ,", chord!.ToString());
+        Assert.Equal("Ctrl + ,", KeyNamesTests.Words(chord!.Name()));
         Assert.Equal(new[] { "LeftControl" }, chord.Modifiers);
         Assert.Equal("Comma", chord.MainKey);
     }
@@ -23,13 +23,13 @@ public sealed class CleanupKeyTests
     [Fact]
     public void WithAzuKeepsADeliberateShiftOrAlt()
     {
-        Assert.Equal("Shift + .", CleanupKey.WithAzu(Key("Period", "LeftShift"), Key("Period"))!.ToString());
-        Assert.Equal("Alt + .", CleanupKey.WithAzu(Key("K", "LeftAlt"), Key("Period"))!.ToString());
+        Assert.Equal("Shift + .", KeyNamesTests.Words(CleanupKey.WithAzu(Key("Period", "LeftShift"), Key("Period"))!.Name()));
+        Assert.Equal("Alt + .", KeyNamesTests.Words(CleanupKey.WithAzu(Key("K", "LeftAlt"), Key("Period"))!.Name()));
     }
 
     [Fact]
     public void WithAzuAddsAzusOwnStoreModifiers() =>
-        Assert.Equal("Shift + Ctrl + .", CleanupKey.WithAzu(Key("Period", "LeftShift"), Key("Period", "LeftControl"))!.ToString());
+        Assert.Equal("Shift + Ctrl + .", KeyNamesTests.Words(CleanupKey.WithAzu(Key("Period", "LeftShift"), Key("Period", "LeftControl"))!.Name()));
 
     [Fact]
     public void WithAzuFallsBackToCtrlWhenCleanupShortcutHasNoModifier()
@@ -37,7 +37,7 @@ public sealed class CleanupKeyTests
         // Without a modifier, every press of Azu's store key would also start cleanup.
         var chord = CleanupKey.WithAzu(Key("Period"), Key("Period"));
         Assert.Equal(new[] { CleanupKey.FallbackModifier }, chord!.Modifiers);
-        Assert.Equal("Ctrl + .", chord.ToString());
+        Assert.Equal("Ctrl + .", KeyNamesTests.Words(chord.Name()));
     }
 
     [Fact]

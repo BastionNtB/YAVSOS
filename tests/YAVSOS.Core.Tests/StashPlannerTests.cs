@@ -93,7 +93,7 @@ public sealed class StashPlannerTests
         world.Add("metal", Rule(new[] { "materials.metal" }));
         var plan = Plan(world);
         var move = Assert.Single(plan.Moves);
-        Assert.Equal(("metal", 20, CleanupRoute.Direct, StashTier.Ruled, 0, 0), (move.DestinationId, move.Units, move.Route, move.Tier, move.DestinationX, move.DestinationY));
+        Assert.Equal(("metal", 20, MoveRoute.Direct, StashTier.Ruled, 0, 0), (move.DestinationId, move.Units, move.Route, move.Tier, move.DestinationX, move.DestinationY));
         Assert.Empty(plan.Remainders);
         Assert.Equal(Taxonomy.Fingerprint + ":1", plan.PolicyStamp);
     }
@@ -124,7 +124,7 @@ public sealed class StashPlannerTests
         world.Chests.RemoveAt(2);
         var full = Plan(world);
         Assert.Equal(50, full.Moves.Sum(x => x.Units));
-        Assert.Equal((CleanupReason.NoCapacity, 30), (Assert.Single(full.Remainders).Reason, full.Remainders[0].Units));
+        Assert.Equal((RunReason.NoCapacity, 30), (Assert.Single(full.Remainders).Reason, full.Remainders[0].Units));
     }
 
     [Fact]
@@ -164,15 +164,15 @@ public sealed class StashPlannerTests
         Assert.Equal(30, plan.Moves.Where(x => x.DestinationId == "always-wood").Sum(x => x.Units));
         Assert.All(plan.Moves, x => Assert.Equal(("always-wood", StashTier.Ruled), (x.DestinationId, x.Tier)));
         // The items that wait are reported, not left silently (D087).
-        Assert.Equal(new[] { "Bread", "Copper" }, plan.Remainders.Where(x => x.Reason == CleanupReason.CategoriesPending).Select(x => x.Identity.Prefab).OrderBy(x => x));
+        Assert.Equal(new[] { "Bread", "Copper" }, plan.Remainders.Where(x => x.Reason == RunReason.CategoriesPending).Select(x => x.Identity.Prefab).OrderBy(x => x));
         // A category chest that would outrank the Always chest once ready keeps the item back (cleanup would only have to move it again, D092).
         world["metal"].Payload = Rule(new[] { "materials.wood" }, priority: 3);
         plan = Plan(world, new Answers { CategoriesReady = false });
         Assert.DoesNotContain(plan.Moves, x => x.Identity.Prefab == "Wood");
-        Assert.Contains(plan.Remainders, x => x.Identity.Prefab == "Wood" && x.Reason == CleanupReason.CategoriesPending);
+        Assert.Contains(plan.Remainders, x => x.Identity.Prefab == "Wood" && x.Reason == RunReason.CategoriesPending);
         world["always-wood"].Payload = Rule(always: new[] { "Wood" }, priority: 3); // A tie: Always wins.
         Assert.Equal(30, Plan(world, new Answers { CategoriesReady = false }).Moves.Where(x => x.DestinationId == "always-wood").Sum(x => x.Units));
-        Assert.Contains("waiting for categories", CleanupReport.Describe(CleanupReason.CategoriesPending));
+        Assert.Equal("categories are still loading; try again in a moment", EnglishText.Of(RunReport.Reason(RunReason.CategoriesPending)));
         // Without a category chest, holders take what they already hold.
         world.Chests.Remove(world["metal"]);
         plan = Plan(world, new Answers { CategoriesReady = false });
@@ -243,7 +243,7 @@ public sealed class StashPlannerTests
         world.Add("metal", Rule(new[] { "materials.metal" }));
         var plan = Plan(world, held: new[] { held.Handle });
         Assert.Empty(plan.Moves);
-        Assert.Equal(CleanupReason.Held, Assert.Single(plan.Remainders).Reason);
+        Assert.Equal(RunReason.Held, Assert.Single(plan.Remainders).Reason);
     }
 
     [Fact]
@@ -252,11 +252,11 @@ public sealed class StashPlannerTests
         var world = new World();
         Put(world.Player, "Copper", 10, y: 1);
         world.Add("metal", Rule(new[] { "materials.metal" }), local: false);
-        Assert.Equal(CleanupReason.OtherOwnerNoMuc, Assert.Single(Plan(world).Remainders).Reason);
+        Assert.Equal(RunReason.OtherOwnerNoMuc, Assert.Single(Plan(world).Remainders).Reason);
         var move = Assert.Single(Plan(world, muc: true).Moves);
-        Assert.Equal(CleanupRoute.MucAdd, move.Route);
+        Assert.Equal(MoveRoute.MucAdd, move.Route);
         world["metal"].OwnerMuc = OwnerMucState.FormatUnknown;
-        Assert.Equal(CleanupReason.OtherOwnerFormatUnknown, Assert.Single(Plan(world, muc: true).Remainders).Reason);
+        Assert.Equal(RunReason.OtherOwnerFormatUnknown, Assert.Single(Plan(world, muc: true).Remainders).Reason);
         // A local chest further down the ranking still takes it.
         world.Add("crafting", Rule(new[] { "materials.crafting" }));
         Assert.Equal("crafting", Assert.Single(Plan(world, muc: true).Moves).DestinationId);
@@ -264,11 +264,11 @@ public sealed class StashPlannerTests
 
     // F3: every state but Usable skips the chest as before; each names its own cause.
     [Theory]
-    [InlineData(OwnerMucState.CantTakeRequests, CleanupReason.OtherOwnerMucUnusable)]
-    [InlineData(OwnerMucState.NoAnswer, CleanupReason.OtherOwnerMucSilent)]
-    [InlineData(OwnerMucState.Checking, CleanupReason.OtherOwnerMucChecking)]
-    [InlineData(OwnerMucState.FormatUnknown, CleanupReason.OtherOwnerFormatUnknown)]
-    public void OtherPlayersChest_UnusableMultiUserChest_SkipsWithItsCause(OwnerMucState state, CleanupReason reason)
+    [InlineData(OwnerMucState.CantTakeRequests, RunReason.OtherOwnerMucUnusable)]
+    [InlineData(OwnerMucState.NoAnswer, RunReason.OtherOwnerMucSilent)]
+    [InlineData(OwnerMucState.Checking, RunReason.OtherOwnerMucChecking)]
+    [InlineData(OwnerMucState.FormatUnknown, RunReason.OtherOwnerFormatUnknown)]
+    public void OtherPlayersChest_UnusableMultiUserChest_SkipsWithItsCause(OwnerMucState state, RunReason reason)
     {
         var world = new World();
         Put(world.Player, "Copper", 10, y: 1);
@@ -277,7 +277,7 @@ public sealed class StashPlannerTests
         Assert.Empty(plan.Moves);
         Assert.Equal(reason, Assert.Single(plan.Remainders).Reason);
         // Without a MultiUserChest of one's own, the cause stays "no MultiUserChest", and one's own chest needs none.
-        Assert.Equal(CleanupReason.OtherOwnerNoMuc, Assert.Single(Plan(world).Remainders).Reason);
+        Assert.Equal(RunReason.OtherOwnerNoMuc, Assert.Single(Plan(world).Remainders).Reason);
         world["metal"].Local = true;
         Assert.Single(Plan(world, muc: true).Moves);
     }
@@ -303,17 +303,19 @@ public sealed class StashPlannerTests
         world.Add("metal", Rule(new[] { "materials.metal" }), width: 256).Height = 4;
         var plan = Plan(world);
         Assert.Equal(StashPlanner.MaximumMoves, plan.Moves.Count);
-        Assert.Equal(19 * 32 - StashPlanner.MaximumMoves, plan.Remainders.Count(x => x.Reason == CleanupReason.Budget));
+        Assert.Equal(19 * 32 - StashPlanner.MaximumMoves, plan.Remainders.Count(x => x.Reason == RunReason.Budget));
     }
 
     [Fact]
     public void Report_WordsAStashRun()
     {
-        var report = CleanupReport.ForStash();
-        report.Moved(20); report.Moved(5, viaMuc: true); report.Remain(CleanupReason.NoCapacity); report.Remain(CleanupReason.OtherOwnerFormatUnknown);
-        Assert.Equal("Stash: stored 2 stacks (25 items), 1 via MultiUserChest · 1 left in your inventory (1 no room) · " +
-            "1 skipped (another player's chest; their MultiUserChest format is unknown)", report.Summary());
-        Assert.StartsWith("Cleanup: moved 0 stacks", new CleanupReport().Summary());
+        var report = RunReport.ForStash();
+        report.Moved(20); report.Moved(5, viaMuc: true); report.Remain(RunReason.NoCapacity); report.Remain(RunReason.OtherOwnerFormatUnknown);
+        Assert.Equal("Stashed 2 stacks (25 items), 1 via MultiUserChest · 1 stays in your inventory (no room) · " +
+            "1 stays in your inventory (another player's chest, and YAVSOS doesn't recognize their MultiUserChest's item format).",
+            EnglishText.Of(report.Summary()));
+        Assert.Equal("Nothing to stash.", EnglishText.Of(RunReport.ForStash().Summary()));
+        Assert.Equal("Nothing to clean up.", EnglishText.Of(RunReport.ForCleanup().Summary()));
     }
 
     [Fact]
@@ -344,7 +346,7 @@ public sealed class StashPlannerTests
                     Assert.Equal("", destination.Payload);
                     Assert.Contains(destination.Slots, s => s.Identity.Prefab == move.Identity.Prefab);
                 }
-                if (!destination.Local) Assert.Equal(CleanupRoute.MucAdd, move.Route);
+                if (!destination.Local) Assert.Equal(MoveRoute.MucAdd, move.Route);
                 tiers.Add(move.Tier);
             }
             world.Apply(plan);

@@ -23,7 +23,7 @@ public sealed class AuthoritativeAssignmentsTests
     }
     private static CatalogSnapshot Catalog(params CatalogFact[] items) => CatalogSnapshot.Build(items.Length == 0 ? new[] { Item() } : items);
     private static AuthoritativeAssignmentSnapshot Snapshot(CatalogSnapshot catalog, CategoryPolicy policy) =>
-        AuthoritativeAssignmentSnapshot.Create(catalog, ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy)), policy);
+        AuthoritativeAssignmentSnapshot.Create(catalog, ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy)), policy);
     private static void Text(BinaryWriter writer, string text) { var bytes = new UTF8Encoding(false, true).GetBytes(text); writer.Write(bytes.Length); writer.Write(bytes); }
     private static string Wire(byte[] bytes)
     {
@@ -43,7 +43,7 @@ public sealed class AuthoritativeAssignmentsTests
         using var output = new MemoryStream(); using var writer = new BinaryWriter(output, Encoding.UTF8, true);
         writer.Write(schema); Text(writer, classifier ?? ClassificationIndex.Version); Text(writer, pipeline ?? ClassificationPipeline.Version);
         Text(writer, catalogFingerprint ?? catalog.Fingerprint); Text(writer, policyFingerprint ?? policy.Fingerprint);
-        Text(writer, taxonomyFingerprint ?? ClassificationRuleSet.FromSchema1(policy).Taxonomy.Fingerprint); Text(writer, source); writer.Write((int)(AssignmentCapabilities.Identity | AssignmentCapabilities.Categories));
+        Text(writer, taxonomyFingerprint ?? ClassificationRuleSet.FromPolicy(policy).Taxonomy.Fingerprint); Text(writer, source); writer.Write((int)(AssignmentCapabilities.Identity | AssignmentCapabilities.Categories));
         writer.Write(scopeComplete); writer.Write(exclusions?.Length ?? 0);
         foreach (var exclusion in exclusions ?? Array.Empty<(string Item, string Reason)>())
         { Text(writer, exclusion.Item); Text(writer, exclusion.Reason); }
@@ -141,7 +141,7 @@ public sealed class AuthoritativeAssignmentsTests
     [Fact]
     public void Create_RejectsWrongCatalogPolicyAndRecipeOrigin()
     {
-        var catalog = Catalog(); var policy = Policy(); var classified = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy));
+        var catalog = Catalog(); var policy = Policy(); var classified = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy));
         Assert.Throws<InvalidDataException>(() => AuthoritativeAssignmentSnapshot.Create(catalog, classified, Policy(2)));
         var different = CatalogSnapshot.Build(new[] { Item(), Recipe(output: "Wood"), Requirement() });
         Assert.Throws<InvalidDataException>(() => AuthoritativeAssignmentSnapshot.Create(different, classified, policy));
@@ -174,7 +174,7 @@ public sealed class AuthoritativeAssignmentsTests
     public void Parse_OptionalTaxonomyCannotAuthorizeCategoriesOutsideEffectivePolicy()
     {
         var catalog = Catalog(); var policy = Policy();
-        var effectiveTaxonomy = ClassificationRuleSet.FromSchema1(policy).Taxonomy;
+        var effectiveTaxonomy = ClassificationRuleSet.FromPolicy(policy).Taxonomy;
         var customTaxonomy = new ClassificationTaxonomy(effectiveTaxonomy.Categories.Values.Concat(
             new[] { new ClassificationCategory("spoofed", "Spoofed", 1) }));
         var wire = Wire(WithDigest(Body(catalog, policy, w => Row(w, primary: "spoofed", category: "spoofed"),
@@ -426,7 +426,7 @@ public sealed class AuthoritativeAssignmentsTests
     public void Cancellation_CreateEncodeAndDecodeRefuseCancelledWork()
     {
         var catalog = Catalog(); var policy = Policy(); var snapshot = Snapshot(catalog, policy);
-        var classified = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy)); var cancelled = new CancellationToken(true);
+        var classified = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy)); var cancelled = new CancellationToken(true);
         Assert.Throws<OperationCanceledException>(() => AuthoritativeAssignmentSnapshot.Create(catalog, classified, policy, cancelled));
         Assert.Throws<OperationCanceledException>(() => AuthoritativeAssignmentsCodec.ToWire(snapshot, cancelled));
         Assert.Throws<OperationCanceledException>(() => AuthoritativeAssignmentsCodec.ParseWire(AuthoritativeAssignmentsCodec.ToWire(snapshot), policy, cancellation: cancelled));

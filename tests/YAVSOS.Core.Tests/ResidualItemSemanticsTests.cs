@@ -128,7 +128,7 @@ public sealed class ResidualItemSemanticsTests
         foreach (var document in new[] { CategoryPolicyCodec.EmptyDocument, xml })
         {
             Assert.True(CategoryPolicyCodec.TryParse(document, out var policy, out var error), error);
-            var index = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy!));
+            var index = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy!));
             var snapshot = AuthoritativeAssignmentSnapshot.Create(catalog, index, policy!);
             var decoded = AuthoritativeAssignmentsCodec.ParseWire(AuthoritativeAssignmentsCodec.ToWire(snapshot), policy!);
             Assert.Equal(snapshot.Fingerprint, decoded.Fingerprint);

@@ -7,7 +7,7 @@ namespace YAVSOS.Core.Tests;
 public sealed class DelegatedMoveObserverTests
 {
     // MucAdd: 10 Copper leave the local chest (20 -> 10); the other player's chest had 5.
-    private static DelegatedMoveObserver Add() => new(CleanupRoute.MucAdd, 10, 20, 5, 0, now: 0);
+    private static DelegatedMoveObserver Add() => new(MoveRoute.MucAdd, 10, 20, 5, 0, now: 0);
 
     [Fact]
     public void MucAdd_MovedOnlyOnceTheItemShowsInTheOtherChest()
@@ -91,22 +91,22 @@ public sealed class DelegatedMoveObserverTests
     [Fact]
     public void MucRemove_ExpectedArrivalMoves_DifferentItemOrNothingIsUnconfirmed()
     {
-        var moved = new DelegatedMoveObserver(CleanupRoute.MucRemove, 3, 3, 0, 7, now: 0);
+        var moved = new DelegatedMoveObserver(MoveRoute.MucRemove, 3, 3, 0, 7, now: 0);
         Assert.Equal(DelegatedMoveState.Pending, moved.Observe(1, 3, 0, 7, true));
         Assert.Equal(DelegatedMoveState.Moved, moved.Observe(2, 0, 3, 7, true));
 
-        var different = new DelegatedMoveObserver(CleanupRoute.MucRemove, 3, 3, 0, 7, now: 0);
+        var different = new DelegatedMoveObserver(MoveRoute.MucRemove, 3, 3, 0, 7, now: 0);
         Assert.Equal(DelegatedMoveState.Unconfirmed, different.Observe(1, 0, 0, 8, true));
         Assert.Contains("different", different.Detail);
 
-        var nothing = new DelegatedMoveObserver(CleanupRoute.MucRemove, 3, 3, 0, 7, now: 0);
+        var nothing = new DelegatedMoveObserver(MoveRoute.MucRemove, 3, 3, 0, 7, now: 0);
         Assert.Equal(DelegatedMoveState.Unconfirmed, nothing.Observe(41, 3, 0, 7, true));
     }
 
     [Fact]
     public void Constructor_RejectsDirectAndImpossibleCounts()
     {
-        Assert.Throws<ArgumentException>(() => new DelegatedMoveObserver(CleanupRoute.Direct, 1, 1, 0, 0, 0));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new DelegatedMoveObserver(CleanupRoute.MucAdd, 5, 4, 0, 0, 0));
+        Assert.Throws<ArgumentException>(() => new DelegatedMoveObserver(MoveRoute.Direct, 1, 1, 0, 0, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DelegatedMoveObserver(MoveRoute.MucAdd, 5, 4, 0, 0, 0));
     }
 }

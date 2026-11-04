@@ -8,12 +8,14 @@ using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
 using UnityEngine.UI;
+using YAVSOS.Classification;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
 using YAVSOS.Core.Transfers;
 using YAVSOS.Integrations;
 using YAVSOS.Transfers;
 using YAVSOS.Cleanup;
+using YAVSOS.Core.Messages;
 
 namespace YAVSOS.Interface;
 
@@ -51,7 +53,7 @@ internal sealed class RuleControls
     internal bool PickingFilters { get; private set; }
     /// <summary>Filters of the edited alternative (P6-07b): values within a dimension are OR, dimensions AND.</summary>
     internal SortedDictionary<string, SortedSet<string>> Filters => edit.Filters;
-    /// <summary>D101: a refusal or summary next to the control that was clicked; successes say nothing.</summary>
+    /// <summary>D101, D132: a refusal or summary in the strip under the header, the control it came from outlined; successes say nothing.</summary>
     internal PanelMessages Messages { get; } = new PanelMessages();
     internal int Priority => edit.Priority;
     /// <summary>Bumped on every change to what the panel shows, so sections rebuild their rows only then.</summary>
@@ -75,9 +77,23 @@ internal sealed class RuleControls
     {
         this.enabled = enabled; this.showResults = showResults; this.resultSeconds = resultSeconds; this.holdResults = holdResults; OffsetX = offsetX; OffsetY = offsetY; Folded = folded; Cleanup = cleanup; this.stash = stash;
         this.results = results; Highlight = highlight; this.log = log;
+        Texts.Changed += LanguageChanged;
         // B1.17: without the game's open-chest field the panel can never open; say so once instead of staying silent.
         if (CurrentContainer == null)
             log.LogWarning("Chest rule panel turned off: the game's open-chest field (InventoryGui.m_currentContainer) could not be read. Chests open as usual without YAVSOS's panel.");
+    }
+
+    /// <summary>
+    /// P10-04: the game's language changed. Both panels are rebuilt on their next frame, so every label, button and
+    /// tooltip set when they were built is set again in the new language; the message spot formats its message when it
+    /// draws. Cached text (the label preview, the where-line) is built again.
+    /// </summary>
+    private void LanguageChanged()
+    {
+        try { panel?.Destroy(); } catch (Exception error) when (OptionalFailure.Recoverable(error)) { }
+        try { resultPanel?.Destroy(); } catch (Exception error) when (OptionalFailure.Recoverable(error)) { }
+        panel = null; resultPanel = null; labelPayload = null;
+        Revision++; ruleRevision++;
     }
 
     private static AccessTools.FieldRef<InventoryGui, Container>? Field()
@@ -97,7 +113,7 @@ internal sealed class RuleControls
     {
         var plugin = Plugin.Instance;
         var gui = InventoryGui.instance;
-        if (Copied != null && !ZNet.instance) Copied = null; // X2: a copied rule lasts until leaving the world.
+        if (!ZNet.instance) LeftWorld(); // X2: a copied rule lasts until leaving the world; X26, X22: so do undo records and dismissals.
         Results();
         if (!searchOff)
             try
@@ -144,6 +160,7 @@ internal sealed class RuleControls
         // Tombstones, drawers, creature packs and the like take no rule: no panel at all (runtime 2026-10-21).
         if (!eligible) { panel?.Hide(); return; }
         if (!Styled(gui!)) return;
+        if (UndoKey()) Undo(); // X26 (D130): queued like a click, so it runs at the next frame's start.
         if (!explainOff)
             try
             {
@@ -173,7 +190,7 @@ internal sealed class RuleControls
 #endif
             panel!.Show();
         }
-        catch (Exception error) when (OptionalFailure.Recoverable(error)) { TurnOff("drawing failed: " + error.GetType().Name + ": " + error.Message); }
+        catch (Exception error) when (OptionalFailure.Recoverable(error)) { TurnOff("drawing failed: " + error.GetType().Name + ": " + error.Message + Where(error)); }
     }
 
     // SF1, SF2 (D087): with the panel off, or no chest readable, the status marks can't show either, so the first chest
@@ -185,13 +202,12 @@ internal sealed class RuleControls
         {
             if (noticedChests) return;
             noticedChests = true;
-            CleanupRunner.Say("Chests can't be read in this game version, so " + (StashRunner.Enabled ? "chest rules, stashing and cleanup are off"
-                : "chest rules and cleanup are off; AzuAutoStore keeps storing on its own") + " (see the log).", overInventory: true);
+            GameText.Say(Message.Of(StashRunner.Enabled ? "yavsos_notice_chests_unreadable" : "yavsos_notice_chests_unreadable_azu"), overInventory: true);
         }
         else if (!styled && enabled.Value && !noticedPanel)
         {
             noticedPanel = true;
-            CleanupRunner.Say("The chest rule panel is off (see the log); chest rules, stashing and cleanup still work.", overInventory: true);
+            GameText.Say(Message.Of("yavsos_notice_panel_off"), overInventory: true);
         }
     }
 
@@ -337,7 +353,7 @@ internal sealed class RuleControls
     internal void ShowItems() => Queue(() => { PickingItems = true; PickingCategories = PickingFilters = false; Revision++; });
     internal void ShowFilters() => Queue(() => { PickingFilters = true; PickingCategories = PickingItems = false; Revision++; });
     internal void ToggleFilter(string dimension, string value) => Apply(() => edit.ToggleFilter(dimension, value));
-    internal void ClearRule() => Queue(() => Save(null, MessageSpot.Clear));
+    internal void ClearRule() => Queue(() => Save(null, PanelControl.Clear));
 
     // ---- X2 (D116): copy and paste a rule, the chest's label, folding the panel.
     /// <summary>The copied rule, in this game only; nothing is sent until it is pasted.</summary>
@@ -345,7 +361,8 @@ internal sealed class RuleControls
     internal bool CanCopy => RuleCopy.CanCopy(edit);
     internal void CopyRule() => Queue(() =>
     {
-        if (RuleCopy.Of(edit, Label()) is not { } copy) return;
+        // The label goes into Paste's tooltip, which is rich text (P10-04: names escaped).
+        if (RuleCopy.Of(edit, Label() is { } shown ? Texts.Escape(shown) : null) is not { } copy) return;
         Copied = copy; Revision++;
     });
     /// <summary>Replaces the open chest's rule at once, saved like any edit: compare-and-set, refused while another player uses the chest.</summary>
@@ -353,7 +370,7 @@ internal sealed class RuleControls
     {
         if (Copied == null || Mode != RulePanelMode.Edit) return;
         edit.Paste(Copied, Plugin.Instance!.RuleTaxonomy);
-        Save(edit.Edit(), MessageSpot.Clear);
+        Save(edit.Edit(), PanelControl.Paste);
     });
     internal void ToggleFold() => Queue(() => { Folded.Value = !Folded.Value; Revision++; });
 
@@ -368,8 +385,8 @@ internal sealed class RuleControls
         return label = Observed.Length == 0 ? null : ChestLabels.Label(plugin, Observed, taxonomy);
     }
     /// <summary>The Rule heading's and chips' tooltip: the label (variant C).</summary>
-    internal (string Topic, string Text)? LabelTooltip() =>
-        (ChestLabelPreview.Topic, ChestLabelPreview.Tooltip(Label(), Plugin.Instance?.Settings.ShowChestLabels.Value != false));
+    internal Tooltip? LabelTooltip() =>
+        ChestLabelPreview.Of(Label() is { } shown ? Texts.Escape(shown) : null, Plugin.Instance?.Settings.ShowChestLabels.Value != false);
     internal void RemoveUnknown(string id) => Apply(() => edit.RemoveUnknown(id));
     /// <summary>Filters of the edited alternative this version doesn't know (D077 B01); kept on save unless removed.</summary>
     internal IReadOnlyList<string> UnknownFilters => edit.UnknownFilters;
@@ -391,7 +408,7 @@ internal sealed class RuleControls
     internal void ChangeLevel(int step)
     {
         if (ChestPriority.Step(Priority, step) is not int next) return;
-        Apply(() => edit.Priority = next, MessageSpot.Chest);
+        Apply(() => edit.Priority = next, PanelControl.Priority);
     }
     /// <summary>A click on the 1–10 bar (D071).</summary>
     internal void SetLevel(int level)
@@ -399,7 +416,7 @@ internal sealed class RuleControls
         var rank = ChestPriority.Rank(level);
         // D101: the bar is shown without a rule too, faint; priority belongs to the rule, so there it does nothing.
         if (!Stored || ChestPriority.Level(Priority) == ChestPriority.Level(rank)) return;
-        Apply(() => edit.Priority = rank, MessageSpot.Chest);
+        Apply(() => edit.Priority = rank, PanelControl.Priority);
     }
     internal void ToggleCleanupOptOut()
     {
@@ -407,34 +424,152 @@ internal sealed class RuleControls
         Queue(() =>
         {
             var result = Plugin.Instance!.ChestRules.TrySetCleanupOptOut(target, value);
-            if (!result.Succeeded) Messages.Say(MessageSpot.Cleanup, result.Message);
+            if (!result.Succeeded) Messages.Say(PanelControl.OptOut, result.Message);
             Revision++; ruleRevision++;
         });
     }
     // D101: "Cleanup started." goes (the button turns to "Cleaning up…" and the result panel follows); a refusal, or the
-    // summary of a run with nothing to move (no result panel follows it), shows beside the button.
+    // summary of a run with nothing to move (no result panel follows it), shows in the strip (D132).
     internal void CleanUpNearby() => Queue(() =>
     {
         var said = Cleanup.Start();
-        if (said != CleanupRunner.Started)
-            Messages.Say(MessageSpot.Cleanup, said, ReferenceEquals(said, Cleanup.LastSummary) ? MessageKind.Summary : MessageKind.Refusal);
+        if (said.Outcome != RunOutcome.Started)
+            Messages.Say(PanelControl.Cleanup, said.Message, said.Outcome == RunOutcome.Summary ? MessageKind.Summary : MessageKind.Refusal);
         Revision++;
     });
 
     // D051: each change is written at once (RuleEditState.Edit says what an emptied rule becomes).
-    private void Apply(Action change, MessageSpot spot = MessageSpot.Tab) => Queue(() =>
+    private void Apply(Action change, PanelControl control = PanelControl.Edit) => Queue(() =>
     {
         change();
-        Save(edit.Edit(), spot);
+        Save(edit.Edit(), control);
     });
 
-    // D101: a saved edit says nothing (the chips and ticks change at the click); a refusal stays where it was asked.
-    private void Save(ChestRuleEdit? edit, MessageSpot spot)
+    // D101: a saved edit says nothing (the chips and ticks change at the click); a refusal stays in the strip until the
+    // next action, its control outlined (D132). X26: every saved change becomes this chest's undo record.
+    private void Save(ChestRuleEdit? edit, PanelControl control)
     {
-        var result = Plugin.Instance!.ChestRules.TryEdit(Chest!, Observed, edit);
+        var before = Observed;
+        var result = Plugin.Instance!.ChestRules.TryEdit(Chest!, before, edit);
         Load(Chest!);
-        if (!result.Succeeded) Messages.Say(spot, result.Message);
+        if (result.Succeeded && ChestKey() is { } key) history.Changed(key, before, Observed);
+        if (!result.Succeeded) Messages.Say(control, result.Message);
     }
+
+    // ---- X26 (P10-07, D130): undo the last rule change on this chest, then redo it. Local to this game, per chest, until
+    // the world ends. The write is the owner's compare-and-set: refused when the rule changed since (A2-09: the stored
+    // payload is put back whole, so Clear rule can always be undone, hidden parts included).
+    private readonly RuleHistory<ZDOID> history = new RuleHistory<ZDOID>();
+    private static readonly MessageList? UndoKeyName = KeyNames.Format(nameof(KeyCode.Z), new[] { nameof(KeyCode.LeftControl) });
+
+    /// <summary>The open chest's undo record, or null.</summary>
+    internal RuleUndo? UndoRecord => ChestKey() is { } key ? history.For(key) : null;
+
+    /// <summary>The ↶ button's tooltip: what a click puts back, by its chest label.</summary>
+    internal Tooltip UndoTooltip()
+    {
+        var record = UndoRecord;
+        var label = record == null || record.Before.Length == 0 ? null : ChestLabels.Label(Plugin.Instance!, record.Before, Plugin.Instance!.RuleTaxonomy);
+        return UndoButton.Tip(record, Mode == RulePanelMode.Edit || Mode == RulePanelMode.Unreadable && Owner(), label == null ? null : Texts.Escape(label), UndoKeyName);
+    }
+
+    internal void Undo() => Queue(() =>
+    {
+        if (Chest == null || ChestKey() is not { } key || history.For(key) is not { } record) return;
+        var result = Plugin.Instance!.ChestRules.TryRestore(Chest, record.After, record.Before, record.Redo);
+        Load(Chest);
+        if (result.Succeeded) { history.Restored(key, Observed); Revision++; return; }
+        // The rule changed since: this record can't be undone any more (the wireframe drops it).
+        if (result.Reason == TransferRefusal.PolicyChanged) history.Drop(key);
+        Messages.Say(PanelControl.Undo, result.Message);
+    });
+
+    // Ctrl + Z, unless the player is typing: in a YAVSOS search box, any other focused text field, the chat or the console.
+    private static bool UndoKey()
+    {
+        var input = BepInEx.UnityInput.Current;
+        if (!input.GetKeyDown(KeyCode.Z) || !input.GetKey(KeyCode.LeftControl) && !input.GetKey(KeyCode.RightControl)) return false;
+        if (TypingBlock.Active || global::Console.IsVisible() || TextInput.IsVisible() || Chat.instance && Chat.instance.HasFocus()) return false;
+        var events = UnityEngine.EventSystems.EventSystem.current;
+        var selected = events ? events!.currentSelectedGameObject : null;
+        return !(selected && selected!.GetComponent<InputField>() is { isFocused: true });
+    }
+
+    /// <summary>The open chest's identity in this world (its object ID), for its undo record and dismissed suggestions.</summary>
+    private ZDOID? ChestKey() => Chest != null && ChestRuleStore.View(Chest)?.GetZDO() is { } zdo ? zdo.m_uid : null;
+
+    private void LeftWorld()
+    {
+        Copied = null;
+        if (history.Count != 0) history.Clear();
+        if (dismissed.Count != 0) dismissed.Clear();
+    }
+
+    // ---- P10-25 (D132, variant B): the strip under the header.
+    /// <summary>What the strip shows now: the message, a banner, or the chest label.</summary>
+    internal StripLine Strip(RulePanelMode mode)
+    {
+        var label = Label();
+        return PanelStrip.Of(Messages, mode switch { RulePanelMode.ReadOnly => StripBanner.InUse, RulePanelMode.Unreadable => StripBanner.Unreadable, _ => StripBanner.None },
+            Stasher, label == null ? null : Texts.Escape(label), Folded.Value);
+    }
+
+    // ---- X22 (P10-08, D130 variant A, D132): suggestions from what the open chest holds (B2-11: the chest only), as chips
+    // under the rule's chips. Each saves through the normal rule write, so it is undoable and refused like any edit.
+    private readonly Dictionary<ZDOID, string> dismissed = new();
+    private string suggestedKey = "\0";
+    private RuleSuggestions suggested = RuleSuggestions.None;
+
+    /// <summary>What to suggest for the open chest; none while categories load, in a read-only panel, or once dismissed.</summary>
+    internal RuleSuggestions Suggestions()
+    {
+        var plugin = Plugin.Instance!; var answers = plugin.CategoryAnswers; var taxonomy = plugin.RuleTaxonomy;
+        if (Chest == null || Mode != RulePanelMode.Edit || answers == null || !answers.CategoriesReady) return RuleSuggestions.None;
+        var inventory = Chest.GetInventory();
+        var key = Observed + "|" + TooltipContext.Contents(inventory) + "|" + answers.Generation + "|" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(taxonomy);
+        if (key != suggestedKey)
+        {
+            suggestedKey = key;
+            var timed = UiCost.Start();
+            suggested = RuleSuggestion.Find(taxonomy, ChestStacks(plugin, answers, taxonomy, inventory), Stored, plugin.CategoryMemberCount);
+            UiCost.Stop("suggestions", timed);
+        }
+        return ChestKey() is { } chest && dismissed.TryGetValue(chest, out var hidden) && hidden == suggested.Signature ? RuleSuggestions.None : suggested;
+    }
+
+    // B2-11: the open chest's own stacks (not the player's), each with its item's categories and whether the stored rule
+    // accepts it (the evaluator, as the kept-out line asks it) or marks it Never.
+    private List<SuggestionStack> ChestStacks(Plugin plugin, ICategoryAnswers answers, ClassificationTaxonomy taxonomy, Inventory? inventory)
+    {
+        var stacks = new List<SuggestionStack>();
+        if (inventory == null) return stacks;
+        var accepts = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var item in inventory.GetAllItems())
+        {
+            var prefab = item?.m_dropPrefab ? item!.m_dropPrefab.name : null;
+            if (prefab == null) continue;
+            if (!accepts.TryGetValue(prefab, out var accepted))
+                accepts[prefab] = accepted = Stored && plugin.RuleEvaluator.Evaluate(Observed, prefab, taxonomy, answers) == ChestRuleDecision.Accept;
+            stacks.Add(new SuggestionStack(prefab, answers.Resolve(prefab)?.Memberships.Select(x => x.Category), accepted, Excludes.Contains(prefab)));
+        }
+        return stacks;
+    }
+
+    /// <summary>"✦ Set rule: {category}": ticks the category on a chest without a rule.</summary>
+    internal void SuggestCategory(string category) => Apply(() =>
+    {
+        if (!Stored && Plugin.Instance!.RuleTaxonomy.Categories.ContainsKey(category)) edit.ToggleCategory(Plugin.Instance!.RuleTaxonomy, category);
+    }, PanelControl.Suggestion);
+
+    /// <summary>"✓ Always: these items" (D139): marks each item the rule misses Always (D132).</summary>
+    internal void AcceptContents(IReadOnlyList<string> items) => Apply(() => edit.AcceptAll(items), PanelControl.Suggestion);
+
+    /// <summary>✕: hides these suggestions on this chest until they change or the world ends.</summary>
+    internal void DismissSuggestions(string signature) => Queue(() =>
+    {
+        if (ChestKey() is { } key) dismissed[key] = signature;
+        Revision++;
+    });
 
     // ---- P6-05: where a stack would go and why, for the stack under the mouse or one picked in the item list. Read only:
     // the runners gather the same live inputs a run would and hand them to the Core explainer; nothing is planned to act on.
@@ -459,9 +594,9 @@ internal sealed class RuleControls
     /// <summary>S2: the typed answer the line was built from, with its chosen chest; null before the first and after forgetting.</summary>
     internal ExplanationAnswer? Answer { get; private set; }
     /// <summary>One short line (P6-23): what the stash key or "Clean up nearby" would do with the stack, "Stash stack [Middle mouse]: …".</summary>
-    internal string? Explanation { get; private set; }
-    /// <summary>Why there is no answer, or a qualifier ("turned off on this server").</summary>
-    internal string ExplanationContext { get; private set; } = "";
+    internal WhereLine? Explanation { get; private set; }
+    /// <summary>Why there is no answer, or a qualifier ("This server has turned off stashing"); null for none.</summary>
+    internal Message? ExplanationContext { get; private set; }
     /// <summary>Bumped when the explanation changes, so its section rebuilds its lines only then.</summary>
     internal int ExplanationRevision { get; private set; }
 
@@ -492,7 +627,7 @@ internal sealed class RuleControls
     private void Explain(ItemDrop.ItemData item)
     {
         subject = item; ExplanationRevision++;
-        Answer = null; Explanation = null; ExplanationContext = "";
+        Answer = null; Explanation = null; ExplanationContext = null;
         if (gather == null && context != null) Answered(context);
     }
 
@@ -505,16 +640,16 @@ internal sealed class RuleControls
         {
             if (player && player.GetInventory().ContainsItem(item)) answer = ctx.Stash(stash, item);
             else if (Chest && ReferenceEquals(ctx.Open, Chest) && Chest!.GetInventory()?.ContainsItem(item) == true) answer = ctx.Cleanup(Cleanup, item);
-            else { subject = null; Answer = null; Explanation = null; ExplanationContext = ""; ExplanationRevision++; return; } // Moved or used up since.
+            else { subject = null; Answer = null; Explanation = null; ExplanationContext = null; ExplanationRevision++; return; } // Moved or used up since.
         }
         catch (Exception error) when (OptionalFailure.Recoverable(error))
         {
-            answer = ExplanationAnswer.Without(ItemName(item) + " can't be explained right now.");
+            answer = ExplanationAnswer.Without(TooltipContext.Failed(item));
             log.LogWarning($"Explanation failed for {item.m_dropPrefab?.name}: {error.GetType().Name}: {error.Message}");
         }
         var line = answer.Line;
         lineAt = Time.unscaledTime; lineFrom = player ? player.transform.position : lineFrom;
-        if (Answer != null && line == Explanation && answer.Note == ExplanationContext) { Answer = answer; return; } // Same text: no redraw.
+        if (Answer != null && Equals(line, Explanation) && Equals(answer.Note, ExplanationContext)) { Answer = answer; return; } // Same text: no redraw.
         Answer = answer; Explanation = line; ExplanationContext = answer.Note; ExplanationRevision++;
     }
 
@@ -527,7 +662,7 @@ internal sealed class RuleControls
         if ((at - lineFrom).sqrMagnitude < FollowStep * FollowStep) return;
         lineAt = now; lineFrom = at;
         var line = Answer.Line;
-        if (line == Explanation) return;
+        if (Equals(line, Explanation)) return;
         Explanation = line; ExplanationRevision++;
     }
 
@@ -584,26 +719,22 @@ internal sealed class RuleControls
         running?.Dispose();
     }
 
-    private int tooltipShown = -1;
+    private int tooltipShown = -1, tooltipLanguage = -1;
     private string tooltipLine = "";
 
     /// <summary>
     /// P6-23 (D071): the answer for the game's tooltip of <paramref name="item"/>, or "" if it is not the stack explained
-    /// (or not yet). Built once per answer: the game asks for the tooltip every frame while it is open.
+    /// (or not yet). Built once per answer and language: the game asks for the tooltip every frame while it is open.
+    /// B2-07: the lead is colored from the answer's parts (<see cref="WhereLine"/>), not by finding ": " in the text.
     /// </summary>
     internal string TooltipLine(ItemDrop.ItemData item)
     {
         if (explainOff || !ReferenceEquals(item, subject)) return ""; // With or without a chest open (D086 D12).
-        if (tooltipShown == ExplanationRevision) return tooltipLine;
-        tooltipShown = ExplanationRevision;
-        static string Plain(string text) => text.Replace("<", "‹").Replace(">", "›");
-        var line = "";
-        if (Explanation != null)
-        {
-            var colon = Explanation.IndexOf(": ", StringComparison.Ordinal);
-            line = colon < 0 ? Plain(Explanation) : "<color=#F0A64A>" + Plain(Explanation.Substring(0, colon + 1)) + "</color>" + Plain(Explanation.Substring(colon + 1));
-        }
-        if (ExplanationContext.Length != 0) line += (line.Length == 0 ? "" : "\n") + "<color=#A0957F>" + Plain(ExplanationContext) + "</color>";
+        if (tooltipShown == ExplanationRevision && tooltipLanguage == Texts.Generation) return tooltipLine;
+        tooltipShown = ExplanationRevision; tooltipLanguage = Texts.Generation;
+        var line = Explanation == null ? "" : Texts.Get(Explanation.Fit(Texts.Plain, Texts.Escape));
+        if (ExplanationContext != null)
+            line += (line.Length == 0 ? "" : "\n") + "<color=" + Texts.Color(Tone.Faint) + ">" + Texts.Escape(Texts.Plain(ExplanationContext)) + "</color>";
         return tooltipLine = line;
     }
 
@@ -613,7 +744,7 @@ internal sealed class RuleControls
         StopGather();
         building?.Dispose(); context?.Dispose(); building = context = null;
         if (subject == null && hovered == null && Explanation == null && Answer == null) return;
-        subject = hovered = null; Answer = null; Explanation = null; ExplanationContext = ""; ExplanationRevision++;
+        subject = hovered = null; Answer = null; Explanation = null; ExplanationContext = null; ExplanationRevision++;
     }
 
     // ---- Read-only views for the panel's sections.
@@ -622,7 +753,7 @@ internal sealed class RuleControls
         var plugin = Plugin.Instance!;
         // Before the server's answers arrive, member counts are unknown, so every category is listed.
         Func<string, bool> hasMembers = plugin.ClassificationEvidenceReady ? id => plugin.CategoryMemberCount(id) > 0 : _ => true;
-        return CategorySearch.Rows(taxonomy, Categories, hasMembers, expanded, collapsed, Search);
+        return CategorySearch.Rows(CategoryText.For(taxonomy), Categories, hasMembers, expanded, collapsed, Search);
     }
 
     // ---- P6-06: search in the category picker, and the nearby chests that hold (D122; with the toggle, take) what was found. Read only.
@@ -631,6 +762,7 @@ internal sealed class RuleControls
     private float typedAt;
     private long searchedGeneration = long.MinValue;
     private object? searchedTaxonomy;
+    private int searchedLanguage = -1;
     private List<SearchableItem>? searchable;
     private string searchableKey = "";
     internal CategorySearchResult Search { get; private set; } = CategorySearchResult.None;
@@ -646,13 +778,14 @@ internal sealed class RuleControls
     {
         var plugin = Plugin.Instance!; var answers = plugin.CategoryAnswers; var taxonomy = plugin.RuleTaxonomy;
         var generation = answers?.Generation ?? long.MinValue;
-        var current = typed == searched && generation == searchedGeneration && ReferenceEquals(taxonomy, searchedTaxonomy);
+        // S13: category names follow the language, so a language change searches again.
+        var current = typed == searched && generation == searchedGeneration && ReferenceEquals(taxonomy, searchedTaxonomy) && searchedLanguage == Texts.Generation;
         // A saved or reloaded rule that changes which chests take the focused hit is rescanned by Lighting (P6-13).
         if (current || Time.unscaledTime - typedAt < SearchDelay) return;
-        searched = typed; searchedGeneration = generation; searchedTaxonomy = taxonomy;
+        searched = typed; searchedGeneration = generation; searchedTaxonomy = taxonomy; searchedLanguage = Texts.Generation;
         var started = UiCost.Start();
         Search = answers == null || !answers.CategoriesReady ? CategorySearchResult.None
-            : CategorySearch.Find(taxonomy, typed, Searchable(plugin, answers), plugin.CategoryMemberCount);
+            : CategorySearch.Find(CategoryText.For(taxonomy), typed, Searchable(plugin, answers), plugin.CategoryMemberCount);
         UiCost.Stop("search", started);
         SearchRevision++;
     }
@@ -664,8 +797,8 @@ internal sealed class RuleControls
     private int litRuleRevision, opened;
     private string litKey = "\0", gridLit = "", gridHover = "", hoverLit = "", rowHover = "", rowLit = "";
     private float gridTypedAt, gridHoverAt, rowHoverAt;
-    /// <summary>What the highlight asked about, for the status line's tooltip.</summary>
-    internal string LitSubject { get; private set; } = "";
+    /// <summary>What the highlight asked about, named for the status line's tooltip (X54: the items, not "these items"); null: nothing named.</summary>
+    internal MessageList? LitSubject { get; private set; }
 
     internal string RowHovered => rowHover;
 
@@ -709,8 +842,9 @@ internal sealed class RuleControls
             if (rowLit.Length != 0) LightCategory(taxonomy, rowLit, rescan);
             else if (items.Count != 0)
             {
-                LitSubject = items[0].Name;
-                Highlight.Request(items[0].Category, new[] { items[0].Prefab }, rescan, takes: ShowsTakers, about: LitSubject);
+                var name = Texts.Escape(items[0].Name);
+                LitSubject = HighlightText.Names(new[] { name });
+                Highlight.Request(items[0].Category, new[] { items[0].Prefab }, rescan, takes: ShowsTakers, about: name);
             }
             else if (categories.Count != 0) LightCategory(taxonomy, categories[0], rescan);
             else Highlight.Clear();
@@ -718,8 +852,10 @@ internal sealed class RuleControls
         else if (edit && PickingItems && gridLit.Trim().Length != 0)
         {
             var wanted = GridLit();
-            LitSubject = wanted.Count == 1 ? ItemName(wanted[0]) : hoverLit.Length != 0 ? ItemName(hoverLit) : "these items";
-            Highlight.Request("", wanted, rescan, takes: ShowsTakers, about: LitSubject);
+            // X54: the items by name ("Copper, Tin +3 more"); look-alike copies share one name.
+            var names = wanted.Select(x => Texts.Escape(ItemName(x))).ToList();
+            LitSubject = HighlightText.Names(names);
+            Highlight.Request("", wanted, rescan, takes: ShowsTakers, named: names.Distinct(StringComparer.Ordinal).Count());
         }
         else Highlight.Clear();
     }
@@ -728,10 +864,11 @@ internal sealed class RuleControls
     // judged on its first members, the search's finds first.
     private void LightCategory(ClassificationTaxonomy taxonomy, string category, bool rescan)
     {
-        LitSubject = CategoryName(taxonomy, category);
+        var name = Texts.Escape(CategoryName(taxonomy, category));
+        LitSubject = HighlightText.Names(new[] { name });
         var found = Search.Items.Select(x => x.Prefab);
         Highlight.Request(category, CategorySearch.Members(searchable ?? new List<SearchableItem>(), category, found, ChestHighlight.MaximumItems), rescan,
-            holdsOf: category, takes: ShowsTakers, about: LitSubject);
+            holdsOf: category, takes: ShowsTakers, about: name);
     }
 
     // The grid's items for its search, in the order shown, at most ChestHighlight.MaximumItems; just the hovered icon's
@@ -824,16 +961,22 @@ internal sealed class RuleControls
         }
     }
 
-    internal string HighlightStatus() => Highlight.Status();
+    internal Message? HighlightStatus() => Highlight.Status();
 
     /// <summary>The status line's tooltip (D101 C7): the chests found, with their distances.</summary>
-    internal (string Topic, string Text)? HighlightTooltip() => HighlightText.Tooltip(LitSubject,
+    internal Tooltip? HighlightTooltip() => HighlightText.Tooltip(LitSubject,
         Highlight.Chests(ChestHighlight.Kind.Holds, LitChestName), Highlight.Chests(ChestHighlight.Kind.Takes, LitChestName));
 
-    private string LitChestName(Container chest) => ReferenceEquals(chest, Chest) ? "This chest" :
-        CleanupRunner.Localize(chest.m_name) + (Player.m_localPlayer ? " " + Vector3.Distance(Player.m_localPlayer.transform.position, chest.transform.position).ToString("0") + " m" : "");
+    private Message LitChestName(Container chest)
+    {
+        if (ReferenceEquals(chest, Chest)) return Message.Of("yavsos_search_tip_this_chest");
+        // The panel is open only with a player in the world, which the highlight also needs (it goes dark without one).
+        var player = Player.m_localPlayer;
+        var meters = player ? Math.Round(Vector3.Distance(player.transform.position, chest.transform.position), MidpointRounding.AwayFromZero) : 0;
+        return Message.Of("yavsos_search_tip_chest").With("chest", Texts.Escape(GameText.Localize(chest.m_name))).With("meters", (long)meters);
+    }
 
-    /// <summary>D122: the search also lights the chests whose rule would take a match (the rule-tag button; remembered).</summary>
+    /// <summary>D122: the search also lights the chests whose rules accept a match ("Also show chests that accept it"; remembered).</summary>
     internal bool ShowsTakers => Plugin.Instance?.Settings.SearchShowsTakers.Value == true;
     internal void ToggleTakers() => Queue(() =>
     {
@@ -888,13 +1031,8 @@ internal sealed class RuleControls
     private Dictionary<string, IReadOnlyList<string>> GridFilters() =>
         Filters.ToDictionary(x => x.Key, x => (IReadOnlyList<string>)x.Value.ToList(), StringComparer.Ordinal);
 
-    internal static string GridTitle(GridSection section, int count) => section switch
-    {
-        GridSection.Here => "In this chest or your inventory",
-        GridSection.Marked => "Always or Never, outside the categories",
-        GridSection.Rule => "Taken by this rule",
-        _ => "Other items"
-    } + " (" + count + ")";
+    /// <summary>A grid section's title in the player's language (the panel is rebuilt on a language change).</summary>
+    internal static string GridTitle(GridSection section, int count) => Texts.Get(ItemGrid.Title(section, count));
 
     internal Sprite? GridIcon(string prefab)
     {
@@ -913,12 +1051,15 @@ internal sealed class RuleControls
         var plugin = Plugin.Instance!; var rarity = plugin.EpicLootRarityOffered;
         var byCategory = plugin.CategoryAnswers?.Resolve(entry.Prefab) is { } item &&
             ItemGrid.Takes(item, Categories, GridFilters(), (row, dimension) => InstanceApplies(row.Prefab, dimension, rarity && row.InstanceRarity));
-        var note = "\n\n<color=orange>" + ItemGrid.MarkText(entry.Mark, byCategory) + "</color>" + (entry.Copies.Count < 2 ? ""
-            : "\n<color=#A0957F>" + entry.Copies.Count + " copies in the game (" + string.Join(", ", entry.Copies) + "), for example NPC gear; a mark applies to all.</color>") +
-            (KeptOut(entry) ? "\n<color=#F0C050>AzuAutoStore's config keeps this out of this chest type, so it won't store it here.</color>" : "");
-        if (!drop) return (entry.Name, "Not in this game any more." + note);
-        try { return (drop!.m_itemData.m_shared.m_name, drop.m_itemData.GetTooltip() + note); }
-        catch (Exception error) when (OptionalFailure.Recoverable(error)) { return (entry.Name, note.TrimStart('\n')); }
+        // P10-04: the notes are messages, one per line, each in its tone; no markup in the text.
+        var lines = new List<object> { Tinted.Of(ItemGrid.MarkText(entry.Mark, byCategory), Tone.Warning), Tinted.Of(ItemGrid.ClickHint, Tone.Warning) };
+        if (entry.Copies.Count >= 2)
+            lines.Add(Tinted.Of(Message.Of("yavsos_grid_copies").With("prefabs", MessageList.Of(ListKind.Comma, entry.Copies.Select(Texts.Escape))).Count(entry.Copies.Count), Tone.Faint));
+        if (KeptOut(entry)) lines.Add(Tinted.Of(Message.Of("yavsos_grid_kept_out"), Tone.Caution));
+        var note = Texts.Get(MessageList.Of(ListKind.Lines, lines));
+        if (!drop) return (entry.Name, Texts.Get("yavsos_grid_missing") + "\n\n" + note);
+        try { return (drop!.m_itemData.m_shared.m_name, drop.m_itemData.GetTooltip() + "\n\n" + note); }
+        catch (Exception error) when (OptionalFailure.Recoverable(error)) { return (entry.Name, note); }
     }
 
     // Every catalog item with its shown name and current answers, built once per catalog and answers generation.
@@ -949,33 +1090,33 @@ internal sealed class RuleControls
             .Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToList();
     }
 
-    internal static string Stasher => StashRunner.Enabled ? "stashing" : "AzuAutoStore";
+    /// <summary>What stashes in this game (P10-04: a typed value; each sentence that names it has one message per stasher).</summary>
+    internal static Stasher Stasher => StashRunner.Enabled ? Stasher.Yavsos : Stasher.AzuAutoStore;
 
     // ---- D071: the header's status marks and the Rule section's chips.
     private const float MarksEvery = 1f; // The MultiUserChest check reads Harmony's patch list; once a second is plenty.
     private float marksAt = float.NegativeInfinity;
     private IReadOnlyList<IntegrationMark> marks = Array.Empty<IntegrationMark>();
-    private string marksKeptOut = "";
+    private Message? marksKeptOut;
 
     /// <summary>One mark per integration that is installed (D071), refreshed at most once a second.</summary>
     internal IReadOnlyList<IntegrationMark> Marks()
     {
         var now = Time.unscaledTime;
         var line = KeptOutLine(); // Per chest, so a change shows at once rather than on the next once-a-second refresh.
-        if (now - marksAt < MarksEvery && StringComparer.Ordinal.Equals(line, marksKeptOut)) return marks;
+        if (now - marksAt < MarksEvery && Equals(line, marksKeptOut)) return marks;
         marksAt = now; marksKeptOut = line;
         var plugin = Plugin.Instance!; var settings = plugin.Settings;
-        var azu = Chainloader.PluginInfos.TryGetValue(AzuAutoStoreIntegration.AzuGuid, out var info) ? info?.Metadata?.Version?.ToString() ?? "" : null;
+        var azu = Chainloader.PluginInfos.TryGetValue(AzuAutoStoreIntegration.AzuGuid, out var info) ? Texts.Escape(info?.Metadata?.Version?.ToString() ?? "") : null;
         var reader = NativeInventoryProbe.Supported || !NativeInventoryProbe.Checked; // Not checked yet is not broken.
-        var muc = MucRoute.Available(out var copy);
+        var muc = MucRoute.InUse(out var copy);
         var epic = plugin.EpicLootState;
         marks = PanelMarks.Shown(
             PanelMarks.Azu(azu, AzuAutoStoreIntegration.State == AzuIntegrationState.Active, AzuStoreOrder.Active, AzuStoreOrder.PickupActive,
                 AzuExclusions.State != AzuExclusionState.Unavailable, AzuExclusions.PauseState != AzuExclusionState.Unavailable, line,
-                AzuExclusions.State == AzuExclusionState.Limited ? "AzuAutoStore changed how it checks exclusions, so clean up moves items only into chest types with no exclusions in its config."
-                : AzuExclusions.RecentErrors ? "reading its exclusion list failed in the last few minutes (" + AzuExclusions.Errors + " time" + (AzuExclusions.Errors == 1 ? "" : "s") +
-                    " this session, see the log); each check is tried again, and meanwhile clean up moves items only into chest types with no exclusions in its config." : null),
-            azu == null ? PanelMarks.Stashing(settings.AllowStashing.Value, reader, settings.StashShortcut.Value.ToString(), settings.StashItemShortcut.Value.ToString(),
+                AzuExclusions.State == AzuExclusionState.Limited ? Message.Of("yavsos_mark_azu_exclusions_changed")
+                : AzuExclusions.RecentErrors ? Message.Of("yavsos_mark_azu_exclusions_errors").Count(AzuExclusions.Errors) : null),
+            azu == null ? PanelMarks.Stashing(settings.AllowStashing.Value, reader, MarkKey(settings.StashShortcut.Value), MarkKey(settings.StashItemShortcut.Value),
                 ChestRuleStore.Bound) : null,
             PanelMarks.Cleanup(settings.AllowCleanup.Value, reader, azu != null && AzuExclusions.State == AzuExclusionState.Unavailable, ChestRuleStore.Bound),
             PanelMarks.Server(plugin.ServerWithoutYavsos),
@@ -988,6 +1129,11 @@ internal sealed class RuleControls
             PanelMarks.Display(DisplayFaults.Off));
         return marks;
     }
+
+    // A key as a player reads it ("Ctrl + .", the friendly names the panel uses elsewhere), safe inside rich text.
+    // "" when the key is unset, so the mark picks a sentence without it.
+    private static string MarkKey(KeyboardShortcut key) =>
+        KeyNames.Format(key.MainKey.ToString(), key.Modifiers.Select(x => x.ToString())) is { } name ? Texts.Escape(Texts.Get(name)) : "";
 
     private string chipsKey = "\0";
     private IReadOnlyList<RuleChip> chips = Array.Empty<RuleChip>();
@@ -1003,9 +1149,10 @@ internal sealed class RuleControls
         if (key == chipsKey) return chips;
         chipsKey = key;
         if (!Stored) return chips = new[] { RuleChips.NoRule(none) };
+        var names = CategoryText.For(taxonomy);
         var categories = CategorySelection.Normalize(taxonomy, Categories.Where(taxonomy.Categories.ContainsKey))
-            .OrderBy(x => taxonomy.Categories[x].DisplayRank).ThenBy(x => taxonomy.Categories[x].Name, StringComparer.CurrentCulture)
-            .Select(x => taxonomy.Categories[x].Name);
+            .OrderBy(x => taxonomy.Categories[x].DisplayRank).ThenBy(names.Shown, StringComparer.CurrentCulture)
+            .Select(names.Shown);
         // Unknown filters and values are listed as ignored, not as what the rule takes (D077 B01, D086 D6).
         var filters = RuleText.Short(Filters.Where(x => ClassificationFilters.IsKnown(x.Key))
             .ToDictionary(x => x.Key, x => (IReadOnlyList<string>)x.Value.Where(v => ClassificationFilters.IsKnownRuleValue(x.Key, v)).ToList(), StringComparer.Ordinal), OpenValueName);
@@ -1024,11 +1171,12 @@ internal sealed class RuleControls
 
     // P4-00f (D056): AzuAutoStore's own config can keep items this rule asks for out of this chest type. Shown as a
     // caution on the AzuAutoStore mark and on those items in the grid, not as a banner (maintainer, 2026-10-24).
-    private string keptOutKey = "", keptOutLine = "";
+    private string keptOutKey = "";
+    private Message? keptOutLine;
     private HashSet<string> keptOut = new(StringComparer.Ordinal);
 
-    /// <summary>The AzuAutoStore mark's line for this chest's kept-out items, or "" when there are none or it can't tell yet.</summary>
-    internal string KeptOutLine() { KeptOutUpdate(); return keptOutLine; }
+    /// <summary>The AzuAutoStore mark's line for this chest's kept-out items, or null when there are none or it can't tell yet.</summary>
+    internal Message? KeptOutLine() { KeptOutUpdate(); return keptOutLine; }
 
     /// <summary>The rule takes this grid item, but AzuAutoStore's config keeps it out of this chest type.</summary>
     internal bool KeptOut(GridEntry entry) => entry.Taken && keptOut.Count != 0 && entry.Copies.Any(keptOut.Contains);
@@ -1038,7 +1186,7 @@ internal sealed class RuleControls
         var plugin = Plugin.Instance!;
         var answers = plugin.CategoryAnswers; var catalog = plugin.LoadedCatalog;
         if (!Stored || Chest == null || answers == null || catalog == null || Categories.Count != 0 && !answers.CategoriesReady || !AzuExclusions.HasExclusions(Chest))
-        { keptOutKey = ""; keptOutLine = ""; if (keptOut.Count != 0) keptOut = new HashSet<string>(StringComparer.Ordinal); return; }
+        { keptOutKey = ""; keptOutLine = null; if (keptOut.Count != 0) keptOut = new HashSet<string>(StringComparer.Ordinal); return; }
         var key = Observed + "|" + answers.Generation + "|" + catalog.Fingerprint + "|" + AzuExclusions.ChestType(Chest);
         if (StringComparer.Ordinal.Equals(key, keptOutKey)) return;
         keptOutKey = key;
@@ -1048,38 +1196,45 @@ internal sealed class RuleControls
             prefab => plugin.RuleEvaluator.Evaluate(observed, prefab, taxonomy, answers) == ChestRuleDecision.Accept,
             prefab => AzuExclusions.Allows(container, prefab) != false);
         keptOut = new HashSet<string>(found.Items, StringComparer.Ordinal);
-        // Different prefabs can share a shown name (two "Lox bite"s); list each name once.
-        var examples = found.Examples.Select(ItemName).Distinct(StringComparer.CurrentCulture);
-        // P8-17: one item is named ("keeps Bronze out"); several are counted, with examples.
-        keptOutLine = found.Count == 0 ? "" : found.Count == 1 && found.Examples.Count == 1
-            ? $"its config keeps {examples.First()} out of this chest type, so it won't store it here. " +
-              "It has an amber slot under Items. Use another chest type or change its config."
-            : $"its config keeps {found.Count} of this rule's items out of this chest type " +
-              $"({string.Join(", ", examples)}{(found.Count > found.Examples.Count ? ", …" : "")}), so it won't store them here. " +
-              "They have amber slots under Items. Use another chest type or change its config.";
+        // Different prefabs can share a shown name (two "Lox bite"s); list each name once. Names go into rich text.
+        var examples = found.Examples.Select(ItemName).Distinct(StringComparer.CurrentCulture).Select(Texts.Escape).ToList();
+        // P8-17: one item is named ("keeps Bronze out"); several are counted, with examples and how many more there are.
+        keptOutLine = found.Count == 0 ? null : found.Count == 1 && found.Examples.Count == 1
+            ? Message.Of("yavsos_mark_azu_kept_out_item").With("item", examples[0]).With("tab", Message.Of("yavsos_tab_items"))
+            : Message.Of("yavsos_mark_azu_kept_out").Count(found.Count)
+                .With("items", MessageList.Of(ListKind.Comma, examples).WithMore(Math.Max(0, found.Count - found.Examples.Count)))
+                .With("tab", Message.Of("yavsos_tab_items"));
     }
 
-    internal string FilterSummary() =>
-        RuleText.Filters(Filters.ToDictionary(x => x.Key, x => (IReadOnlyList<string>)x.Value.ToList(), StringComparer.Ordinal), OpenValueName);
-
-    /// <summary>A creature's name token (P6-15) shown in the player's language; a mod ID as it is.</summary>
+    /// <summary>
+    /// An open filter value in the player's language: a creature's name token (P6-15), a mod by its own name, the
+    /// crafter ("me" for the local player). Formatted here, so it is a name like the others for <see cref="RuleText"/>;
+    /// the caches that keep it key on <see cref="Texts.Generation"/>.
+    /// </summary>
     internal static string OpenValueName(string dimension, string value)
     {
         if (dimension == "eaten-by") return Localization.instance != null ? Localization.instance.Localize(value) : value;
-        // P6-21: the mod's own name rather than its plugin ID; the base game as "Vanilla".
+        // P6-21: the mod's own name rather than its plugin ID; the base game by its display name.
         if (dimension == "mod")
-            return value == RuleText.Vanilla ? RuleText.ValueName(dimension, value)
+            return value == RuleText.Vanilla ? Shown(RuleText.ValueName(dimension, value))
                 : Chainloader.PluginInfos.TryGetValue(value, out var plugin) && !string.IsNullOrEmpty(plugin?.Metadata?.Name) ? plugin!.Metadata.Name : value;
         if (dimension == "crafter" && ClassificationFilters.TryParseCrafter(value, out var by, out var id, out var name))
-        {
-            var mine = Player.m_localPlayer && Player.m_localPlayer.GetPlayerID() == id;
-            return RuleText.CrafterName(by, mine ? "me" : name.Length != 0 ? name : "the player who set it");
-        }
+            return Shown(RuleText.CrafterName(by, name, Player.m_localPlayer && Player.m_localPlayer.GetPlayerID() == id));
         return value;
     }
 
-    internal static string CategoryName(ClassificationTaxonomy taxonomy, string id) =>
-        taxonomy.Categories.TryGetValue(id, out var category) ? category.Name : id;
+    /// <summary>A filter value as its tick box shows it, in the player's language: an open value's name or a closed token's display name.</summary>
+    internal static string ValueText(string dimension, string value) =>
+        value != "unknown" && ClassificationFilters.Values(dimension) == null ? OpenValueName(dimension, value) : Shown(RuleText.ValueName(dimension, value));
+
+    /// <summary>A filter's name in the player's language, or its ID when this version doesn't name it.</summary>
+    internal static string FilterNameText(string dimension) => RuleText.FilterName(dimension) is { } name ? Texts.Get(name) : dimension;
+
+    /// <summary>A value <see cref="RuleText"/> shows (a name as is, or a message) as text in the player's language.</summary>
+    private static string Shown(object value) => value is Message message ? Texts.Get(message) : value as string ?? "";
+
+    /// <summary>A category's name as the player sees it (S13).</summary>
+    internal static string CategoryName(ClassificationTaxonomy taxonomy, string id) => CategoryText.Name(taxonomy, id);
 
     internal static string ItemName(ItemDrop.ItemData item) =>
         Localization.instance != null && !string.IsNullOrEmpty(item.m_shared?.m_name) ? Localization.instance.Localize(item.m_shared!.m_name) : item.m_dropPrefab?.name ?? "";

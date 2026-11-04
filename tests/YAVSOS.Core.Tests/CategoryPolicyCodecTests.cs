@@ -164,7 +164,7 @@ public sealed class CategoryPolicyCodecTests
             "whitespace" => " \t\r\n ",
             "malformed" => "<policy>",
             "namespace" => Full.Replace(CategoryPolicyCodec.Namespace, "other"),
-            "new-schema" => Full.Replace("schema=\"1\"", "schema=\"2\""),
+            "new-schema" => Full.Replace("schema=\"1\"", "schema=\"3\""),
             "missing-schema" => Full.Replace("schema=\"1\"", ""),
             "zero-revision" => Full.Replace("revision=\"7\"", "revision=\"0\""),
             "negative-revision" => Full.Replace("revision=\"7\"", "revision=\"-1\""),

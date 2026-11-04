@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace YAVSOS.Interface;
+namespace YAVSOS.Classification;
 
 /// <summary>
 /// P6-21 (maintainer, 2026-10-23): whether a recipe can upgrade an item, from the game's own data: an enabled recipe makes

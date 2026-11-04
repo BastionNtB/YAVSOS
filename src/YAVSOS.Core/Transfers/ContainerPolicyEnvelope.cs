@@ -135,10 +135,16 @@ public static class ContainerPolicyEnvelope
     public static string Serialize(ulong revision, ChestRules rules)
     {
         if (rules == null) throw new ArgumentNullException(nameof(rules));
+        return Wrap(revision, ChestRuleCodec.Serialize(rules));
+    }
+
+    // The schema-1 envelope around a rules XML text, which is written as it is.
+    private static string Wrap(ulong revision, string rulesXml)
+    {
         var root = new XElement("root", new XAttribute("type", "object"),
             Value("schemaVersion", "number", "1"), Value("revision", "string", revision.ToString(CultureInfo.InvariantCulture)),
             new XElement("policy", new XAttribute("type", "object"), Value("format", "string", RuleFormat),
-                Value("rulesXml", "string", ChestRuleCodec.Serialize(rules))));
+                Value("rulesXml", "string", rulesXml)));
         using var stream = new BoundedTransferStream(TransferLimits.MaximumPolicyBytes);
         using (var writer = JsonReaderWriterFactory.CreateJsonWriter(stream, TransferCanonical.Utf8, false)) root.WriteTo(writer);
         return TransferCanonical.Utf8.GetString(stream.ToArray());
@@ -148,6 +154,20 @@ public static class ContainerPolicyEnvelope
         if (payload == null) throw new ArgumentNullException(nameof(payload));
         if (taxonomy == null) throw new ArgumentNullException(nameof(taxonomy));
         if (payload.Length == 0) return new ContainerPolicyRead(ContainerPolicyReadState.Absent, payload);
+        if (!TryShell(payload, out var revision, out var rulesXml)) return new ContainerPolicyRead(ContainerPolicyReadState.Unsupported, payload);
+        try
+        {
+            var rules = ChestRuleCodec.Parse(rulesXml, taxonomy);
+            return new ContainerPolicyRead(ContainerPolicyReadState.Supported, payload, revision, rules);
+        }
+        catch (Exception ex) when (ex is ArgumentException || ex is XmlException || ex is InvalidDataException || ex is FormatException)
+        { return new ContainerPolicyRead(ContainerPolicyReadState.Unsupported, payload); }
+    }
+
+    // The envelope alone (schema, revision, rules format and the rules XML text), without reading the rules.
+    private static bool TryShell(string payload, out ulong revision, out string rulesXml)
+    {
+        revision = 0; rulesXml = "";
         try
         {
             TransferCanonical.Text(payload, TransferLimits.MaximumPolicyBytes, false);
@@ -164,15 +184,40 @@ public static class ContainerPolicyEnvelope
             Object(root, "schemaVersion", "revision", "policy");
             if (Leaf(root, "schemaVersion", "number") != "1") throw new InvalidDataException("Unknown policy envelope schema.");
             var text = Leaf(root, "revision", "string");
-            if (!ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out var revision) || revision.ToString(CultureInfo.InvariantCulture) != text)
+            if (!ulong.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out revision) || revision.ToString(CultureInfo.InvariantCulture) != text)
                 throw new InvalidDataException("Invalid policy revision.");
             var policy = root.Element("policy")!; Object(policy, "format", "rulesXml");
             if (Leaf(policy, "format", "string") != RuleFormat) throw new InvalidDataException("Unsupported policy rules format.");
-            var rules = ChestRuleCodec.Parse(Leaf(policy, "rulesXml", "string"), taxonomy);
-            return new ContainerPolicyRead(ContainerPolicyReadState.Supported, payload, revision, rules);
+            rulesXml = Leaf(policy, "rulesXml", "string");
+            return true;
         }
         catch (Exception ex) when (ex is ArgumentException || ex is XmlException || ex is InvalidDataException || ex is FormatException)
-        { return new ContainerPolicyRead(ContainerPolicyReadState.Unsupported, payload); }
+        { revision = 0; rulesXml = ""; return false; }
+    }
+
+    /// <summary>
+    /// X26 (A2-09, B2-10): puts a payload this chest held before back, whole, after the same exact comparison as an edit:
+    /// alternatives the editor can't show, overflow, priority and a rule this YAVSOS version can't read come back too, so
+    /// an undo of Clear rule loses nothing. A schema-1 envelope is written again around its rules text, unread, at a
+    /// revision above both payloads', so the restored payload differs from every earlier one; an envelope this version
+    /// can't read, or one already at the last revision, is written back as it was. An empty payload removes the rule.
+    /// The owner adapter must recheck access and ownership.
+    /// </summary>
+    /// <param name="previousPayload">The payload to put back (the chest's before the change being undone).</param>
+    public static TransferRefusal TryRestore(string currentPayload, string expectedPayload, string previousPayload, out string? updatedPayload)
+    {
+        if (currentPayload == null) throw new ArgumentNullException(nameof(currentPayload));
+        if (expectedPayload == null) throw new ArgumentNullException(nameof(expectedPayload));
+        if (previousPayload == null) throw new ArgumentNullException(nameof(previousPayload));
+        updatedPayload = null;
+        if (!StringComparer.Ordinal.Equals(currentPayload, expectedPayload)) return TransferRefusal.PolicyChanged;
+        if (previousPayload.Length == 0 || !TryShell(previousPayload, out var before, out var rulesXml)) { updatedPayload = previousPayload; return TransferRefusal.None; }
+        var now = currentPayload.Length != 0 && TryShell(currentPayload, out var current, out _) ? current : 0;
+        var revision = Math.Max(now, before);
+        if (revision == ulong.MaxValue) { updatedPayload = previousPayload; return TransferRefusal.None; }
+        try { updatedPayload = Wrap(revision + 1, rulesXml); }
+        catch (InvalidDataException) { updatedPayload = previousPayload; } // The longer revision no longer fits: as it was.
+        return TransferRefusal.None;
     }
     /// <summary>Constructs a candidate edit after exact payload comparison. The owner adapter must recheck access and ownership.
     /// Alternatives the edit doesn't replace, priority and overflow are preserved. An edit that leaves no part of the rule

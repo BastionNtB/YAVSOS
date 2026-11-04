@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using UnityEngine;
 
 namespace YAVSOS.Interface;
@@ -26,6 +27,29 @@ internal static class PanelArt
         float px = x + 0.5f, py = y + 0.5f; // Apex at the bottom (16, 8), base along y = 24 from x = 6 to 26.
         return py >= 8 && py <= 24 && Mathf.Abs(px - 16) <= (py - 8) * 10 / 16 ? 1 : 0;
     });
+    private static Sprite? undo, sparkle;
+    /// <summary>
+    /// ↶ (X26, D130): an arc over the top, anticlockwise, ending in a head pointing down at the left. Undo; mirrored
+    /// (scale x −1) it is ↷, redo.
+    /// </summary>
+    internal static Sprite Undo => undo ??= Lines(Arc(17, 13, 9, 0, 180, 8).Concat(new[] { (8f, 13f, 8f, 9f), (8f, 9f, 3f, 15f), (8f, 9f, 13f, 15f) }).ToArray());
+    /// <summary>✦ (X22): a four-pointed star, the "Set rule" suggestion chip's icon.</summary>
+    internal static Sprite Sparkle => sparkle ??= Draw(Size, false, (x, y) =>
+    {
+        float dx = Mathf.Abs(x + 0.5f - 16) / 14, dy = Mathf.Abs(y + 0.5f - 16) / 14; // Inside where √dx + √dy ≤ 1.
+        return Mathf.Clamp01((1 - Mathf.Sqrt(dx) - Mathf.Sqrt(dy)) * 6);
+    });
+
+    // An arc as line segments, from one angle to another in degrees (y counts upwards).
+    private static System.Collections.Generic.IEnumerable<(float, float, float, float)> Arc(float cx, float cy, float r, float from, float to, int steps)
+    {
+        for (var i = 0; i < steps; i++)
+        {
+            float a = Mathf.Deg2Rad * Mathf.Lerp(from, to, i / (float)steps), b = Mathf.Deg2Rad * Mathf.Lerp(from, to, (i + 1) / (float)steps);
+            yield return (cx + r * Mathf.Cos(a), cy + r * Mathf.Sin(a), cx + r * Mathf.Cos(b), cy + r * Mathf.Sin(b));
+        }
+    }
+
     /// <summary>A filled circle with a soft edge: the status marks' backing.</summary>
     internal static Sprite Disc => disc ??= Draw(Size, false, (x, y) =>
     {

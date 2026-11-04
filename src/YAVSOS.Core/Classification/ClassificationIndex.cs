@@ -219,7 +219,12 @@ public sealed class ClassificationIndex
                 var source = "policy:" + selected.Match + ":" + selected.Selector;
                 if (selected.Operation == OverrideOperation.Replace) memberships.Clear();
                 if (selected.Operation == OverrideOperation.Remove) memberships.RemoveAll(x => selected.Memberships.Contains(x.Category, StringComparer.Ordinal));
-                else foreach (var category in selected.Memberships) Add(category, "Explicit " + selected.Operation + " membership.", source);
+                else
+                {
+                    // X48 (D130): an edit's removals apply before its adds; closure below re-adds a removed parent of a kept child.
+                    if (selected.Removals.Count != 0) memberships.RemoveAll(x => selected.Removals.Contains(x.Category, StringComparer.Ordinal));
+                    foreach (var category in selected.Memberships) Add(category, "Explicit " + selected.Operation + " membership.", source);
+                }
                 foreach (var edit in selected.Facets)
                 {
                     if (edit.Dimension == "rarity" && item.InstanceRarity) throw new ArgumentException("Equipment rarity needs current instance evidence, not a prefab override.");

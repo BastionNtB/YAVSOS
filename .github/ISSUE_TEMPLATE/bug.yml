@@ -7,7 +7,7 @@ body:
     attributes:
       label: What happened?
       description: What you did, what you expected and what happened instead. A screenshot helps.
-      placeholder: I pressed the store key next to my Ores chest, but the Copper stayed in my inventory.
+      placeholder: I pressed the stash key next to my Ores chest, but the Copper stayed in my inventory.
     validations:
       required: true
   - type: input
@@ -15,7 +15,7 @@ body:
     attributes:
       label: YAVSOS version
       description: Shown in your mod manager.
-      placeholder: "1.0.0"
+      placeholder: "1.2.0"
     validations:
       required: true
   - type: dropdown

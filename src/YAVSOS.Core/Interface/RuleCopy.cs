@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using YAVSOS.Core.Messages;
 
 namespace YAVSOS.Core.Interface;
 
@@ -36,21 +37,20 @@ public sealed class RuleCopy
     /// <summary>What Copy takes from the open chest's rule as loaded (so already converted, S1); null when <see cref="CanCopy"/> is false.</summary>
     public static RuleCopy? Of(RuleEditState state, string? label) => CanCopy(state) ? new RuleCopy(state, label ?? "") : null;
 
-    // D101: tooltips explain what the button does; they don't warn.
-    public const string CopyTopic = "Copy", PasteTopic = "Paste";
-
-    public static string CopyTooltip(bool canCopy, int hiddenParts) => !canCopy ? "This chest has no rule to copy."
-        : "Copies this chest's rule: categories, Always and Never items, filters and priority. Paste it on another chest." +
-          (hiddenParts == 0 ? "" : " Parts this version can't show stay here.");
+    // D101: tooltips explain what the button does; they don't warn. The heading is the button's own text.
+    public static Tooltip CopyTooltip(bool canCopy, int hiddenParts) => Tooltip.Of(Message.Of("yavsos_copy_button"),
+        Message.Of(!canCopy ? "yavsos_copy_tip_none" : hiddenParts == 0 ? "yavsos_copy_tip" : "yavsos_copy_tip_hidden"));
 
     /// <param name="copied">The copied rule, or null if nothing is copied yet.</param>
     /// <param name="editable">The panel can edit this chest (not read-only).</param>
     /// <param name="hasRule">This chest already has a rule.</param>
-    public static string PasteTooltip(RuleCopy? copied, bool editable, bool hasRule)
+    public static Tooltip PasteTooltip(RuleCopy? copied, bool editable, bool hasRule)
     {
-        if (copied == null) return "Copy a rule from another chest first, then paste it here.";
-        var what = copied.Label.Length == 0 ? "Gives this chest the copied rule." : "Gives this chest the copied rule:\n<color=" + ChestLabelPreview.Color + ">" + copied.Label + "</color>";
-        if (!editable) return what + "\nYou can paste once no one else is using this chest.";
-        return what + (hasRule ? "\nIt replaces this chest's rule." : "");
+        var heading = Message.Of("yavsos_copy_paste_button");
+        if (copied == null) return Tooltip.Of(heading, Message.Of("yavsos_copy_paste_tip_empty"));
+        // P10-04 (inventory case 7): the label is tinted by the game side, not wrapped in markup here.
+        var what = copied.Label.Length == 0 ? Message.Of("yavsos_copy_paste_tip") : Message.Of("yavsos_copy_paste_tip_label").With("label", copied.Label, Tone.Label);
+        var note = !editable ? Message.Of("yavsos_copy_paste_tip_in_use") : hasRule ? Message.Of("yavsos_copy_paste_tip_replaces") : null;
+        return note == null ? Tooltip.Of(heading, what) : Tooltip.Of(heading, MessageList.Of(ListKind.Lines, new[] { what, note }));
     }
 }

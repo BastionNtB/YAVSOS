@@ -31,7 +31,7 @@ public sealed class Phase6InterfaceTests
     [Fact]
     public void Search_AnItemLeadsToItsSmallestCategory_BestNameFirst()
     {
-        var result = CategorySearch.Find(Taxonomy, " copper ", Items, Count);
+        var result = CategorySearch.Find(EnglishText.Names(Taxonomy), " copper ", Items, Count);
         Assert.True(result.Active);
         // "Copper" is an exact prefix and shorter than "Copper ore"; each goes to its smallest category, not "materials".
         Assert.Equal(new[] { "Copper:materials.metal", "CopperOre:materials.ore" }, result.Items.Select(x => x.Prefab + ":" + x.Category));
@@ -39,20 +39,20 @@ public sealed class Phase6InterfaceTests
         // Wood's own subcategory has no counted members: it falls back to one that has.
         Assert.Equal("materials", CategorySearch.Smallest(Taxonomy, new[] { "materials", "materials.wood", "unknown.id" }, Count));
         // By prefab ID as well, after name matches.
-        Assert.Equal("CookedMeat", Assert.Single(CategorySearch.Find(Taxonomy, "cookedmeat", Items, Count).Items).Prefab);
+        Assert.Equal("CookedMeat", Assert.Single(CategorySearch.Find(EnglishText.Names(Taxonomy), "cookedmeat", Items, Count).Items).Prefab);
     }
 
     [Fact]
     public void Search_MatchesCategoryNames_AndIgnoresShortQueries()
     {
-        var result = CategorySearch.Find(Taxonomy, "ORES", Items, Count);
+        var result = CategorySearch.Find(EnglishText.Names(Taxonomy), "ORES", Items, Count);
         Assert.Contains("materials.ore", result.Categories);
         Assert.DoesNotContain(result.Categories, x => Count(x) == 0); // Empty categories are not offered.
-        Assert.False(CategorySearch.Find(Taxonomy, "c", Items, Count).Active);
-        Assert.False(CategorySearch.Find(Taxonomy, null, Items, Count).Active);
-        Assert.Empty(CategorySearch.Find(Taxonomy, "zzzz", Items, Count).Hits);
+        Assert.False(CategorySearch.Find(EnglishText.Names(Taxonomy), "c", Items, Count).Active);
+        Assert.False(CategorySearch.Find(EnglishText.Names(Taxonomy), null, Items, Count).Active);
+        Assert.Empty(CategorySearch.Find(EnglishText.Names(Taxonomy), "zzzz", Items, Count).Hits);
         var many = Enumerable.Range(0, 50).Select(i => new SearchableItem("Copper" + i, "Copper " + i, new[] { "materials.metal" }));
-        Assert.Equal(CategorySearch.MaximumItems, CategorySearch.Find(Taxonomy, "copper", many, Count).Items.Count);
+        Assert.Equal(CategorySearch.MaximumItems, CategorySearch.Find(EnglishText.Names(Taxonomy), "copper", many, Count).Items.Count);
     }
 
     [Fact]
@@ -61,10 +61,10 @@ public sealed class Phase6InterfaceTests
         var stored = new HashSet<string>(StringComparer.Ordinal);
         var collapsed = new HashSet<string>(new[] { "materials" }, StringComparer.Ordinal);
         bool Members(string id) => Count(id) > 0;
-        var plain = CategorySearch.Rows(Taxonomy, stored, Members, new HashSet<string>(), collapsed, CategorySearchResult.None);
+        var plain = CategorySearch.Rows(EnglishText.Names(Taxonomy), stored, Members, new HashSet<string>(), collapsed, CategorySearchResult.None);
         Assert.DoesNotContain(plain, x => x.Id == "materials.ore"); // Collapsed by the player.
-        var search = CategorySearch.Find(Taxonomy, "copper ore", Items, Count);
-        var rows = CategorySearch.Rows(Taxonomy, stored, Members, new HashSet<string>(), collapsed, search);
+        var search = CategorySearch.Find(EnglishText.Names(Taxonomy), "copper ore", Items, Count);
+        var rows = CategorySearch.Rows(EnglishText.Names(Taxonomy), stored, Members, new HashSet<string>(), collapsed, search);
         Assert.Equal(new[] { "materials", "materials.ore" }, rows.Select(x => x.Id));
         Assert.True(rows[0].Expanded);
         Assert.Equal(1, rows[1].Depth);
@@ -73,30 +73,40 @@ public sealed class Phase6InterfaceTests
     private static ChestRules Rules(string[] categories, string[]? includes = null, int priority = 0, params (string, string[])[] filters) =>
         new(Taxonomy, ChestRuleState.Configured, new[] { Rule(categories, filters) }, includes, priority: priority);
 
+    /// <summary>The chest label in English from the real file, cut as the game cuts it.</summary>
+    internal static string? Label(ChestRules? rules, Func<string, string> name, Func<string, string, string>? open = null) =>
+        RuleText.Label(rules, EnglishText.Names(Taxonomy), name, EnglishText.Of, open) is { } label ? RuleText.Cut(EnglishText.Of(label), RuleText.MaximumLabel) : null;
+
+    /// <summary>The filters in short words in English; "" without filters.</summary>
+    internal static string Short(IReadOnlyDictionary<string, IReadOnlyList<string>> filters, Func<string, string, string>? open = null) =>
+        RuleText.Short(filters, open) is { } words ? EnglishText.Of(words) : "";
+
     [Fact]
     public void Label_NamesTheRuleShortly()
     {
         string Name(string prefab) => prefab == "Copper" ? "Copper bar" : prefab;
-        Assert.Equal("Ores & metal scrap · priority 4 (Normal)", RuleText.Label(Rules(new[] { "materials.ore" }, priority: 1), Taxonomy, Name));
-        Assert.Equal("Copper bar", RuleText.Label(Rules(Array.Empty<string>(), new[] { "Copper" }), Taxonomy, Name));
+        Assert.Equal("Ores & metal scrap · priority 4 (Normal)", Label(Rules(new[] { "materials.ore" }, priority: 1), Name));
+        Assert.Equal("Copper bar", Label(Rules(Array.Empty<string>(), new[] { "Copper" }), Name));
         // Q8: the filters in a few words instead of "filtered".
-        Assert.Equal("Weapons › magic or legendary", RuleText.Label(Rules(new[] { "weapons" }, null, 0, ("rarity", new[] { "magic", "legendary" })), Taxonomy, Name));
-        Assert.Equal("Food › eaten by Boar · priority 3 (Urgent)", RuleText.Label(Rules(new[] { "food" }, null, 2, ("eaten-by", new[] { "$enemy_boar" })), Taxonomy, Name,
+        Assert.Equal("Weapons › magic or legendary", Label(Rules(new[] { "weapons" }, null, 0, ("rarity", new[] { "magic", "legendary" })), Name));
+        Assert.Equal("Food › eaten by Boar · priority 3 (Urgent)", Label(Rules(new[] { "food" }, null, 2, ("eaten-by", new[] { "$enemy_boar" })), Name,
             (dimension, value) => value == "$enemy_boar" ? "Boar" : value));
-        Assert.Equal("crafted by Bastion, not teleportable", RuleText.Short(new Dictionary<string, IReadOnlyList<string>>
+        Assert.Equal("crafted by Bastion, not teleportable", Short(new Dictionary<string, IReadOnlyList<string>>
         {
             ["teleportable"] = new[] { "no" }, ["crafter"] = new[] { ClassificationFilters.CrafterValue(true, 7, "Bastion") }
         }));
-        Assert.Equal("used for fuel, stamina or eitr food", RuleText.Short(new Dictionary<string, IReadOnlyList<string>>
+        Assert.Equal("used for fuel, stamina or eitr food", Short(new Dictionary<string, IReadOnlyList<string>>
         { ["food-stat"] = new[] { "stamina", "eitr" }, ["usage"] = new[] { "fuel" } }));
-        Assert.Equal("plain", RuleText.Short(new Dictionary<string, IReadOnlyList<string>> { ["rarity"] = new[] { "unknown" } }));
-        Assert.Null(RuleText.Label(new ChestRules(Taxonomy, ChestRuleState.Unconfigured), Taxonomy, Name));
-        Assert.Null(RuleText.Label(null, Taxonomy, Name));
+        Assert.Equal("plain", Short(new Dictionary<string, IReadOnlyList<string>> { ["rarity"] = new[] { "unknown" } }));
+        Assert.Null(RuleText.Short(new Dictionary<string, IReadOnlyList<string>> { ["rarity"] = new string[0] }));
+        Assert.Null(RuleText.Label(new ChestRules(Taxonomy, ChestRuleState.Unconfigured), EnglishText.Names(Taxonomy), Name, EnglishText.Of));
+        Assert.Null(RuleText.Label(null, EnglishText.Names(Taxonomy), Name, EnglishText.Of));
         // Many categories stay within the bound and say how many more there are.
-        var wide = RuleText.Label(Rules(Taxonomy.Categories.Keys.Where(x => x.StartsWith("weapons.", StringComparison.Ordinal) && !x.EndsWith(".other", StringComparison.Ordinal)).ToArray(),
-            priority: -3), Taxonomy, Name)!;
+        var wide = Label(Rules(Taxonomy.Categories.Keys.Where(x => x.StartsWith("weapons.", StringComparison.Ordinal) && !x.EndsWith(".other", StringComparison.Ordinal)).ToArray(),
+            priority: -3), Name)!;
         Assert.True(wide.Length <= RuleText.MaximumLabel, wide);
         Assert.Contains(" +", wide); Assert.EndsWith(" · priority 8 (Minor)", wide);
+        Assert.DoesNotContain("…", wide); // The names that don't fit are counted, so nothing needs cutting.
     }
 
     // D069: levels 1 (fills first) to 10 over the stored rank, larger rank first; an unset rank (0) is 5, Normal.
@@ -107,13 +117,12 @@ public sealed class Phase6InterfaceTests
         for (var level = 1; level <= 10; level++) Assert.Equal(level, ChestPriority.Level(ChestPriority.Rank(level)));
         Assert.True(ChestPriority.Rank(1) > ChestPriority.Rank(2) && ChestPriority.Rank(9) > ChestPriority.Rank(10));
         Assert.Equal(new[] { "Critical", "Urgent", "Urgent", "Normal", "Normal", "Moderate", "Moderate", "Minor", "Minor", "Fuhgeddaboudit" },
-            Enumerable.Range(1, 10).Select(ChestPriority.Name).ToArray());
+            Enumerable.Range(1, 10).Select(x => EnglishText.Of(ChestPriority.Name(x))).ToArray());
         // Ranks set before D069 keep their order and show as the nearest level.
         Assert.Equal(1, ChestPriority.Level(9)); Assert.Equal(10, ChestPriority.Level(-999));
         Assert.Equal(ChestPriority.Rank(2), ChestPriority.Step(9, 1));
         Assert.Null(ChestPriority.Step(ChestPriority.Rank(1), -1)); Assert.Null(ChestPriority.Step(ChestPriority.Rank(10), 1));
         Assert.Equal(ChestPriority.Rank(4), ChestPriority.Step(0, -1));
-        Assert.Equal("", ChestPriority.Short(0)); Assert.Equal("priority 10 (Fuhgeddaboudit)", ChestPriority.Short(-5));
     }
 
     [Fact]
@@ -128,13 +137,10 @@ public sealed class Phase6InterfaceTests
     }
 
     [Fact]
-    public void FilterSummary_ReadsAsWords()
+    public void EditableFilters_AreKnownDimensions_WithNames()
     {
-        var filters = new Dictionary<string, IReadOnlyList<string>>
-        { ["usage"] = new[] { "fuel" }, ["rarity"] = new[] { "magic", "rare", "unknown" }, ["damaged"] = Array.Empty<string>() };
-        Assert.Equal("EpicLoot rarity: magic, rare or plain; Used for: fuel", RuleText.Filters(filters));
-        Assert.Equal("", RuleText.Filters(new Dictionary<string, IReadOnlyList<string>>()));
         foreach (var dimension in RuleText.EditableFilters) Assert.Contains(dimension, ClassificationFilters.Dimensions);
+        foreach (var dimension in RuleText.EditableFilters) Assert.NotNull(RuleText.FilterName(dimension));
     }
 
     private sealed class Answers : ICategoryAnswers

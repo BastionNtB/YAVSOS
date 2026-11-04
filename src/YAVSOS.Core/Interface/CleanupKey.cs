@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using YAVSOS.Core.Messages;
 
 namespace YAVSOS.Core.Interface;
 
@@ -17,8 +18,10 @@ public sealed class KeyChord
     public IReadOnlyList<string> Modifiers { get; }
     /// <summary>No main key: an unbound shortcut.</summary>
     public bool IsNone => MainKey.Length == 0 || MainKey == "None";
-    /// <summary>As a player reads it ("Ctrl + ."); "" when unbound.</summary>
-    public override string ToString() => KeyNames.Format(MainKey, Modifiers);
+    /// <summary>As a player reads it ("Ctrl + ."), for the game side to format (<see cref="KeyNames"/>); null when unbound.</summary>
+    public MessageList? Name() => KeyNames.Format(MainKey, Modifiers);
+    /// <summary>For logs and tests: the Unity key names; players get <see cref="Name"/>.</summary>
+    public override string ToString() => string.Join(" + ", Modifiers.Append(MainKey));
 }
 
 /// <summary>

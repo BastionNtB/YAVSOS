@@ -4,6 +4,7 @@ using System.Linq;
 using Xunit;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Core.Transfers;
 using static YAVSOS.Core.Tests.ClassificationContractFixture;
 
@@ -62,7 +63,7 @@ public sealed class PlacementExplainerTests
         Assert.Equal(PlacementOutcome.Goes, answer.Outcome);
         Assert.Equal("b-materials", answer.ChosenId);
         Assert.Equal("b-materials", Assert.Single(StashPlanner.Plan(input).Moves).DestinationId);
-        Assert.Equal("Copper ore → materials: category Materials, 1 level above the item's own category, priority 4 (Normal)", answer.Summary);
+        Assert.Equal("Copper ore → materials: category Materials, 1 level above the item's own category, priority 4", answer.Summary);
         Assert.Equal(ChestVerdict.Chosen, answer.For("b-materials")!.Verdict);
         Assert.Equal(ChestVerdict.Full, answer.For("a-full-metal")!.Verdict);
         Assert.Equal(ChestVerdict.Backup, answer.For("c-metal")!.Verdict);
@@ -84,8 +85,8 @@ public sealed class PlacementExplainerTests
         Assert.Equal(PlacementOutcome.NoRoom, PlacementExplainer.Stash(full, fullStack.Handle).Outcome);
         var (remote, remoteStack) = Player("Copper", new[] { Box("metal", Rule(new[] { "materials.metal" }), local: false, ownerMuc: OwnerMucState.FormatUnknown) }, muc: true);
         var blocked = PlacementExplainer.Stash(remote, remoteStack.Handle);
-        Assert.Equal((PlacementOutcome.Blocked, CleanupReason.OtherOwnerFormatUnknown), (blocked.Outcome, blocked.Blocked!.Value));
-        Assert.Equal(CleanupReason.OtherOwnerFormatUnknown, Assert.Single(StashPlanner.Plan(remote).Remainders).Reason);
+        Assert.Equal((PlacementOutcome.Blocked, RunReason.OtherOwnerFormatUnknown), (blocked.Outcome, blocked.Blocked!.Value));
+        Assert.Equal(RunReason.OtherOwnerFormatUnknown, Assert.Single(StashPlanner.Plan(remote).Remainders).Reason);
         var (none, noneStack) = Player("Bread", new[] { Box("metal", Rule(new[] { "materials.metal" })) });
         var nothing = PlacementExplainer.Stash(none, noneStack.Handle);
         Assert.Equal(PlacementOutcome.NoChest, nothing.Outcome); Assert.Equal("Bread stays: no chest in range takes it", nothing.Summary);
@@ -116,7 +117,9 @@ public sealed class PlacementExplainerTests
         Assert.Equal("Copper stays: " + cause, answer.Summary);
         Assert.Equal(verdict, answer.For("metal")!.Verdict);
         Assert.EndsWith("; but " + cause, answer.For("metal")!.Text);
-        Assert.Equal("Stash stack: stays in your inventory (" + cause + ")", ExplanationView.Tooltip(PlacementExplainer.Stash(input, stack.Handle, detail: false), false));
+        // The tooltip says the cause in the result panel's words (RunReport.Reason).
+        Assert.Equal("Stash stack: stays in your inventory (" + EnglishText.Of(RunReport.Reason(answer.Blocked!.Value)) + ")",
+            Where(PlacementExplainer.Stash(input, stack.Handle, detail: false), false));
     }
 
     [Fact]
@@ -132,7 +135,7 @@ public sealed class PlacementExplainerTests
             instanceFacets: _ => new[] { new FacetEvidence("rarity", "epic", "optional:epicloot", "Instance.") });
         var chosen = PlacementExplainer.Stash(epic, stack.Handle);
         Assert.Equal("loot", chosen.ChosenId);
-        Assert.Equal("SwordBronze → loot: category Weapons › epic, 1 level above the item's own category", chosen.Summary);
+        Assert.Equal("SwordBronze → loot: category Weapons › rarity epic, 1 level above the item's own category", chosen.Summary);
     }
 
     private static CleanupChest Chest(string id, string payload, int width = 4, bool local = true, bool optOut = false, params TransferStack[] stacks) =>
@@ -162,11 +165,12 @@ public sealed class PlacementExplainerTests
         var stays = PlacementExplainer.Cleanup(settled, "metal", placed.Handle);
         Assert.Equal(PlacementOutcome.Stays, stays.Outcome); Assert.Equal(ChestVerdict.NotBetter, stays.For("crafting")!.Verdict);
         Assert.StartsWith("Copper stays in metal: no better chest takes it", stays.Summary);
-        Assert.Equal("Clean up: stays here", ExplanationView.Tooltip(PlacementExplainer.Cleanup(settled, "metal", placed.Handle, detail: false), true));
+        Assert.Equal("Clean up: stays here", Where(PlacementExplainer.Cleanup(settled, "metal", placed.Handle, detail: false), true));
         var moved = PlacementExplainer.Cleanup(input, "a-wood", copper.Handle, detail: false);
         Assert.Equal(("c-metal", PlacementOutcome.Goes), (moved.ChosenId, moved.Outcome)); Assert.Empty(moved.Chests);
         Assert.Equal((PlacementBasis.Category, "Metals"), (moved.Basis, moved.Category));
-        Assert.Equal("Clean up: moves to Chest 4 m away (counts as Metals)", ExplanationView.Tooltip(moved, true, _ => "Chest 4 m away"));
+        Assert.Equal(Message.Of("yavsos_category_materials_metal_name"), moved.CategoryName);
+        Assert.Equal("Clean up: moves to Chest 4 m away (counts as Metals)", Where(moved, true, _ => ChestName.Away("Chest", 4)));
 
         var optedOut = new CleanupInput(Taxonomy, new Answers(), new[] { Chest("wood", Rule(new[] { "materials.wood" }), optOut: true, stacks: placed),
             Chest("metal", Rule(new[] { "materials.metal" })) });
@@ -180,8 +184,8 @@ public sealed class PlacementExplainerTests
         var remote = new CleanupInput(Taxonomy, new Answers(), new[] { Chest("wood", Rule(new[] { "materials.wood" }), stacks: placed),
             Chest("metal", Rule(new[] { "materials.metal" }), local: false) });
         var blocked = PlacementExplainer.Cleanup(remote, "wood", placed.Handle);
-        Assert.Equal((PlacementOutcome.Blocked, CleanupReason.OtherOwnerNoMuc), (blocked.Outcome, blocked.Blocked!.Value));
-        Assert.Equal(CleanupReason.OtherOwnerNoMuc, Assert.Single(CleanupPlanner.Plan(remote).Remainders).Reason);
+        Assert.Equal((PlacementOutcome.Blocked, RunReason.OtherOwnerNoMuc), (blocked.Outcome, blocked.Blocked!.Value));
+        Assert.Equal(RunReason.OtherOwnerNoMuc, Assert.Single(CleanupPlanner.Plan(remote).Remainders).Reason);
     }
 
     // Property: for the first stack a run handles, the explained chest is the planned chest, and a "why not" matches the run's report.
@@ -229,11 +233,11 @@ public sealed class PlacementExplainerTests
             switch (answer.Outcome)
             {
                 case PlacementOutcome.Goes: goes++; Assert.True(rest == null || rest.Units < stack.Quantity); break;
-                case PlacementOutcome.NoRoom: Assert.Equal(CleanupReason.NoCapacity, rest!.Reason); break;
+                case PlacementOutcome.NoRoom: Assert.Equal(RunReason.NoCapacity, rest!.Reason); break;
                 case PlacementOutcome.Blocked: Assert.Equal(answer.Blocked, rest!.Reason); break;
-                case PlacementOutcome.Kept: Assert.True(rest == null || rest.Reason is CleanupReason.Held or CleanupReason.Unsupported); break;
+                case PlacementOutcome.Kept: Assert.True(rest == null || rest.Reason is RunReason.Held or RunReason.Unsupported); break;
                 // D086 D4, D087: an item waiting for a category chest is reported as waiting.
-                case PlacementOutcome.NotReady: Assert.True(rest == null || rest.Reason == CleanupReason.CategoriesPending); break;
+                case PlacementOutcome.NotReady: Assert.True(rest == null || rest.Reason == RunReason.CategoriesPending); break;
                 default: Assert.Null(rest); break;
             }
             Assert.Equal(chests.Length, answer.Chests.Count);
@@ -268,10 +272,10 @@ public sealed class PlacementExplainerTests
             switch (answer.Outcome)
             {
                 case PlacementOutcome.Goes: goes++; break;
-                case PlacementOutcome.NoRoom: Assert.Equal(CleanupReason.NoCapacity, rest!.Reason); break;
+                case PlacementOutcome.NoRoom: Assert.Equal(RunReason.NoCapacity, rest!.Reason); break;
                 case PlacementOutcome.Blocked: Assert.Equal(answer.Blocked, rest!.Reason); break;
-                case PlacementOutcome.Kept: Assert.True(rest!.Reason is CleanupReason.Held or CleanupReason.Unsupported); break;
-                case PlacementOutcome.NoChest: Assert.True(rest == null || rest.Reason == CleanupReason.NoDestination); break;
+                case PlacementOutcome.Kept: Assert.True(rest!.Reason is RunReason.Held or RunReason.Unsupported); break;
+                case PlacementOutcome.NoChest: Assert.True(rest == null || rest.Reason == RunReason.NoDestination); break;
                 default: Assert.Null(rest); break;
             }
             Assert.Equal(chests.Length, answer.Chests.Count);
@@ -381,45 +385,47 @@ public sealed class PlacementExplainerTests
         {
             full, Box("b-materials", Rule(new[] { "materials" }, priority: 1)), Box("c-metal", Rule(new[] { "materials.metal" })), Box("e-unruled", "")
         });
-        string Chest(string id) => id == "b-materials" ? "Reinforced chest 5 m away" : id;
+        ChestName? Chest(string id) => id == "b-materials" ? ChestName.Away("Reinforced chest", 5) : ChestName.Away(id, 3);
         var detailed = PlacementExplainer.Stash(input, stack.Handle);
         var plain = PlacementExplainer.Stash(input, stack.Handle, outOfRange: new[] { "z-far" }, detail: false);
         Assert.Empty(plain.Chests);
         Assert.Equal(detailed.ChosenId, plain.ChosenId); Assert.Equal(detailed.Outcome, plain.Outcome);
         Assert.Equal((detailed.Basis, detailed.Category), (plain.Basis, plain.Category));
-        Assert.Equal("Stash stack: Reinforced chest 5 m away (counts as Materials)", ExplanationView.Tooltip(plain, false, Chest));
+        Assert.Equal("Stash stack: Reinforced chest 5 m away (counts as Materials)", Where(plain, false, Chest));
         var (alone, aloneStack) = Player("Copper", new[] { Box("e-unruled", "") });
         var none = PlacementExplainer.Stash(alone, aloneStack.Handle, detail: false);
         Assert.Equal((PlacementBasis.None, null), (none.Basis, none.Category));
-        Assert.Equal("Stash stack: stays in your inventory (no chest nearby takes it)", ExplanationView.Tooltip(none, false));
+        Assert.Equal("Stash stack: stays in your inventory (no chest nearby accepts it)", Where(none, false));
     }
 
     // P6-23 (D071): the same answers as short tooltip lines: label first, then where, then why in brackets.
     [Fact]
     public void Tooltip_IsOneShortLine_PerRunKind()
     {
-        string Named(string id) => id == "b-materials" ? "Reinforced chest 5 m away" : id;
+        ChestName? Named(string id) => id == "b-materials" ? ChestName.Away("Reinforced chest", 5) : ChestName.Away(id, 3);
         var full = Box("a-full-metal", Rule(new[] { "materials.metal" }, priority: 2), 1, true, OwnerMucState.Usable, Stack("Copper", 50));
         var (input, stack) = Player("Copper", new[] { full, Box("b-materials", Rule(new[] { "materials" }, priority: 1)) });
         var goes = PlacementExplainer.Stash(input, stack.Handle, detail: false);
-        Assert.Equal("Stash stack: Reinforced chest 5 m away (counts as Materials)", ExplanationView.Tooltip(goes, false, Named));
+        Assert.Equal("Stash stack: Reinforced chest 5 m away (counts as Materials)", Where(goes, false, Named));
         var (alone, aloneStack) = Player("Copper", new[] { Box("e-unruled", "") });
         var none = PlacementExplainer.Stash(alone, aloneStack.Handle, detail: false);
-        Assert.Equal("Stash stack: stays in your inventory (no chest nearby takes it)", ExplanationView.Tooltip(none, false));
-        Assert.Equal("Stash stack: AzuAutoStore's own settings decide (no chest rule nearby takes it)", ExplanationView.Tooltip(none, false, azuStores: true));
+        Assert.Equal("Stash stack: stays in your inventory (no chest nearby accepts it)", Where(none, false));
+        Assert.Equal("Stash stack: AzuAutoStore's own settings decide (no nearby chest's rule accepts it)", Where(none, false, azuStores: true));
         // P8-17 (Q12, revised 2026-10-28): the single-stack binding that applies names the label; none leaves it out.
-        Assert.Equal("Stash stack [Middle mouse]: Reinforced chest 5 m away (counts as Materials)", ExplanationView.Tooltip(goes, false, Named, stackKey: KeyNames.Format("Mouse2")));
-        Assert.Equal("Stash stack [Ctrl + Q]: AzuAutoStore's own settings decide (no chest rule nearby takes it)",
-            ExplanationView.Tooltip(none, false, azuStores: true, stackKey: KeyNames.Format("Q", new[] { "LeftControl" })));
-        Assert.Equal("Stash stack: Reinforced chest 5 m away (counts as Materials)", ExplanationView.Tooltip(goes, false, Named, stackKey: ""));
+        Assert.Equal("Stash stack [Middle mouse]: Reinforced chest 5 m away (counts as Materials)", Where(goes, false, Named, stackKey: KeyNames.Format("Mouse2")));
+        Assert.Equal("Stash stack [Ctrl + Q]: AzuAutoStore's own settings decide (no nearby chest's rule accepts it)",
+            Where(none, false, azuStores: true, stackKey: KeyNames.Format("Q", new[] { "LeftControl" })));
+        Assert.Equal("Stash stack: Reinforced chest 5 m away (counts as Materials)", Where(goes, false, Named, stackKey: MessageList.Of(ListKind.Keys, new string[0])));
 
         var placed = Stack("Copper");
         var settled = new CleanupInput(Taxonomy, new Answers(), new[] { Chest("metal", Rule(new[] { "materials.metal" }), stacks: placed),
             Chest("crafting", Rule(new[] { "materials.crafting" })) });
-        Assert.Equal("Clean up: stays here", ExplanationView.Tooltip(PlacementExplainer.Cleanup(settled, "metal", placed.Handle, detail: false), true, stackKey: "."));
+        Assert.Equal("Clean up: stays here", Where(PlacementExplainer.Cleanup(settled, "metal", placed.Handle, detail: false), true, stackKey: KeyNames.Format("Period")));
         var wrong = Stack("Copper");
         var messy = new CleanupInput(Taxonomy, new Answers(), new[] { Chest("wood", Rule(new[] { "materials.wood" }), stacks: wrong), Chest("metal", Rule(new[] { "materials.metal" })) });
-        Assert.Equal("Clean up: moves to Chest 4 m away (counts as Metals)", ExplanationView.Tooltip(PlacementExplainer.Cleanup(messy, "wood", wrong.Handle, detail: false), true, _ => "Chest 4 m away"));
+        Assert.Equal("Clean up: moves to Chest 4 m away (counts as Metals)", Where(PlacementExplainer.Cleanup(messy, "wood", wrong.Handle, detail: false), true, _ => ChestName.Away("Chest", 4)));
+        // Inventory case 3: the open chest is a typed value, so cleanup says "stays here" without comparing words.
+        Assert.Equal("Clean up: stays here", Where(PlacementExplainer.Cleanup(messy, "wood", wrong.Handle, detail: false), true, _ => ChestName.Open));
     }
 
     // X1: the chosen chest's reason names what made it take the stack.
@@ -429,22 +435,69 @@ public sealed class PlacementExplainerTests
         var (listed, listedStack) = Player("Copper", new[] { Box("always", Rule(always: new[] { "Copper" })) });
         var always = PlacementExplainer.Stash(listed, listedStack.Handle, detail: false);
         Assert.Equal(PlacementBasis.Always, always.Basis); Assert.Null(always.Category);
-        Assert.Equal("Stash stack: always (listed under Always)", ExplanationView.Tooltip(always, false, id => id));
+        Assert.Equal("Stash stack: always 3 m away (listed under Always)", Where(always, false, id => ChestName.Away(id, 3)));
 
         var (held, heldStack) = Player("Copper", new[] { Box("holder", "", stacks: Stack("Copper", 5, 1)) });
         var holds = PlacementExplainer.Stash(held, heldStack.Handle, detail: false);
         Assert.Equal(PlacementBasis.Holds, holds.Basis);
-        Assert.Equal("Stash stack: holder (already holds some)", ExplanationView.Tooltip(holds, false, id => id));
+        Assert.Equal("Stash stack: holder 3 m away (already holds some)", Where(holds, false, id => ChestName.Away(id, 3)));
 
         // The open chest keeps its own name; the reason still follows.
         var (metal, metalStack) = Player("Copper", new[] { Box("metal", Rule(new[] { "materials.metal" })) });
         Assert.Equal("Stash stack: this chest (counts as Metals)",
-            ExplanationView.Tooltip(PlacementExplainer.Stash(metal, metalStack.Handle, detail: false), false, _ => "this chest"));
+            Where(PlacementExplainer.Stash(metal, metalStack.Handle, detail: false), false, _ => ChestName.Open));
+        Assert.Equal("Stash stack: a chest nearby (counts as Metals)", Where(PlacementExplainer.Stash(metal, metalStack.Handle, detail: false), false, _ => null));
 
         // No chest chosen, no reason; the typed answer gives the same line, or none with only a note.
-        var answer = new ExplanationAnswer(PlacementExplainer.Stash(metal, metalStack.Handle, detail: false), false, "", _ => "Chest 2 m away");
-        Assert.Equal("Stash stack: Chest 2 m away (counts as Metals)", answer.Line);
-        var without = ExplanationAnswer.Without("YAVSOS categories are still loading.");
-        Assert.Null(without.Line); Assert.Null(without.Explanation); Assert.Equal("YAVSOS categories are still loading.", without.Note);
+        var answer = new ExplanationAnswer(PlacementExplainer.Stash(metal, metalStack.Handle, detail: false), false, null, _ => ChestName.Away("Chest", 2));
+        Assert.Equal("Stash stack: Chest 2 m away (counts as Metals)", EnglishText.Of(answer.Line!.Whole));
+        Assert.Null(answer.Note);
+        var without = ExplanationAnswer.Without(Message.Of("yavsos_where_note_loading"));
+        Assert.Null(without.Line); Assert.Null(without.Explanation); Assert.Equal(Message.Of("yavsos_where_note_loading"), without.Note);
+        Assert.Equal("Categories are still loading.", EnglishText.Of(without.Note!));
     }
+
+    // B2-07: the lead is its own part, tinted, so the game side never looks for ": " in the text; the answer is cut so
+    // the whole line stays within 160 characters, and names are escaped before they go into rich text.
+    [Fact]
+    public void WhereLine_TintsTheLead_AndCutsOnlyTheAnswer()
+    {
+        var (metal, metalStack) = Player("Copper", new[] { Box("metal", Rule(new[] { "materials.metal" })) });
+        var goes = PlacementExplainer.Stash(metal, metalStack.Handle, detail: false);
+        var line = ExplanationView.Tooltip(goes, false, _ => ChestName.Away("Chest", 2), stackKey: KeyNames.Format("Mouse2"));
+        Assert.Equal(Message.Of("yavsos_where_lead_stash_key").With("key", KeyNames.Format("Mouse2")!), line.Lead);
+        Assert.Equal("[Lead:Stash stack [Middle mouse]:] Chest 2 m away (counts as Metals)", EnglishText.Marked(line.Whole));
+        Assert.Equal(line, ExplanationView.Tooltip(goes, false, _ => ChestName.Away("Chest", 2), stackKey: KeyNames.Format("Mouse2"))); // Same answer, same line: no redraw.
+        Assert.NotEqual(line, ExplanationView.Tooltip(goes, false, _ => ChestName.Away("Chest", 3), stackKey: KeyNames.Format("Mouse2"))); // The player moved.
+
+        static string Escape(string text) => text.Replace("<", "‹").Replace(">", "›");
+        var shown = line.Fit(EnglishText.Of, Escape);
+        Assert.Equal("[Lead:Stash stack [Middle mouse]:] Chest 2 m away (counts as Metals)", EnglishText.Marked(shown));
+        var odd = ExplanationView.Tooltip(goes, false, _ => ChestName.Away("<b>Chest</b> " + new string('x', 200), 2)).Fit(EnglishText.Of, Escape);
+        var text = EnglishText.Of(odd);
+        Assert.Equal(ExplanationView.MaximumText, text.Length);
+        Assert.StartsWith("Stash stack: ‹b›Chest‹/b› xxx", text); Assert.EndsWith("…", text);
+        Assert.StartsWith("[Lead:Stash stack:] ", EnglishText.Marked(odd)); // The lead stays whole and tinted.
+        // Case 9: a cut never splits a surrogate pair.
+        var emoji = ExplanationView.Tooltip(goes, false, _ => ChestName.Away(string.Concat(Enumerable.Repeat("😀", 100)), 2)).Fit(EnglishText.Of, Escape);
+        var cut = EnglishText.Of(emoji);
+        Assert.True(cut.Length <= ExplanationView.MaximumText);
+        Assert.False(char.IsHighSurrogate(cut[cut.Length - 2]));
+    }
+
+    // Every way an answer can end reads as a short phrase from the English file (no [key], no {{placeholder}}).
+    [Fact]
+    public void WhereLine_EveryReasonAndNoteHasWords()
+    {
+        var keys = new[] { "yavsos_where_note_loading", "yavsos_where_note_cleanup_off", "yavsos_where_note_stash_off", "yavsos_where_note_out_of_reach",
+            "yavsos_where_note_cleanup_cant_move", "yavsos_where_note_inventory_unreadable" };
+        foreach (var key in keys) Assert.DoesNotContain("[", EnglishText.Of(Message.Of(key)));
+        Assert.Equal("YAVSOS can't say where Copper would go right now.", EnglishText.Of(Message.Of("yavsos_where_note_failed").With("item", "Copper")));
+        Assert.Equal("this chest", EnglishText.Of(ChestName.Open.Said));
+        Assert.Equal("a chest nearby", EnglishText.Of(ChestName.Away(" ", 9).Said));
+        Assert.Equal("Chest 12 m away", EnglishText.Of(ChestName.Away("Chest", 12).Said));
+    }
+
+    internal static string Where(PlacementExplanation explanation, bool cleanup, Func<string, ChestName?>? chest = null, bool azuStores = false,
+        MessageList? stackKey = null) => EnglishText.Of(ExplanationView.Tooltip(explanation, cleanup, chest, azuStores, stackKey).Whole);
 }

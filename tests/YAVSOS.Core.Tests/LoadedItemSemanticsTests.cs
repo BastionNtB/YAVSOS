@@ -174,7 +174,7 @@ public sealed class LoadedItemSemanticsTests
         Assert.True(CategoryPolicyCodec.TryParse(CategoryPolicyCodec.EmptyDocument, out var policy, out var error), error);
         var catalog = Catalog(ClassificationContractFixture.Item("Wood"), ClassificationContractFixture.Item("UnknownResource"));
         var source = LoadedSourceReceipt.Build(catalog, new[] { Use("planting"), Use("building", "Wood", id: "build") }).Snapshot;
-        var rules = ClassificationRuleSet.FromSchema1(policy!);
+        var rules = ClassificationRuleSet.FromPolicy(policy!);
         var classified = ClassificationPipeline.Build(catalog, rules, source);
         var snapshot = AuthoritativeAssignmentSnapshot.Create(catalog, classified, policy!);
         var restored = AuthoritativeAssignmentsCodec.ParseWire(AuthoritativeAssignmentsCodec.ToWire(snapshot), policy!);

@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using BepInEx.Logging;
 using HarmonyLib;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Integrations;
 
 namespace YAVSOS.Interface;
 
 /// <summary>
 /// Q8/Q10: an item's tooltip ends with its smallest YAVSOS categories and facts worth knowing, such as
-/// "Raw food, Animal feed · eaten by Boar, Hen", in orange and without a "YAVSOS:" prefix. A postfix on the game's
+/// "Food ingredients, Animal feed · eaten by Boar, Hen", in orange and without a "YAVSOS:" prefix. A postfix on the game's
 /// static <c>ItemData.GetTooltip</c>, which runs after BetterUI's replacing prefix too; ZenUI's detail view and VNEI's
 /// item view call the same method (ZenUI's short summary does not). Not added to an appended tooltip (another item's
 /// text inside this one). One line per item and answers generation, cached. Read only; one warning and off on failure.
@@ -20,6 +21,7 @@ internal static class ItemTooltips
 {
     private static readonly Dictionary<string, string> Lines = new(StringComparer.Ordinal);
     private static long generation = long.MinValue;
+    private static int language = -1; // P10-04: lines are built again after a language change.
     private static object? taxonomy;
     private static bool failed, whereFailed, portalsMatter = true;
     internal static ManualLogSource? Log;
@@ -55,11 +57,12 @@ internal static class ItemTooltips
         if (prefab == null || answers == null || !answers.CategoriesReady) return "";
         var rules = plugin.RuleTaxonomy;
         var portals = !RuleControls.TeleportAll();
-        if (answers.Generation != generation || !ReferenceEquals(rules, taxonomy) || portals != portalsMatter)
-        { Lines.Clear(); generation = answers.Generation; taxonomy = rules; portalsMatter = portals; }
+        if (answers.Generation != generation || !ReferenceEquals(rules, taxonomy) || portals != portalsMatter || language != Texts.Generation)
+        { Lines.Clear(); generation = answers.Generation; taxonomy = rules; portalsMatter = portals; language = Texts.Generation; }
         if (Lines.TryGetValue(prefab, out var line)) return line;
-        var text = RuleText.ItemLine(answers.Resolve(prefab), rules, RuleControls.OpenValueName, portals);
-        line = text.Length == 0 ? "" : "\n<color=#E8B04A>" + text.Replace("<", "‹").Replace(">", "›") + "</color>";
+        // P10-04: the line's parts are messages, measured and cut in the player's language (case 9), in the label's color.
+        var parts = RuleText.ItemLine(answers.Resolve(prefab), CategoryText.For(rules), Texts.Get, RuleControls.OpenValueName, portals);
+        line = parts == null ? "" : "\n<color=" + Texts.Color(Tone.Label) + ">" + Texts.Escape(RuleText.Cut(Texts.Get(parts), RuleText.MaximumItemLine)) + "</color>";
         if (Lines.Count < 4096) Lines[prefab] = line;
         return line;
     }

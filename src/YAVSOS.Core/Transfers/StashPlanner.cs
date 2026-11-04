@@ -97,8 +97,8 @@ public sealed class StashMove
     public int DestinationX { get; }
     public int DestinationY { get; }
     public Guid? MergeHandle { get; }
-    /// <summary><see cref="CleanupRoute.Direct"/> or <see cref="CleanupRoute.MucAdd"/>; the player's inventory is always local.</summary>
-    public CleanupRoute Route { get; }
+    /// <summary><see cref="MoveRoute.Direct"/> or <see cref="MoveRoute.MucAdd"/>; the player's inventory is always local.</summary>
+    public MoveRoute Route { get; }
     public StashTier Tier { get; }
     /// <summary>
     /// Merges into the stack an earlier move of this run creates at the destination cell; <see cref="MergeHandle"/> is
@@ -106,7 +106,7 @@ public sealed class StashMove
     /// </summary>
     public bool MergesPlanned { get; }
     internal StashMove(string destination, Guid handle, TransferItemIdentity identity, int units, int sourceX, int sourceY, int x, int y,
-        Guid? merge, CleanupRoute route, StashTier tier, bool mergesPlanned = false)
+        Guid? merge, MoveRoute route, StashTier tier, bool mergesPlanned = false)
     {
         MergesPlanned = mergesPlanned;
         DestinationId = destination; Handle = handle; Identity = identity; Units = units; SourceX = sourceX; SourceY = sourceY;
@@ -127,8 +127,8 @@ public sealed class StashRemainder
     public Guid Handle { get; }
     public TransferItemIdentity Identity { get; }
     public int Units { get; }
-    public CleanupReason Reason { get; }
-    internal StashRemainder(Guid handle, TransferItemIdentity identity, int units, CleanupReason reason)
+    public RunReason Reason { get; }
+    internal StashRemainder(Guid handle, TransferItemIdentity identity, int units, RunReason reason)
     { Handle = handle; Identity = identity; Units = units; Reason = reason; }
 }
 
@@ -185,13 +185,13 @@ public static class StashPlanner
             {
                 // D087: an item that waits for categories is reported, not left silently (D086 D4).
                 if (Waiting(input, evaluator, ruled, stack.Identity.Prefab).Count != 0 && !Kept(input, stack))
-                    remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, CleanupReason.CategoriesPending));
+                    remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, RunReason.CategoriesPending));
                 continue;
             }
-            if (!stack.TransferSupported) { remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, CleanupReason.Unsupported)); continue; }
-            if (input.Held.Contains(stack.Handle)) { remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, CleanupReason.Held)); continue; }
+            if (!stack.TransferSupported) { remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, RunReason.Unsupported)); continue; }
+            if (input.Held.Contains(stack.Handle)) { remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, RunReason.Held)); continue; }
 
-            var left = stack.Quantity; CleanupReason? dropped = null;
+            var left = stack.Quantity; RunReason? dropped = null;
             foreach (var row in routes)
             {
                 if (left == 0 || moves.Count >= MaximumMoves) break;
@@ -209,7 +209,7 @@ public static class StashPlanner
             }
             if (left > 0)
                 remainders.Add(new StashRemainder(stack.Handle, stack.Identity, left,
-                    moves.Count >= MaximumMoves ? CleanupReason.Budget : left == stack.Quantity && dropped != null ? dropped.Value : CleanupReason.NoCapacity));
+                    moves.Count >= MaximumMoves ? RunReason.Budget : left == stack.Quantity && dropped != null ? dropped.Value : RunReason.NoCapacity));
         }
         return new StashPlan(stamp, pending, moves.AsReadOnly(), remainders.AsReadOnly(), skipped);
     }
@@ -242,8 +242,8 @@ public static class StashPlanner
     internal sealed class Route
     {
         internal readonly StashChest Chest; internal readonly StashTier Tier; internal readonly RankedDestination? Ranked;
-        internal readonly CleanupRoute Via; internal readonly CleanupReason? Blocked;
-        internal Route(StashChest chest, StashTier tier, RankedDestination? ranked, CleanupRoute via, CleanupReason? blocked)
+        internal readonly MoveRoute Via; internal readonly RunReason? Blocked;
+        internal Route(StashChest chest, StashTier tier, RankedDestination? ranked, MoveRoute via, RunReason? blocked)
         { Chest = chest; Tier = tier; Ranked = ranked; Via = via; Blocked = blocked; }
     }
 
@@ -301,8 +301,8 @@ public static class StashPlanner
 
     // As in cleanup: AzuAutoStore's exclusions, then ownership. Azu's pause is not read: it only pauses Azu's ground pickup (D097).
     private static Route Gate(StashInput input, StashChest chest, StashTier tier, RankedDestination? ranked, TransferStack stack) =>
-        input.AzuAllows != null && !input.AzuAllows(chest.Id, stack.Identity) ? new Route(chest, tier, ranked, CleanupRoute.Direct, CleanupReason.AzuExcluded)
-        : chest.LocallyOwned ? new Route(chest, tier, ranked, CleanupRoute.Direct, null)
-        : !input.MucAvailable ? new Route(chest, tier, ranked, CleanupRoute.MucAdd, CleanupReason.OtherOwnerNoMuc)
-        : new Route(chest, tier, ranked, CleanupRoute.MucAdd, chest.OwnerMuc.Skip());
+        input.AzuAllows != null && !input.AzuAllows(chest.Id, stack.Identity) ? new Route(chest, tier, ranked, MoveRoute.Direct, RunReason.AzuExcluded)
+        : chest.LocallyOwned ? new Route(chest, tier, ranked, MoveRoute.Direct, null)
+        : !input.MucAvailable ? new Route(chest, tier, ranked, MoveRoute.MucAdd, RunReason.OtherOwnerNoMuc)
+        : new Route(chest, tier, ranked, MoveRoute.MucAdd, chest.OwnerMuc.Skip());
 }

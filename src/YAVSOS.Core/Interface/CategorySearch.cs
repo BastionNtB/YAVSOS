@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using YAVSOS.Core.Classification;
+using YAVSOS.Core.Messages;
 
 namespace YAVSOS.Core.Interface;
 
@@ -64,17 +65,19 @@ public static class CategorySearch
 {
     public const int MinimumQuery = 2, MaximumQuery = 64, MaximumItems = 8, MaximumCategories = 24;
 
-    public static CategorySearchResult Find(ClassificationTaxonomy taxonomy, string? query, IEnumerable<SearchableItem> items, Func<string, int> memberCount)
+    /// <param name="names">The category names the player sees (S13): the query matches them, not the English source names.</param>
+    public static CategorySearchResult Find(CategoryNames names, string? query, IEnumerable<SearchableItem> items, Func<string, int> memberCount)
     {
-        if (taxonomy == null || items == null || memberCount == null) throw new ArgumentNullException(nameof(taxonomy));
+        if (names == null || items == null || memberCount == null) throw new ArgumentNullException(nameof(names));
+        var taxonomy = names.Taxonomy;
         var text = (query ?? "").Trim();
         if (text.Length > MaximumQuery) text = text.Substring(0, MaximumQuery);
         if (text.Length < MinimumQuery) return CategorySearchResult.None;
         var compare = CultureInfo.CurrentCulture.CompareInfo;
         const CompareOptions options = CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace;
         int At(string value) => compare.IndexOf(value, text, options);
-        var categories = taxonomy.Categories.Values.Where(x => At(x.Name) >= 0 && memberCount(x.Id) > 0)
-            .OrderBy(x => At(x.Name) == 0 ? 0 : 1).ThenBy(x => x.DisplayRank).ThenBy(x => x.Name, StringComparer.CurrentCulture)
+        var categories = taxonomy.Categories.Values.Where(x => At(names.Shown(x.Id)) >= 0 && memberCount(x.Id) > 0)
+            .OrderBy(x => At(names.Shown(x.Id)) == 0 ? 0 : 1).ThenBy(x => x.DisplayRank).ThenBy(x => names.Shown(x.Id), StringComparer.CurrentCulture)
             .ThenBy(x => x.Id, StringComparer.Ordinal).Take(MaximumCategories).Select(x => x.Id).ToArray();
         var found = new List<(SearchableItem Item, int Rank)>();
         foreach (var item in items)
@@ -100,15 +103,18 @@ public static class CategorySearch
     public const int NoteNames = 2;
 
     /// <summary>
-    /// A tree row's note naming <paramref name="shown"/> of <paramref name="names"/> (at most <see cref="NoteNames"/>),
-    /// then "…" for the rest: the panel tries fewer until the note fits the row on one line. Empty without names.
+    /// A tree row's text while searching: the category's name, then a faint note naming <paramref name="shown"/> of
+    /// <paramref name="names"/> (at most <see cref="NoteNames"/>) and "…" for the rest: the panel tries fewer until the
+    /// row fits on one line. Null without names. The names are already in the player's language.
     /// </summary>
-    public static string Note(IReadOnlyList<string> names, int shown)
+    public static Message? Note(string category, IReadOnlyList<string> names, int shown)
     {
         if (names == null) throw new ArgumentNullException(nameof(names));
-        if (names.Count == 0) return "";
+        if (names.Count == 0) return null;
         shown = Math.Max(0, Math.Min(Math.Min(shown, NoteNames), names.Count));
-        return string.Join(", ", names.Take(shown)) + (names.Count > shown ? (shown == 0 ? "…" : ", …") : "");
+        var note = Message.Of(shown == 0 ? "yavsos_tree_note_hidden" : names.Count > shown ? "yavsos_tree_note_cut" : "yavsos_tree_note_names");
+        if (shown != 0) note = note.With("names", MessageList.Of(ListKind.Comma, names.Take(shown)));
+        return Message.Of("yavsos_tree_note").With("category", category ?? "").With("note", note, Tone.Faint);
     }
 
     /// <summary>
@@ -140,11 +146,12 @@ public static class CategorySearch
     /// The picker's rows while a search is active: the marked categories, their ancestors (opened to reveal them) and
     /// what lies under a marked category. Without a search, the usual rows.
     /// </summary>
-    public static IReadOnlyList<CategoryTreeRow> Rows(ClassificationTaxonomy taxonomy, IReadOnlyCollection<string> stored, Func<string, bool> hasMembers,
+    public static IReadOnlyList<CategoryTreeRow> Rows(CategoryNames names, IReadOnlyCollection<string> stored, Func<string, bool> hasMembers,
         ICollection<string> expanded, ICollection<string> collapsed, CategorySearchResult search)
     {
-        if (search == null) throw new ArgumentNullException(nameof(search));
-        if (!search.Active) return CategorySelection.Rows(taxonomy, stored, hasMembers, expanded, collapsed);
+        if (search == null || names == null) throw new ArgumentNullException(nameof(search));
+        if (!search.Active) return CategorySelection.Rows(names, stored, hasMembers, expanded, collapsed);
+        var taxonomy = names.Taxonomy;
         var path = new HashSet<string>(StringComparer.Ordinal);
         foreach (var hit in search.Hits)
             for (var at = taxonomy.ParentOf(hit); at != null; at = taxonomy.ParentOf(at)) path.Add(at);
@@ -156,7 +163,7 @@ public static class CategorySearch
             for (string? at = id; at != null; at = taxonomy.ParentOf(at)) if (search.Hits.Contains(at)) return true;
             return false;
         }
-        return CategorySelection.Rows(taxonomy, stored, x => hasMembers(x) || path.Contains(x) || search.Hits.Contains(x), open, closed)
+        return CategorySelection.Rows(names, stored, x => hasMembers(x) || path.Contains(x) || search.Hits.Contains(x), open, closed)
             .Where(x => Shown(x.Id)).ToArray();
     }
 }

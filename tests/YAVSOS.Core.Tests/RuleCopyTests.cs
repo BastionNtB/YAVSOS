@@ -3,6 +3,7 @@ using System.Linq;
 using Xunit;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Core.Transfers;
 
 namespace YAVSOS.Core.Tests;
@@ -134,32 +135,40 @@ public sealed class RuleCopyTests
     [Fact]
     public void Tooltips_ExplainEachState()
     {
-        Assert.Equal("This chest has no rule to copy.", RuleCopy.CopyTooltip(false, 0));
-        Assert.DoesNotContain("can't show", RuleCopy.CopyTooltip(true, 0));
-        Assert.Contains("Parts this version can't show stay here.", RuleCopy.CopyTooltip(true, 2));
-        Assert.StartsWith("Copy a rule", RuleCopy.PasteTooltip(null, true, true));
+        Assert.Equal(("Copy", "This chest has no rule to copy."), EnglishText.Of(RuleCopy.CopyTooltip(false, 0)));
+        Assert.DoesNotContain("can't show", EnglishText.Of(RuleCopy.CopyTooltip(true, 0)).Text);
+        Assert.EndsWith("Paste it on another chest. Parts this YAVSOS version can't show stay here.", EnglishText.Of(RuleCopy.CopyTooltip(true, 2)).Text);
+        Assert.Equal(("Paste", "Copy a rule from another chest first, then paste it here."), EnglishText.Of(RuleCopy.PasteTooltip(null, true, true)));
         var state = Loaded(ContainerPolicyEnvelope.Serialize(1, new ChestRules(Full, ChestRuleState.Configured, includes: new[] { "Wood" })), Full);
         var copy = RuleCopy.Of(state, "Wood")!;
-        Assert.Contains("Wood", RuleCopy.PasteTooltip(copy, true, false));
-        Assert.EndsWith("It replaces this chest's rule.", RuleCopy.PasteTooltip(copy, true, true));
-        Assert.DoesNotContain("replaces", RuleCopy.PasteTooltip(copy, true, false));
-        Assert.Contains("no one else is using this chest", RuleCopy.PasteTooltip(copy, false, true));
-        Assert.Equal("Gives this chest the copied rule.", RuleCopy.PasteTooltip(RuleCopy.Of(state, null), true, false));
+        Assert.Equal("Gives this chest the copied rule:\nWood", Text(RuleCopy.PasteTooltip(copy, true, false)));
+        // Inventory case 7: the label is a tinted value, not markup in the text.
+        Assert.Equal(Message.Of("yavsos_copy_paste_tip_label").With("label", "Wood", Tone.Label), RuleCopy.PasteTooltip(copy, true, false).Body);
+        Assert.Equal("Gives this chest the copied rule:\nWood\nIt replaces this chest's rule.", Text(RuleCopy.PasteTooltip(copy, true, true)));
+        Assert.Equal("Gives this chest the copied rule:\nWood\nAnother player is using this chest. Paste once they close it.", Text(RuleCopy.PasteTooltip(copy, false, true)));
+        Assert.Equal("Gives this chest the copied rule.", Text(RuleCopy.PasteTooltip(RuleCopy.Of(state, null), true, false)));
+        static string Text(Tooltip tip) => EnglishText.Of(tip).Text;
     }
 
     [Fact]
-    public void Folded_ShowsTheHeaderBannersAndLabelLineOnly()
+    public void Folded_ShowsTheHeaderAndStripOnly()
     {
-        foreach (var part in new[] { PanelPart.Header, PanelPart.Banners })
+        foreach (var part in new[] { PanelPart.Header, PanelPart.Strip })
         { Assert.True(PanelFold.Shows(part, true)); Assert.True(PanelFold.Shows(part, false)); }
         foreach (var part in new[] { PanelPart.Rule, PanelPart.Edit, PanelPart.Filters, PanelPart.Chest, PanelPart.Cleanup })
         { Assert.False(PanelFold.Shows(part, true)); Assert.True(PanelFold.Shows(part, false)); }
-        Assert.True(PanelFold.Shows(PanelPart.Label, true)); Assert.False(PanelFold.Shows(PanelPart.Label, false));
 
-        Assert.Equal(("Ores · priority 2 (Urgent)", true), PanelFold.Line("Ores · priority 2 (Urgent)", false));
-        Assert.Equal((PanelFold.NoRule, false), PanelFold.Line(null, false));
-        Assert.Equal((PanelFold.NoRule, false), PanelFold.Line("", false));
-        Assert.Null(PanelFold.Line(null, true)); // An unreadable rule: its banner says so.
+        // The fold button's tooltip names what a click does.
+        Assert.Equal(("Fold", "Shows only the title, the status marks and the chest label. Every chest opens like this until you unfold the panel."),
+            EnglishText.Of(PanelFold.ButtonTooltip(false)));
+        Assert.Equal(("Unfold", "Shows the whole panel again."), EnglishText.Of(PanelFold.ButtonTooltip(true)));
+        // The strip's label tooltip: the label, tinted, over what the line is; folded, how to see the rule.
+        var line = PanelFold.LineTooltip("Ores", true);
+        Assert.Equal(("Chest label", "Ores\nWhat players see when they point at this chest. Unfold the panel to see or change its rule."), EnglishText.Of(line));
+        Assert.Equal(MessageList.Of(ListKind.Lines, new object[] { Tinted.Of("Ores", Tone.Label), Message.Of("yavsos_panel_label_line_tip") }), line.List);
+        Assert.Equal("What players see when they point at this chest. Unfold the panel to see or change its rule.", EnglishText.Of(PanelFold.LineTooltip(null, true)).Text);
+        Assert.Equal(("Chest label", "Ores\nWhat players see when they point at this chest. Messages show here until your next action."),
+            EnglishText.Of(PanelFold.LineTooltip("Ores", false)));
     }
 
     [Fact]
@@ -178,8 +187,11 @@ public sealed class RuleCopyTests
     [Fact]
     public void LabelTooltip_ShowsTheLabel_OrSaysThereIsNone()
     {
-        Assert.Contains("<color=" + ChestLabelPreview.Color + ">Ores</color>", ChestLabelPreview.Tooltip("Ores", true));
-        Assert.Equal("This chest has no rule, so it shows no label.", ChestLabelPreview.Tooltip(null, true));
-        Assert.Contains("ShowChestLabels", ChestLabelPreview.Tooltip("Ores", false));
+        Assert.Equal(("Chest label", "What players see when they point at this chest:\nOres"), EnglishText.Of(ChestLabelPreview.Of("Ores", true)));
+        // Inventory case 7: the label is tinted by the game side, never wrapped in markup by Core.
+        Assert.Equal(Message.Of("yavsos_panel_label_tip").With("label", "Ores", Tone.Label), ChestLabelPreview.Of("Ores", true).Body);
+        Assert.Equal("This chest has no rule, so it has no chest label.", EnglishText.Of(ChestLabelPreview.Of(null, true)).Text);
+        Assert.Equal("What players see when they point at this chest:\nOres\nYour ShowChestLabels setting is off, so you don't see chest labels.",
+            EnglishText.Of(ChestLabelPreview.Of("Ores", false)).Text);
     }
 }

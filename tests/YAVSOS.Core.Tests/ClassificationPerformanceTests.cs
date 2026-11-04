@@ -47,7 +47,7 @@ public sealed class ClassificationPerformanceTests
         lifecycle.ApplyLocal(Assigned("latest", 3)); host.Update();
         Assert.True(tokens[0].IsCancellationRequested); Assert.Single(jobs); Assert.Null(host.Current);
         if (fault) jobs[0].SetException(new InvalidOperationException("stale rules"));
-        else { Assert.Throws<OperationCanceledException>(() => work[0]()); jobs[0].SetResult(ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(Policy("first", 1)))); }
+        else { Assert.Throws<OperationCanceledException>(() => work[0]()); jobs[0].SetResult(ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(Policy("first", 1)))); }
         host.Update(); Assert.Equal(2, jobs.Count); Assert.Equal(2, work.Count); Assert.Null(host.Current);
         jobs[1].SetResult(work[1]());
         host.Update();
@@ -135,7 +135,7 @@ public sealed class ClassificationPerformanceTests
         Assert.True(cache.TrySetSources(revision, source)); Assert.False(cache.TrySetSources(revision, source));
         cache.Tick(); cache.BeginSession(false);
         Assert.True(token.IsCancellationRequested); Assert.False(cache.TrySetSources(cache.Revision, source));
-        job.SetResult(ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy), source));
+        job.SetResult(ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy), source));
         cache.Tick(); Assert.Null(cache.Current); Assert.Equal(ClassificationState.Offline, cache.State);
         cache.BeginSession(true); cache.SetPolicyInputs(catalog, policy);
         Assert.False(cache.TrySetSources(revision, source));
@@ -152,7 +152,7 @@ public sealed class ClassificationPerformanceTests
             schedule: (work,t) => { calls++; token=t; return job.Task; });
         cache.BeginSession(true); cache.SetPolicyInputs(catalog, policy); cache.Tick(); now=9;
         cache.Tick(); Assert.Equal(ClassificationState.Building, cache.State); Assert.False(token.IsCancellationRequested); now=10;
-        var result = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy));
+        var result = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy));
         if (completeFirst) job.SetResult(result);
         cache.Tick(); Assert.Equal(ClassificationState.Failed, cache.State); Assert.Null(cache.Current); Assert.True(token.IsCancellationRequested);
         if (!completeFirst) job.SetResult(result);

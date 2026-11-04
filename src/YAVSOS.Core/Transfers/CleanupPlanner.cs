@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using YAVSOS.Core.Classification;
 
@@ -55,11 +56,18 @@ public sealed class CleanupInput
     /// those filters see Unknown. The writer's recheck must use the same evidence.
     /// </summary>
     public Func<TransferStack, IReadOnlyList<FacetEvidence>>? InstanceFacets { get; }
+    /// <summary>
+    /// A2-01 part 2: Lab cost check. When set, <see cref="CleanupPlanner.Plan"/> reports once per run how long its parts
+    /// took in total (milliseconds): the instance-facets read, rule evaluation, ranking, AzuAutoStore's exclusions and
+    /// the whole plan. Null (the release build): nothing is timed.
+    /// </summary>
+    public Action<string, double>? Timed { get; }
     public CleanupInput(ClassificationTaxonomy taxonomy, ICategoryAnswers answers, IEnumerable<CleanupChest> chests,
         Func<string, int>? categorySize = null, bool mucAvailable = false, Func<string, TransferItemIdentity, bool>? azuAllows = null,
-        IEnumerable<Guid>? held = null, Func<TransferStack, IReadOnlyList<FacetEvidence>>? instanceFacets = null)
+        IEnumerable<Guid>? held = null, Func<TransferStack, IReadOnlyList<FacetEvidence>>? instanceFacets = null,
+        Action<string, double>? timed = null)
     {
-        InstanceFacets = instanceFacets;
+        InstanceFacets = instanceFacets; Timed = timed;
         Taxonomy = taxonomy ?? throw new ArgumentNullException(nameof(taxonomy));
         Answers = answers ?? throw new ArgumentNullException(nameof(answers));
         Chests = Array.AsReadOnly((chests ?? throw new ArgumentNullException(nameof(chests))).ToArray());
@@ -70,16 +78,6 @@ public sealed class CleanupInput
         CategorySize = categorySize; MucAvailable = mucAvailable; AzuAllows = azuAllows;
         Held = new HashSet<Guid>(held ?? Array.Empty<Guid>());
     }
-}
-
-public enum CleanupRoute
-{
-    /// <summary>The local peer owns both chests and writes itself.</summary>
-    Direct,
-    /// <summary>Local source, destination owned by another player: MultiUserChest adds it there.</summary>
-    MucAdd,
-    /// <summary>Source owned by another player, local destination: MultiUserChest removes it there.</summary>
-    MucRemove
 }
 
 /// <summary>Why the planner moves a stack (D057).</summary>
@@ -93,44 +91,6 @@ public enum CleanupKind
     Resort
 }
 
-public enum CleanupReason
-{
-    /// <summary>No ruled chest in range accepts it.</summary>
-    NoDestination,
-    /// <summary>Accepting chests have no room left.</summary>
-    NoCapacity,
-    /// <summary>The only accepting chests are of a type AzuAutoStore's config excludes it from (D056).</summary>
-    AzuExcluded,
-    /// <summary>One side is another player's chest and no MultiUserChest is present.</summary>
-    OtherOwnerNoMuc,
-    /// <summary>Both sides are other players' chests.</summary>
-    BothRemote,
-    /// <summary>The other player's MultiUserChest item format is unknown, so YAVSOS's copy cannot send it a request (D061 Q8).</summary>
-    OtherOwnerFormatUnknown,
-    /// <summary>The other player's MultiUserChest can't take requests: they publish format 0 (D086 D13, F3).</summary>
-    OtherOwnerMucUnusable,
-    /// <summary>The other player publishes no MultiUserChest format and no echo probe was answered (D116, F3).</summary>
-    OtherOwnerMucSilent,
-    /// <summary>The other player's MultiUserChest is still being checked by echo probe (D116, F3); run again in a moment.</summary>
-    OtherOwnerMucChecking,
-    /// <summary>The other player's chest already has a MultiUserChest request this run.</summary>
-    MucBusy,
-    /// <summary>The stack is protected or cannot be moved exactly.</summary>
-    Unsupported,
-    /// <summary>The stack is on the cursor or in use by an open inventory screen (D057 O8).</summary>
-    Held,
-    /// <summary>The run's bounds were reached; run again.</summary>
-    Budget,
-    /// <summary>More chests in range than one run reads; the same ones are left out on every run.</summary>
-    ChestLimit,
-    /// <summary>A category chest may take it once categories finish loading (D086 D4); try again shortly.</summary>
-    CategoriesPending,
-    /// <summary>Its chest was set to "cleanup leaves this alone" during the run (B4.5).</summary>
-    OptedOut,
-    /// <summary>A nearby chest couldn't be read, so it took part in nothing; counted per chest, not per stack (SF3).</summary>
-    ChestUnreadable
-}
-
 public sealed class CleanupMove
 {
     public string SourceId { get; }
@@ -141,12 +101,12 @@ public sealed class CleanupMove
     public int DestinationX { get; }
     public int DestinationY { get; }
     public Guid? MergeHandle { get; }
-    public CleanupRoute Route { get; }
+    public MoveRoute Route { get; }
     public CleanupKind Kind { get; }
     /// <summary>Merges into a stack an earlier move of this run creates; see <see cref="TryMergeTarget"/> (D070: one press settles).</summary>
     public bool MergesPlanned { get; }
     internal CleanupMove(string source, string destination, Guid handle, TransferItemIdentity identity, int units, int x, int y,
-        Guid? merge, CleanupRoute route, CleanupKind kind, bool mergesPlanned = false)
+        Guid? merge, MoveRoute route, CleanupKind kind, bool mergesPlanned = false)
     {
         MergesPlanned = mergesPlanned;
         SourceId = source; DestinationId = destination; Handle = handle; Identity = identity; Units = units;
@@ -164,10 +124,10 @@ public sealed class CleanupRemainder
     public Guid Handle { get; }
     public TransferItemIdentity Identity { get; }
     public int Units { get; }
-    public CleanupReason Reason { get; }
-    /// <summary>For <see cref="CleanupReason.AzuExcluded"/>, the first excluded chest; otherwise null.</summary>
+    public RunReason Reason { get; }
+    /// <summary>For <see cref="RunReason.AzuExcluded"/>, the first excluded chest; otherwise null.</summary>
     public string? DestinationId { get; }
-    internal CleanupRemainder(string source, Guid handle, TransferItemIdentity identity, int units, CleanupReason reason, string? destination)
+    internal CleanupRemainder(string source, Guid handle, TransferItemIdentity identity, int units, RunReason reason, string? destination)
     { SourceId = source; Handle = handle; Identity = identity; Units = units; Reason = reason; DestinationId = destination; }
 }
 
@@ -204,6 +164,59 @@ public static class CleanupPlanner
     public static CleanupPlan Plan(CleanupInput input, ChestRuleEvaluator? evaluator = null)
     {
         if (input == null) throw new ArgumentNullException(nameof(input));
+        if (input.Timed == null) return Plan(input, evaluator, null);
+        var clock = new PlanClock(); var started = Stopwatch.GetTimestamp();
+        var plan = Plan(input, evaluator, clock);
+        clock.Report(input.Timed, Stopwatch.GetTimestamp() - started);
+        return plan;
+    }
+
+    /// <summary>A2-01 part 2: one run's planning time by part, summed over every stack and destination.</summary>
+    internal sealed class PlanClock
+    {
+        internal long Facets, Evaluate, Rank, Azu;
+        /// <summary>Adds the time since <paramref name="since"/> to <paramref name="bucket"/>; returns now.</summary>
+        internal static long Lap(ref long bucket, long since) { var now = Stopwatch.GetTimestamp(); bucket += now - since; return now; }
+        internal void Report(Action<string, double> timed, long total)
+        {
+            static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
+            timed("facets", Ms(Facets)); timed("evaluate", Ms(Evaluate)); timed("rank", Ms(Rank)); timed("azu", Ms(Azu));
+            timed("other", Ms(total - Facets - Evaluate - Rank - Azu)); timed("total", Ms(total));
+        }
+    }
+
+    /// <summary>
+    /// Q10 (D132): one plan's rankings, so each item is ranked against the receivers once instead of once per stack. Measured
+    /// 2026-11-03 (86 containers, about 920 stacks): ranking was 81–89 % of a 221 ms cold, 48 ms warm plan. The receivers and
+    /// everything <see cref="DestinationRouting.Rank"/> reads are fixed for the plan, and Rank judges each chest on its own and
+    /// ends in a total order (ID), so the ranking over all receivers without the source chest equals the ranking over the
+    /// others. The key is the item and its instance evidence (rarity, condition, crafter), which filters read.
+    /// </summary>
+    internal sealed class RouteCache
+    {
+        private readonly Dictionary<string, IReadOnlyList<RankedDestination>> rows = new(StringComparer.Ordinal);
+        private Dictionary<DestinationCandidate, CleanupChest>? chests;
+        internal bool TryGet(string key, out IReadOnlyList<RankedDestination> ranked) => rows.TryGetValue(key, out ranked!);
+        internal void Set(string key, IReadOnlyList<RankedDestination> ranked) => rows[key] = ranked;
+        /// <summary>The receiver chest of a ranked candidate (candidates compare by reference).</summary>
+        internal CleanupChest Chest(List<(CleanupChest Chest, DestinationCandidate Candidate)> ruled, DestinationCandidate candidate)
+        {
+            chests ??= ruled.ToDictionary(x => x.Candidate, x => x.Chest);
+            return chests[candidate];
+        }
+        internal static string Key(string prefab, IReadOnlyList<FacetEvidence>? facets)
+        {
+            if (facets == null || facets.Count == 0) return prefab;
+            var text = new System.Text.StringBuilder(prefab);
+            foreach (var facet in facets.OrderBy(x => x.Dimension, StringComparer.Ordinal).ThenBy(x => x.Value, StringComparer.Ordinal))
+                text.Append('\u0001').Append(facet.Dimension).Append('=').Append(facet.Value).Append(facet.Recognized ? "" : "?");
+            return text.ToString();
+        }
+    }
+
+    private static CleanupPlan Plan(CleanupInput input, ChestRuleEvaluator? evaluator, PlanClock? clock)
+    {
+        var routes = new RouteCache();
         evaluator ??= new ChestRuleEvaluator();
         var taxonomy = input.Taxonomy; var answers = input.Answers;
         var stamp = taxonomy.Fingerprint + ":" + answers.Generation;
@@ -227,39 +240,39 @@ public static class CleanupPlanner
             var sourceGrid = grids[source.Id];
             foreach (var stack in source.Inventory.Stacks)
             {
-                var assessed = Assess(input, evaluator, ruled, source, stack);
+                var assessed = Assess(input, evaluator, ruled, source, stack, clock, routes);
                 if (assessed.Kind == null) continue;
                 var kind = assessed.Kind.Value;
                 if (assessed.Item == null && assessed.Destinations.Count == 0 && !assessed.Stays)
                 {
-                    if (kind == CleanupKind.Rejected) remainders.Add(new CleanupRemainder(source.Id, stack.Handle, stack.Identity, stack.Quantity, CleanupReason.NoDestination, null));
+                    if (kind == CleanupKind.Rejected) remainders.Add(new CleanupRemainder(source.Id, stack.Handle, stack.Identity, stack.Quantity, RunReason.NoDestination, null));
                     continue;
                 }
                 if (assessed.Stays) continue;
                 var usable = assessed.Destinations.Where(x => x.Gate == CleanupGate.Usable).Select(x => (x.Chest, Route: x.Via)).ToList();
                 var blocked = assessed.Destinations.FirstOrDefault(x => x.Gate == CleanupGate.Blocked);
-                CleanupReason? dropped = blocked?.Blocked;
-                var azuChest = assessed.Destinations.FirstOrDefault(x => x.Blocked == CleanupReason.AzuExcluded)?.Chest.Id;
+                RunReason? dropped = blocked?.Blocked;
+                var azuChest = assessed.Destinations.FirstOrDefault(x => x.Blocked == RunReason.AzuExcluded)?.Chest.Id;
                 if (usable.Count == 0)
                 {
-                    var reason = dropped ?? CleanupReason.NoDestination;
+                    var reason = dropped ?? RunReason.NoDestination;
                     // A valid placement stays valid, whatever kept it from a better chest (no room, Azu's exclusions);
                     // that is not news. Neither is an unruled container's item no chest takes.
                     if (kind != CleanupKind.Resort && (dropped != null || kind == CleanupKind.Rejected))
                         remainders.Add(new CleanupRemainder(source.Id, stack.Handle, stack.Identity, stack.Quantity, reason,
-                            reason == CleanupReason.AzuExcluded ? azuChest : null));
+                            reason == RunReason.AzuExcluded ? azuChest : null));
                     continue;
                 }
                 if (stack.Protected || !stack.TransferSupported || source.Inventory.ProtectedCells.Contains(stack.Y * source.Inventory.Width + stack.X))
-                { remainders.Add(new CleanupRemainder(source.Id, stack.Handle, stack.Identity, stack.Quantity, CleanupReason.Unsupported, null)); continue; }
+                { remainders.Add(new CleanupRemainder(source.Id, stack.Handle, stack.Identity, stack.Quantity, RunReason.Unsupported, null)); continue; }
                 if (input.Held.Contains(stack.Handle))
-                { remainders.Add(new CleanupRemainder(source.Id, stack.Handle, stack.Identity, stack.Quantity, CleanupReason.Held, null)); continue; }
+                { remainders.Add(new CleanupRemainder(source.Id, stack.Handle, stack.Identity, stack.Quantity, RunReason.Held, null)); continue; }
 
                 var left = stack.Quantity; var busy = false;
                 foreach (var (chest, route) in usable)
                 {
                     if (left == 0) break;
-                    var remote = route == CleanupRoute.MucAdd ? chest.Id : route == CleanupRoute.MucRemove ? source.Id : null;
+                    var remote = route == MoveRoute.MucAdd ? chest.Id : route == MoveRoute.MucRemove ? source.Id : null;
                     // At most one MultiUserChest request per other player's chest per run (D043).
                     if (remote != null && mucUsed.Contains(remote)) { busy = true; continue; }
                     var grid = grids[chest.Id];
@@ -277,9 +290,9 @@ public static class CleanupPlanner
                 }
                 if (left > 0)
                 {
-                    var reason = moves.Count >= MaximumMoves ? CleanupReason.Budget : busy ? CleanupReason.MucBusy : CleanupReason.NoCapacity;
+                    var reason = moves.Count >= MaximumMoves ? RunReason.Budget : busy ? RunReason.MucBusy : RunReason.NoCapacity;
                     // A re-sort that finds no room just stays where it is: that placement is valid.
-                    if (kind != CleanupKind.Resort || reason == CleanupReason.Budget)
+                    if (kind != CleanupKind.Resort || reason == RunReason.Budget)
                         remainders.Add(new CleanupRemainder(source.Id, stack.Handle, stack.Identity, left, reason, null));
                 }
             }
@@ -334,8 +347,8 @@ public static class CleanupPlanner
     internal sealed class Destination
     {
         internal readonly CleanupChest Chest; internal readonly RankedDestination Ranked; internal readonly CleanupGate Gate;
-        internal readonly CleanupRoute Via; internal readonly CleanupReason? Blocked;
-        internal Destination(CleanupChest chest, RankedDestination ranked, CleanupGate gate, CleanupRoute via = CleanupRoute.Direct, CleanupReason? blocked = null)
+        internal readonly MoveRoute Via; internal readonly RunReason? Blocked;
+        internal Destination(CleanupChest chest, RankedDestination ranked, CleanupGate gate, MoveRoute via = MoveRoute.Direct, RunReason? blocked = null)
         { Chest = chest; Ranked = ranked; Gate = gate; Via = via; Blocked = blocked; }
     }
 
@@ -366,11 +379,15 @@ public static class CleanupPlanner
             .Take(MaximumSources).Select(x => x.Id), StringComparer.Ordinal);
 
     internal static Assessment Assess(CleanupInput input, ChestRuleEvaluator evaluator,
-        List<(CleanupChest Chest, DestinationCandidate Candidate)> ruled, CleanupChest source, TransferStack stack)
+        List<(CleanupChest Chest, DestinationCandidate Candidate)> ruled, CleanupChest source, TransferStack stack, PlanClock? clock = null,
+        RouteCache? routes = null)
     {
         var taxonomy = input.Taxonomy; var answers = input.Answers; var prefab = stack.Identity.Prefab;
+        var t = clock == null ? 0 : Stopwatch.GetTimestamp();
         var facets = input.InstanceFacets?.Invoke(stack);
+        if (clock != null) t = PlanClock.Lap(ref clock.Facets, t);
         var result = new Assessment { Decision = evaluator.Evaluate(source.RulePayload, prefab, taxonomy, answers, facets) };
+        if (clock != null) PlanClock.Lap(ref clock.Evaluate, t);
         result.Kind = result.Decision switch
         {
             ChestRuleDecision.Reject => CleanupKind.Rejected, ChestRuleDecision.NoRule => CleanupKind.Unruled,
@@ -386,42 +403,72 @@ public static class CleanupPlanner
             if (result.Kind == CleanupKind.Resort)
             {
                 var own = ruled.FirstOrDefault(x => ReferenceEquals(x.Chest, source)).Candidate;
+                t = clock == null ? 0 : Stopwatch.GetTimestamp();
                 result.Current = own == null ? null : DestinationRouting.ExactOnly(prefab, new[] { own }).FirstOrDefault();
+                if (clock != null) PlanClock.Lap(ref clock.Rank, t);
                 if (result.Current == null) { result.Stays = true; return result; }
             }
-            foreach (var row in DestinationRouting.ExactOnly(prefab, ruled.Where(x => !ReferenceEquals(x.Chest, source)).Select(x => x.Candidate)))
-                AddDestination(row);
+            t = clock == null ? 0 : Stopwatch.GetTimestamp();
+            var exact = Others(Routed("exact\u0001" + prefab, () => DestinationRouting.ExactOnly(prefab, ruled.Select(x => x.Candidate))),
+                () => DestinationRouting.ExactOnly(prefab, ruled.Where(x => !ReferenceEquals(x.Chest, source)).Select(x => x.Candidate)));
+            if (clock != null) PlanClock.Lap(ref clock.Rank, t);
+            foreach (var row in exact) AddDestination(row);
             return result;
         }
         if (result.Kind == CleanupKind.Resort)
         {
             var own = ruled.FirstOrDefault(x => ReferenceEquals(x.Chest, source)).Candidate;
+            t = clock == null ? 0 : Stopwatch.GetTimestamp();
             result.Current = own == null ? null : DestinationRouting.Rank(item, prefab, new[] { own }, facets, taxonomy).FirstOrDefault();
+            if (clock != null) PlanClock.Lap(ref clock.Rank, t);
             // D092: cleanup follows the stash order, so an item a chest lists under Always moves too when another chest
             // ranks strictly better for it (higher priority; Always still wins a tie). Amends D057.
             if (result.Current == null) { result.Stays = true; return result; }
         }
-        var ranked = DestinationRouting.Rank(item, prefab, ruled.Where(x => !ReferenceEquals(x.Chest, source)).Select(x => x.Candidate),
-            facets, taxonomy, input.CategorySize);
+        t = clock == null ? 0 : Stopwatch.GetTimestamp();
+        var ranked = Others(Routed(RouteCache.Key(prefab, facets), () => DestinationRouting.Rank(item, prefab, ruled.Select(x => x.Candidate),
+                facets, taxonomy, input.CategorySize)),
+            () => DestinationRouting.Rank(item, prefab, ruled.Where(x => !ReferenceEquals(x.Chest, source)).Select(x => x.Candidate),
+                facets, taxonomy, input.CategorySize));
+        if (clock != null) PlanClock.Lap(ref clock.Rank, t);
         foreach (var row in ranked) AddDestination(row);
         return result;
+
+        // Q10 (D132): with the plan's cache, the ranking over every receiver, ranked once per key; without one (explanations),
+        // null, and Others ranks the receivers other than the source directly, as before.
+        IReadOnlyList<RankedDestination>? Routed(string key, Func<IReadOnlyList<RankedDestination>> rankAll)
+        {
+            if (routes == null) return null;
+            if (!routes.TryGet(key, out var all)) routes.Set(key, all = rankAll());
+            return all;
+        }
+        IEnumerable<RankedDestination> Others(IReadOnlyList<RankedDestination>? all, Func<IReadOnlyList<RankedDestination>> rankOthers)
+        {
+            if (all == null) return rankOthers();
+            var own = ruled.FirstOrDefault(x => ReferenceEquals(x.Chest, source)).Candidate;
+            return own == null ? all : all.Where(x => !ReferenceEquals(x.Candidate, own));
+        }
 
         void AddDestination(RankedDestination row)
         {
             if (row.ExistingItemFallback) return;
-            var chest = ruled.First(x => ReferenceEquals(x.Candidate, row.Candidate)).Chest;
-            Destination Gate(CleanupGate gate, CleanupReason? reason = null, CleanupRoute via = CleanupRoute.Direct) => new(chest, row, gate, via, reason);
+            var chest = routes != null ? routes.Chest(ruled, row.Candidate) : ruled.First(x => ReferenceEquals(x.Candidate, row.Candidate)).Chest;
+            Destination Gate(CleanupGate gate, RunReason? reason = null, MoveRoute via = MoveRoute.Direct) => new(chest, row, gate, via, reason);
             if (result.Current != null && !Better(row, result.Current)) { result.Destinations.Add(Gate(CleanupGate.NotBetter)); return; }
             // Rank and Evaluate take different paths; a destination must pass both.
-            if (evaluator.Evaluate(chest.RulePayload, prefab, taxonomy, answers, facets) != ChestRuleDecision.Accept)
-            { result.Destinations.Add(Gate(CleanupGate.RuleMismatch)); return; }
-            if (input.AzuAllows != null && !input.AzuAllows(chest.Id, stack.Identity)) { result.Destinations.Add(Gate(CleanupGate.Blocked, CleanupReason.AzuExcluded)); return; }
+            var since = clock == null ? 0 : Stopwatch.GetTimestamp();
+            var accepts = evaluator.Evaluate(chest.RulePayload, prefab, taxonomy, answers, facets) == ChestRuleDecision.Accept;
+            if (clock != null) since = PlanClock.Lap(ref clock.Evaluate, since);
+            if (!accepts) { result.Destinations.Add(Gate(CleanupGate.RuleMismatch)); return; }
+            var azuAllows = input.AzuAllows == null || input.AzuAllows(chest.Id, stack.Identity);
+            if (clock != null && input.AzuAllows != null) PlanClock.Lap(ref clock.Azu, since);
+            if (!azuAllows) { result.Destinations.Add(Gate(CleanupGate.Blocked, RunReason.AzuExcluded)); return; }
             if (source.LocallyOwned && chest.LocallyOwned) result.Destinations.Add(Gate(CleanupGate.Usable));
-            else if (!source.LocallyOwned && !chest.LocallyOwned) result.Destinations.Add(Gate(CleanupGate.Blocked, CleanupReason.BothRemote));
-            else if (!input.MucAvailable) result.Destinations.Add(Gate(CleanupGate.Blocked, CleanupReason.OtherOwnerNoMuc));
+            else if (!source.LocallyOwned && !chest.LocallyOwned) result.Destinations.Add(Gate(CleanupGate.Blocked, RunReason.BothRemote));
+            else if (!input.MucAvailable) result.Destinations.Add(Gate(CleanupGate.Blocked, RunReason.OtherOwnerNoMuc));
             // Known at plan time, as in stash, so the plan and the explanation skip a chest the write would skip (B4.33 §3).
             else if ((source.LocallyOwned ? chest : source).OwnerMuc.Skip() is { } skip) result.Destinations.Add(Gate(CleanupGate.Blocked, skip));
-            else result.Destinations.Add(Gate(CleanupGate.Usable, via: source.LocallyOwned ? CleanupRoute.MucAdd : CleanupRoute.MucRemove));
+            else result.Destinations.Add(Gate(CleanupGate.Usable, via: source.LocallyOwned ? MoveRoute.MucAdd : MoveRoute.MucRemove));
         }
     }
 }

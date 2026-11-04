@@ -5,6 +5,7 @@ using Xunit;
 using YAVSOS.Core.Catalog;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using static YAVSOS.Core.Tests.ClassificationContractFixture;
 
 namespace YAVSOS.Core.Tests;
@@ -147,7 +148,7 @@ public sealed class FilterChoicesTests
         var saved = new Dictionary<string, IReadOnlyList<string>> { ["teleportable"] = new[] { "no" } };
         Assert.False(Of(FilterChoices.Compute(World(), new[] { "materials" }, Game, saved, moot: moot), "teleportable")!.Applies);
         var ore = World().Single(x => x.Prefab == "CopperOre");
-        Assert.DoesNotContain("teleportable", RuleText.ItemLine(ore, DefaultClassificationTaxonomy.Create(), portals: false));
+        Assert.DoesNotContain("teleportable", ItemLine(ore, DefaultClassificationTaxonomy.Create(), portals: false));
     }
 
     [Fact]
@@ -163,13 +164,20 @@ public sealed class FilterChoicesTests
     public void Fit_KeepsTheTail_AndCountsNamesThatDoNotFit()
     {
         var names = new[] { "Stamina foods", "Seeds & planting items", "Brewing ingredients", "Food ingredients", "Animal feed" };
-        var line = RuleText.Fit(names, " · eaten by Boar, Razorback", RuleText.MaximumItemLine);
+        var tames = Message.Of("yavsos_label_eaten_by").With("values", MessageList.Comma("Boar", "Razorback"));
+        MessageList Line(object head) => MessageList.Of(ListKind.Parts, new[] { head, tames });
+        var line = EnglishText.Of(RuleText.Fit(names, Line, EnglishText.Of, RuleText.MaximumItemLine));
         Assert.True(line.Length <= RuleText.MaximumItemLine);
         Assert.EndsWith(" · eaten by Boar, Razorback", line);
         Assert.StartsWith("Stamina foods, ", line);
         Assert.Matches(@" \+\d+ · ", line);
-        Assert.Equal("Wood · x", RuleText.Fit(new[] { "Wood" }, " · x", 10));
-        Assert.Equal("A, B", RuleText.Fit(new[] { "A", "B" }, "", 80));
+        // The first name is always shown, even when the line is too long; the caller cuts it.
+        Assert.Equal("Wood · eaten by Boar, Razorback", EnglishText.Of(RuleText.Fit(new[] { "Wood" }, Line, EnglishText.Of, 10)));
+        Assert.Equal("A, B", EnglishText.Of(RuleText.Fit(new[] { "A", "B" }, head => MessageList.Of(ListKind.Parts, new[] { head }), EnglishText.Of, 80)));
+        Assert.Equal("A +1", EnglishText.Of(RuleText.Fit(new[] { "A", "Bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, head => MessageList.Of(ListKind.Parts, new[] { head }), EnglishText.Of, 10)));
+        // Case 9: the game side cuts what is still too long, never inside a surrogate pair.
+        Assert.Equal("ab…", RuleText.Cut("ab😀cd", 4));
+        Assert.Equal("abc", RuleText.Cut("abc", 4));
     }
 
     [Fact]
@@ -177,11 +185,12 @@ public sealed class FilterChoicesTests
     {
         IReadOnlyDictionary<string, IReadOnlyList<string>> F(params string[] values) =>
             new Dictionary<string, IReadOnlyList<string>> { ["rarity"] = values };
-        Assert.Equal("magic or better", RuleText.Short(F(ClassificationFilters.Rarities.ToArray())));
-        Assert.Equal("legendary or better", RuleText.Short(F("ancient", "mythic", "legendary")));
-        Assert.Equal("magic or legendary", RuleText.Short(F("magic", "legendary")));
-        Assert.Equal("ancient", RuleText.Short(F("ancient")));
-        Assert.Equal("rare or better or plain", RuleText.Short(F("rare", "epic", "legendary", "mythic", "ancient", "unknown")));
+        Assert.Equal("magic or better", Phase6InterfaceTests.Short(F(ClassificationFilters.Rarities.ToArray())));
+        Assert.Equal("legendary or better", Phase6InterfaceTests.Short(F("ancient", "mythic", "legendary")));
+        Assert.Equal("magic or legendary", Phase6InterfaceTests.Short(F("magic", "legendary")));
+        Assert.Equal("magic, rare or legendary", Phase6InterfaceTests.Short(F("magic", "legendary", "rare")));
+        Assert.Equal("ancient", Phase6InterfaceTests.Short(F("ancient")));
+        Assert.Equal("rare or better or plain", Phase6InterfaceTests.Short(F("rare", "epic", "legendary", "mythic", "ancient", "unknown")));
     }
 
     [Fact]
@@ -190,7 +199,7 @@ public sealed class FilterChoicesTests
         var taxonomy = DefaultClassificationTaxonomy.Create();
         var items = World();
         var ore = items.Single(x => x.Prefab == "CopperOre");
-        var line = RuleText.ItemLine(ore, taxonomy);
+        var line = ItemLine(ore, taxonomy);
         Assert.EndsWith(" · not teleportable", line);
         var names = line.Substring(0, line.IndexOf(" · ", StringComparison.Ordinal)).Split(", ");
         var ids = ore.Memberships.Select(x => x.Category).ToArray();
@@ -199,7 +208,7 @@ public sealed class FilterChoicesTests
             var id = taxonomy.Categories.Single(x => x.Value.Name == name).Key;
             Assert.DoesNotContain(ids, other => other != id && taxonomy.IsAncestorOrSelf(id, other)); // a leaf, never an umbrella
         }
-        Assert.DoesNotContain("teleportable", RuleText.ItemLine(items.Single(x => x.Prefab == "Wood"), taxonomy));
+        Assert.DoesNotContain("teleportable", ItemLine(items.Single(x => x.Prefab == "Wood"), taxonomy));
     }
 
     // P6-21 (maintainer, 2026-10-23): "Can be upgraded" is known per item type, so it offers yes and no from real answers;
@@ -217,4 +226,8 @@ public sealed class FilterChoicesTests
         var weapons = FilterChoices.Compute(World(), new[] { "weapons" }, Recipes, None);
         Assert.Equal(ClassificationFilters.Qualities, Of(weapons, "quality")!.Values);
     }
+
+    /// <summary>The item tooltip's category line in English from the real file, cut as the game cuts it; "" for none.</summary>
+    private static string ItemLine(ClassificationResult item, ClassificationTaxonomy taxonomy, bool portals = true) =>
+        RuleText.ItemLine(item, EnglishText.Names(taxonomy), EnglishText.Of, portals: portals) is { } line ? RuleText.Cut(EnglishText.Of(line), RuleText.MaximumItemLine) : "";
 }

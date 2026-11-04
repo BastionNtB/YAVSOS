@@ -15,8 +15,33 @@ internal static class UiLab
     public static string Panel() => Rules is { } r
         ? $"chest={(r.Chest ? r.Chest!.name : "none")}; mode={r.Mode}; categories={r.PickingCategories}; items={r.PickingItems}; filters={r.PickingFilters}; priority={r.Priority}; message={Said(r)}"
         : "no panel";
-    // D101: the one message, at its spot (Tab, Clear, Chest, Cleanup), until the next action.
-    private static string Said(RuleControls r) => r.Messages.Text.Length == 0 ? "" : $"{r.Messages.Spot}/{r.Messages.Kind}: {r.Messages.Text}";
+    // D101, D132: the one message, from its control (Edit, Undo, Paste, Clear, Priority, OptOut, Cleanup, Suggestion), until the next action.
+    private static string Said(RuleControls r) => r.Messages.Current is not { } said ? "" : $"{r.Messages.Control}/{r.Messages.Kind}: {Texts.English(said)}";
+    /// <summary>P10-25: what the strip shows (kind, lines, text).</summary>
+    public static string Strip() => Rules is { } r && r.Chest
+        ? r.Strip(r.Mode) is { } s ? $"{s.Kind}/{s.Lines}: {(s.Text is { } t ? Texts.English(t) : s.Label)}" : "" : "no panel";
+    /// <summary>X26: undo (or redo) the open chest's last rule change, as ↶ or Ctrl + Z would.</summary>
+    public static string Undo() { Rules?.Undo(); return "queued"; }
+    public static string UndoState() => Rules is { } r && r.Chest
+        ? r.UndoRecord is { } u ? $"{(u.Redo ? "redo" : "undo")}; before={u.Before.Length} chars; after={u.After.Length} chars | {Texts.English(r.UndoTooltip()).Text.Replace("\n", " / ")}" : "none"
+        : "no panel";
+    /// <summary>X22: what the open chest's suggestion row offers.</summary>
+    public static string Suggestions() => Rules is { } r && r.Chest && Plugin.Instance is { } p
+        ? r.Suggestions() is { } s ? $"category={s.Category ?? "-"} ({s.Stacks}/{s.Total}); missed={string.Join(",", s.Missed)}" : ""
+        : "no panel";
+    /// <summary>X22: click a suggestion chip: "set", "always" or "dismiss".</summary>
+    public static string Suggest(string which)
+    {
+        if (Rules is not { } r || !r.Chest) return "no panel";
+        var s = r.Suggestions();
+        switch (which)
+        {
+            case "set" when s.Category != null: r.SuggestCategory(s.Category); return "queued";
+            case "always" when s.Missed.Count != 0: r.AcceptContents(s.Missed); return "queued";
+            case "dismiss" when s.Any: r.DismissSuggestions(s.Signature); return "queued";
+            default: return "not offered";
+        }
+    }
     /// <summary>D101: point at a category tree row while searching, as the pointer would ("" leaves it).</summary>
     public static string PointRow(string id) { if (Rules is { } r) r.RowPointer(id.Length != 0 ? id : r.RowHovered, id.Length != 0); return "pointed"; }
     public static string ShowCategories() { Rules?.ShowCategories(); return "queued"; }
@@ -41,19 +66,19 @@ internal static class UiLab
         : "not in grid";
     public static string Search(string text) { Rules?.SearchFor(text); return "typed"; }
     public static string SearchResult() => Rules is { } r
-        ? $"query={r.Search.Query}; categories={string.Join(",", r.Search.Categories)}; items={string.Join(",", r.Search.Items.Select(x => x.Prefab + "→" + x.Category))}; highlight={r.HighlightStatus()}; lit={r.LitSubject}; chests={string.Join(",", r.HighlightTooltip()?.Text.Split('\n') ?? new string[0])}"
+        ? $"query={r.Search.Query}; categories={string.Join(",", r.Search.Categories)}; items={string.Join(",", r.Search.Items.Select(x => x.Prefab + "→" + x.Category))}; highlight={(r.HighlightStatus() is { } status ? Texts.English(status) : "")}; lit={(r.LitSubject is { } lit ? Texts.English(lit) : "")}; chests={string.Join(",", r.HighlightTooltip() is { } tip ? Texts.English(tip).Text.Split('\n') : new string[0])}"
         : "no panel";
     public static string Filter(string dimension, string value) { Rules?.ToggleFilter(dimension, value); return "queued"; }
     public static string Explain(string prefab) { Rules?.ExplainItem(prefab); return "queued"; }
     public static string Explanation() => Rules?.Explanation is { } e
-        ? e + (Rules.ExplanationContext.Length == 0 ? "" : " | " + Rules.ExplanationContext)
+        ? Texts.English(e.Whole) + (Rules.ExplanationContext is { } note ? " | " + Texts.English(note) : "")
         : "none";
     // P6-24/P6-23 (D071): the header's marks, the Rule section's chips and note, and the tooltip line for an explained stack.
     public static string Marks() => Rules is { } r
-        ? string.Join(" | ", r.Marks().Select(x => x.Name + "=" + x.State + ": " + x.Tooltip.Replace("\n", " / ")))
+        ? string.Join(" | ", r.Marks().Select(x => Texts.English(x.Name) + "=" + x.State + ": " + string.Join(" / ", x.Lines.Select(l => Texts.English(l.Line).Replace("\n", " / ")))))
         : "no panel";
     public static string Chips() => Rules is { } r && Plugin.Instance is { } p
-        ? string.Join(", ", r.Chips(p.RuleTaxonomy).Select(x => x.Kind + ":" + x.Text)) + " | message=" + Said(r)
+        ? string.Join(", ", r.Chips(p.RuleTaxonomy).Select(x => x.Kind + ":" + (x.Said is { } said ? Texts.English(said) : x.Name))) + " | message=" + Said(r)
         : "no panel";
     public static string TooltipLine(string prefab)
     {
@@ -127,9 +152,8 @@ internal static class UiLab
     }
     /// <summary>The filters and values the Filters tab offers for the open chest's rule, as the panel computes them.</summary>
     public static string FilterOptions() => Rules is { } r
-        ? string.Join(" | ", r.FilterOptions().Select(x => Core.Interface.RuleText.FilterName(x.Dimension) + (x.Applies ? "" : " (n/a)") + ": " +
-            string.Join(", ", x.Values.Select(v => v != "unknown" && Core.Classification.ClassificationFilters.Values(x.Dimension) == null
-                ? RuleControls.OpenValueName(x.Dimension, v) : Core.Interface.RuleText.ValueName(x.Dimension, v)))))
+        ? string.Join(" | ", r.FilterOptions().Select(x => RuleControls.FilterNameText(x.Dimension) + (x.Applies ? "" : " (n/a)") + ": " +
+            string.Join(", ", x.Values.Select(v => RuleControls.ValueText(x.Dimension, v)))))
         : "no panel";
     /// <summary>Scrolls every visible list in the rule panel to a fraction (0 top, 1 bottom), for screenshots.</summary>
     public static string PanelScroll(float fraction)
@@ -142,7 +166,8 @@ internal static class UiLab
     }
     public static string Level(int level) { Rules?.SetLevel(level); return "queued"; }
     public static string Results() => Plugin.Instance?.Results.Latest is { } s
-        ? s.Title + " | " + s.Headline + " | " + string.Join(" / ", s.Lines.Select(x => $"{x.Kind} {x.Count} {x.Label}")) + (s.MoreLines > 0 ? $" (+{s.MoreLines})" : "")
+        ? Texts.English(s.Title) + " | " + Texts.English(s.Headline) + " | " +
+          string.Join(" / ", s.Lines.Select(x => $"{x.Kind} {x.Count} {Texts.English(x.Label)}")) + (s.MoreLines > 0 ? $" (+{s.MoreLines})" : "")
         : "none";
     public static string CostStart() { UiCost.Reset(); UiCost.On = true; return "measuring"; }
     public static string CostReport() => UiCost.Report();

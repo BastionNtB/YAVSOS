@@ -2,19 +2,19 @@
 
 ## Prerequisites
 
-- .NET SDK 10. `global.json` selects a stable 10.0 SDK; the plugin runtime target remains `netstandard2.1`.
+- .NET SDK 10. `global.json` selects a stable 10.0 SDK; the plugin still targets `netstandard2.1`.
 - Valheim and BepInExPack Valheim for plugin reference assemblies and in-game checks.
-- On Arch Linux, the installed .NET Standard targeting pack. If missing, install `dotnet-sdk` and `netstandard-targeting-pack` through the package manager.
+- On Arch Linux, the .NET Standard targeting pack. If it is missing, install `dotnet-sdk` and `netstandard-targeting-pack` with the package manager.
 
-Unity Editor, publicized assemblies, a server connection, and optional mods are not needed to compile. The plugin references the installed BepInEx Harmony DLL and game's networking/TextMeshPro assemblies. ServerSync v1.20 is downloaded and checksum-verified by the build; ILRepack 2.0.48 comes from NuGet and internalizes it. See [dependency provenance](../third_party/README.md). Initial dependency restore needs network access; subsequent builds can use verified cached dependencies.
+Compiling needs no Unity Editor, publicized assemblies, server connection or optional mods. The plugin references the installed BepInEx Harmony DLL and the game's networking and TextMeshPro assemblies. The build downloads ServerSync v1.20 and verifies its checksum; ILRepack 2.0.48 comes from NuGet and internalizes it. See [dependency provenance](../third_party/README.md). The first restore needs network access; later builds can use the verified cached dependencies.
 
 ## Reference paths
 
-Copy `BuildPaths.example.props` to `BuildPaths.local.props` and set `ValheimDir` and `BepInExDir`. The latter is the BepInEx directory containing `core/`; for Gale it usually belongs to a profile. `ValheimManagedDir` can override the usual `valheim_Data/Managed` layout.
+Copy `BuildPaths.example.props` to `BuildPaths.local.props` and set `ValheimDir` and `BepInExDir`. `BepInExDir` is the BepInEx directory that contains `core/`; with Gale it usually belongs to a profile. `ValheimManagedDir` overrides the usual `valheim_Data/Managed` layout.
 
-The plugin also references Jotunn, a required runtime dependency since D062 (the rule panel is built on its `GUIManager`). `JotunnPath` defaults to `$(BepInExDir)/plugins/ValheimModding-Jotunn/Jotunn.dll`; set it in `BuildPaths.local.props` to use another installed copy, for example a Gale test profile's. Jotunn is referenced only: it is not merged into `YAVSOS.dll` or copied beside it, and `scripts/verify-build.py` checks both.
+The plugin also references Jotunn, a required runtime dependency since D062 (the YAVSOS panel is built on its `GUIManager`). `JotunnPath` defaults to `$(BepInExDir)/plugins/ValheimModding-Jotunn/Jotunn.dll`; set it in `BuildPaths.local.props` to use another installed copy, such as a Gale test profile's. Jotunn is only referenced, neither merged into `YAVSOS.dll` nor copied beside it, and `scripts/verify-build.py` checks both.
 
-The local file is ignored. Game/BepInEx/Jotunn references have `Private=false` and are not packaged with YAVSOS. Missing references produce a targeted build error. Command-line MSBuild properties can override the local file:
+Git ignores the local file. Game, BepInEx and Jotunn references have `Private=false` and are not packaged with YAVSOS. A missing reference stops the build with an error that names it. MSBuild properties on the command line override the local file:
 
 ```sh
 ./scripts/build.sh -p:ValheimDir=/path/to/Valheim -p:BepInExDir=/path/to/profile/BepInEx
@@ -40,17 +40,23 @@ python3 scripts/verify-build.py
 ```
 
 - Plugin: `artifacts/build/YAVSOS/Release/netstandard2.1/YAVSOS.dll`.
-- Runtime core dependency is copied beside the plugin: `YAVSOS.Core.dll`. Both must accompany an eventual manual test installation.
-- ServerSync is internalized into `YAVSOS.dll`; no standalone `ServerSync.dll`, ILRepack, game, BepInEx, Harmony or Jotunn DLL is distributed. Players install Jotunn themselves (D062). `ServerSync-LICENSE.txt` accompanies the DLLs.
-- Core project's own output: `artifacts/build/YAVSOS.Core/Release/netstandard2.1/`.
+- The core library, `YAVSOS.Core.dll`, is copied beside the plugin. A manual test installation needs both.
+- ServerSync and the bundled MultiUserChest are internalized into `YAVSOS.dll`; no standalone `ServerSync.dll`, ILRepack, game, BepInEx, Harmony or Jotunn DLL is distributed. Players install Jotunn themselves (D062). `YAVSOS-LICENSE.txt`, `ServerSync-LICENSE.txt` and `MultiUserChest-LICENSE.txt` accompany the DLLs.
+- The core project's own output: `artifacts/build/YAVSOS.Core/Release/netstandard2.1/`.
+- Player text: the English file `src/YAVSOS/Translations/English/yavsos.json` is embedded in `YAVSOS.dll`, not shipped loose; `src/YAVSOS/Translations/notes.json` holds the translator notes. Setting descriptions are messages there too; `scripts/settings_doc.py` writes `docs/SETTINGS.md` from them (`--check` reports a stale copy). To let Git merge these files key by key with `scripts/messages_merge.py`, register the merge driver once per clone:
+
+  ```bash
+  git config merge.yavsos-messages.name "YAVSOS message files"
+  git config merge.yavsos-messages.driver "python3 -I scripts/messages_merge.py %O %A %B"
+  ```
 - Intermediate files: `artifacts/obj/<project>/`.
 - Store packages: `artifacts/package/<version>/` (see [Packages and releases](#packages-and-releases)).
 
-No command here installs a DLL, changes Gale or deploys to a server, and none publishes a release unless `scripts/release.py --publish` is given on purpose. Runtime tests need a separate test profile, a disposable world and an explicit deployment step.
+No command here installs a DLL, changes Gale or deploys to a server, and none publishes a release unless you pass `scripts/release.py --publish` on purpose. Runtime tests need a separate test profile, a disposable world and a deliberate deployment step.
 
 ## Future CI and packaging
 
-Pure core tests run without proprietary game references. Plugin CI must obtain those references from a controlled runner rather than commit them. NuGet content/version locks are checked in beside the plugin and tests; CI can restore with `--locked-mode`. `scripts/verify-build.py` checks runtime DLL allowlisting, internalized ServerSync, identity/version alignment, dependency checksum, coupling metadata names, and detached core references. It inspects build output only; `scripts/package.py` checks the packages.
+The core tests run without proprietary game references. Plugin CI must get those references from a controlled runner instead of committing them. NuGet lock files with versions and content hashes are checked in beside the plugin and tests; CI can restore with `--locked-mode`. `scripts/verify-build.py` checks the build: only the allowed DLLs and licence files, ServerSync and MultiUserChest internalized, matching identity and versions, the ServerSync checksum and the ServerSync members YAVSOS couples to, and a core library with no game, Unity, BepInEx, Harmony or ServerSync reference. It doesn't open the packages; `scripts/package.py` checks those.
 
 ## Packages and releases
 
@@ -71,8 +77,8 @@ python3 scripts/release.py --tag v1.0.1 --media-url <url> --repo-url <url> --pub
   the public repository's `README.md` (D102); its links to repository files point at the public
   repository at the release tag (`--repo-url`). The store changelog is the `## x.y.z` sections of `CHANGELOG.md`. Package name, namespace,
   dependencies and files: `packaging/package.json`.
-- Publishing refuses a dirty tree, a CHANGELOG entry still marked `(unreleased)`, a media slot
-  without its image, a link left relative, and `--skip-build`. Order: Thunderstore, Hexium, Nexus Mods (a new
+- Publishing refuses a dirty tree, a CHANGELOG entry still marked `(unreleased)`, a media or art
+  slot without its image, a link left relative, and `--skip-build`. Order: Thunderstore, Hexium, Nexus Mods (a new
   version of the existing main file through Nexus's v3 upload API, the old one archived, then the
   changelog entry), then the GitHub release with both zips (gh CLI login). The public repository
   must have the tag first.

@@ -25,6 +25,7 @@ public sealed class ClassificationRuleSet
         foreach (var row in rows)
         {
             foreach (var id in row.Memberships) taxonomy.Require(id);
+            foreach (var id in row.Removals) taxonomy.Require(id);
             if (row.Primary != null) taxonomy.Require(row.Primary);
         }
         var ordered = rows.OrderBy(x => x.Match, StringComparer.Ordinal).ThenBy(x => x.Selector, StringComparer.Ordinal).ToArray();
@@ -38,6 +39,8 @@ public sealed class ClassificationRuleSet
             {
                 writer.Write(row.Match); writer.Write(row.Selector); writer.Write((int)row.Operation); writer.Write(row.Primary ?? "");
                 writer.Write(row.Memberships.Count); foreach (var id in row.Memberships) writer.Write(id);
+                // X48 (D130): only edit rows write their removals, so every replace-only rule set keeps its fingerprint.
+                if (row.Operation != OverrideOperation.Replace) { writer.Write(row.Removals.Count); foreach (var id in row.Removals) writer.Write(id); }
                 writer.Write(row.Facets.Count);
                 foreach (var edit in row.Facets)
                 {
@@ -47,13 +50,16 @@ public sealed class ClassificationRuleSet
             }
         });
     }
-    // Schema 1 stores a complete assignment; add/remove/facet edits are detached contracts only.
-    public static ClassificationRuleSet FromSchema1(CategoryPolicy policy, ClassificationTaxonomy? defaults = null)
+    // A `<member>` assignment replaces the automatic categories; an `<add>`/`<remove>` assignment (schema 2, X48, D130)
+    // edits them, removals first. Facet edits remain detached contracts only.
+    public static ClassificationRuleSet FromPolicy(CategoryPolicy policy, ClassificationTaxonomy? defaults = null)
     {
         if (policy == null) throw new ArgumentNullException(nameof(policy));
         var taxonomy = (defaults ?? DefaultClassificationTaxonomy.Create()).WithPolicy(policy);
-        return new ClassificationRuleSet(taxonomy, policy.Assignments.Select(row =>
-            new ClassificationOverride(row.Match, row.Selector, OverrideOperation.Replace, row.Memberships, row.Primary)), policy.Fingerprint);
+        return new ClassificationRuleSet(taxonomy, policy.Assignments.Select(row => row.Replaces
+            ? new ClassificationOverride(row.Match, row.Selector, OverrideOperation.Replace, row.Memberships, row.Primary)
+            : new ClassificationOverride(row.Match, row.Selector, OverrideOperation.Add, row.Memberships, row.Primary, removals: row.Removals)),
+            policy.Fingerprint);
     }
     internal ClassificationOverride? Select(string prefab, ClassificationWork work)
     {

@@ -11,6 +11,9 @@ using HarmonyLib;
 using UnityEngine;
 using YAVSOS.Core.Classification;
 using YAVSOS.Transfers;
+using YAVSOS.Core.Messages;
+using YAVSOS.Cleanup;
+using YAVSOS.Interface;
 
 namespace YAVSOS.Integrations;
 
@@ -310,7 +313,7 @@ internal static class AzuAutoStoreIntegration
         // D048: one short, rate-limited notice rather than one per item.
         if (Time.unscaledTime - lastPendingNotice < 30f || !Player.m_localPlayer) return;
         lastPendingNotice = Time.unscaledTime;
-        Player.m_localPlayer.Message(MessageHud.MessageType.TopLeft, "YAVSOS: categories are still initializing; category chests were skipped.");
+        GameText.Say(Message.Of("yavsos_azu_categories_pending"));
     }
 
     // ---- patches ----

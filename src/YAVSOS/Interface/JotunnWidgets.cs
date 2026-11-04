@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Jotunn.Managers;
 using UnityEngine;
@@ -225,6 +226,35 @@ internal sealed class JotunnWidgets
         return rect;
     }
 
+    /// <summary>
+    /// P10-25 (D132): a 2-px frame just outside <paramref name="target"/>, outside the layout and not catching the pointer:
+    /// the amber outline a refused control keeps until the next action. Hidden until the caller shows it.
+    /// </summary>
+    internal static GameObject Frame(RectTransform target, Color color)
+    {
+        const float Edge = 2, Out = 3;
+        var go = new GameObject("Refused", typeof(RectTransform), typeof(LayoutElement));
+        go.GetComponent<LayoutElement>().ignoreLayout = true;
+        var rect = (RectTransform)go.transform;
+        rect.SetParent(target, false);
+        rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one;
+        rect.offsetMin = new Vector2(-Out, -Out); rect.offsetMax = new Vector2(Out, Out);
+        // Left, right, bottom, top: anchored to one side each, Edge thick.
+        foreach (var (min, max, size) in new[] {
+            (new Vector2(0, 0), new Vector2(0, 1), new Vector2(Edge, 0)), (new Vector2(1, 0), new Vector2(1, 1), new Vector2(Edge, 0)),
+            (new Vector2(0, 0), new Vector2(1, 0), new Vector2(0, Edge)), (new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, Edge)) })
+        {
+            var side = new GameObject("Edge", typeof(RectTransform), typeof(Image));
+            var edge = (RectTransform)side.transform;
+            edge.SetParent(rect, false);
+            edge.anchorMin = min; edge.anchorMax = max; edge.pivot = new Vector2(min.x == max.x ? min.x : 0.5f, min.y == max.y ? min.y : 0.5f);
+            edge.sizeDelta = size; edge.anchoredPosition = Vector2.zero;
+            var image = side.GetComponent<Image>(); image.color = color; image.raycastTarget = false;
+        }
+        go.SetActive(false);
+        return go;
+    }
+
     /// <summary>A coloured strip with one line of text for a problem state (D071 banners); show or hide its parent object.</summary>
     internal Text Banner(Transform parent, string text, Color tint, Color color)
     {
@@ -374,26 +404,51 @@ internal sealed class JotunnWidgets
         return Mathf.Ceil(label.cachedTextGeneratorForLayout.GetPreferredHeight(string.Join("\n", new string[lines].Select(_ => "Ag")), settings));
     }
 
+    // B2-07: Fit's answers, so a spot redrawn on the panel's tick measures nothing new. Keyed on the label and its font
+    // size (one label's style is fixed once built), the text, the width and the lines; cleared when full.
+    private static readonly Dictionary<(int Label, int Size, string Text, float Width, int Lines), string> fitted = new();
+    private const int MaximumFitted = 128;
+
     /// <summary>
     /// <paramref name="text"/> cut at a word and ended with "…" so it fits <paramref name="lines"/> lines of
-    /// <paramref name="width"/> (D101: a message spot keeps its size; the whole text is in its tooltip).
+    /// <paramref name="width"/> (D101: a message spot keeps its size; the whole text is in its tooltip). Text without
+    /// spaces (CJK) is cut at a character, never inside a surrogate pair. Cached (B2-07).
     /// </summary>
     internal static string Fit(Text label, string text, float width, int lines)
     {
         if (text.Length == 0 || width <= 0) return text;
+        var key = (label.GetInstanceID(), label.fontSize, text, width, lines);
+        if (fitted.TryGetValue(key, out var done)) return done;
+        if (fitted.Count >= MaximumFitted) fitted.Clear();
+        return fitted[key] = Cut(label, text, width, lines);
+    }
+
+    private static string Cut(Text label, string text, float width, int lines)
+    {
         var settings = label.GetGenerationSettings(new Vector2(width, 0));
         settings.scaleFactor = 1; settings.verticalOverflow = VerticalWrapMode.Overflow;
         var limit = LinesHeight(label, lines) + 1;
         bool Fits(string candidate) => label.cachedTextGeneratorForLayout.GetPreferredHeight(candidate, settings) <= limit;
         if (Fits(text)) return text;
-        var cut = text;
-        while (cut.Length > 0)
+        // The places it may be cut, shortest first: within the first word (a character at a time), then before each later
+        // space. A longer cut never takes fewer lines, so a binary search finds the longest that fits (B2-07: a few
+        // TextGenerator calls instead of one per character for text without spaces).
+        var first = text.IndexOf(' ');
+        var word = first <= 0 ? text.Length : first;
+        var cuts = new List<int>();
+        for (var at = 1; at < word; at++)
+            if (!char.IsHighSurrogate(text[at - 1])) cuts.Add(at);
+        for (var at = word; at < text.Length; at++)
+            if (text[at] == ' ') cuts.Add(at);
+        string Shown(int at) => text.Substring(0, at).TrimEnd(',', '.', ':', ';') + "…";
+        int low = 0, high = cuts.Count - 1, best = -1;
+        while (low <= high)
         {
-            var space = cut.LastIndexOf(' ');
-            cut = space <= 0 ? cut.Substring(0, cut.Length - 1) : cut.Substring(0, space);
-            if (Fits(cut.TrimEnd(',', '.', ':', ';') + "…")) return cut.TrimEnd(',', '.', ':', ';') + "…";
+            var middle = (low + high) / 2;
+            if (Fits(Shown(cuts[middle]))) { best = middle; low = middle + 1; }
+            else high = middle - 1;
         }
-        return "…";
+        return best < 0 ? "…" : Shown(cuts[best]);
     }
 
     /// <summary>The width <paramref name="text"/> takes on one line in <paramref name="label"/>'s style, in layout units.</summary>
@@ -406,11 +461,13 @@ internal sealed class JotunnWidgets
 
     internal static void BlockInput(bool state) => GUIManager.BlockInput(state);
 
-    internal static void Clear(Transform content)
+    /// <param name="keep">A child that stays, such as a refused control's amber frame (<see cref="Frame"/>) on the cleared row.</param>
+    internal static void Clear(Transform content, GameObject? keep = null)
     {
         for (var i = content.childCount - 1; i >= 0; i--)
         {
             var child = content.GetChild(i).gameObject;
+            if (keep != null && child == keep) continue;
             child.SetActive(false); // Destroy waits for the frame end; keep it out of this frame's layout.
             UnityEngine.Object.Destroy(child);
         }

@@ -25,8 +25,8 @@ public sealed class StoreKeyWatch
 
     private readonly List<Entry> entries = new();
 
-    /// <summary>"Store key: stored 4 stacks (63 items) · 1 unconfirmed".</summary>
-    public CleanupReport Report { get; } = CleanupReport.ForStoreKey();
+    /// <summary>The stash key's result: "Stashed 4 stacks (63 items) · 1 unconfirmed (not retried)."</summary>
+    public RunReport Report { get; } = RunReport.ForStoreKey();
 
     /// <summary>Whether some stores still wait for their arrival.</summary>
     public bool Pending => entries.Any(x => !x.Done);
@@ -68,14 +68,14 @@ public sealed class StoreKeyWatch
         return !Pending;
     }
 
-    // Arrived units go to the stacks in store order; what is left of each stack is unconfirmed.
+    // Arrived units go to the stacks in store order, counted at their destination (X55); what is left of each stack is unconfirmed.
     private void Finish(Entry entry, int arrived)
     {
         entry.Done = true;
         foreach (var part in entry.Parts)
         {
             var moved = Math.Min(arrived, part.Units); arrived -= moved;
-            if (moved > 0) Report.Moved(moved, entry.ViaMuc, entry.Item, part.Stack);
+            if (moved > 0) Report.Moved(moved, entry.ViaMuc, entry.Item, part.Stack, entry.Destination);
             if (moved < part.Units) Report.Unconfirm(entry.ViaMuc, entry.Item);
         }
     }

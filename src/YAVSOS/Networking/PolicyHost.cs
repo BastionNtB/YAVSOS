@@ -26,6 +26,8 @@ internal sealed class PolicyHost : IDisposable
     private bool disposed;
     public PolicyLifecycle State { get; } = new PolicyLifecycle();
     public ZRpc? IncomingRpc => sessionCache.IncomingRpc;
+    /// <summary>X48 option C (D130): this game is the source of truth and just published a changed policy.</summary>
+    public event Action<CategoryPolicy>? Published;
 
     public PolicyHost(ConfigSync sync, string configDirectory, ManualLogSource log)
     {
@@ -171,7 +173,10 @@ internal sealed class PolicyHost : IDisposable
     {
         var result = State.ApplyLocal(payload);
         if (result == PolicyUpdate.Accepted && sync.IsSourceOfTruth && !ConfigSync.ProcessingServerUpdate)
+        {
             wirePolicy.Value = State.Local!.CanonicalXml;
+            Published?.Invoke(State.Local);
+        }
         else if (result == PolicyUpdate.Accepted && !sync.IsSourceOfTruth)
             wirePolicy.AssignLocalValue(State.Local!.CanonicalXml); // Restoration value only; no echo/broadcast.
         Report(result, "Local");

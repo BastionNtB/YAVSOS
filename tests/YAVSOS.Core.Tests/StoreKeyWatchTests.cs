@@ -25,7 +25,7 @@ public sealed class StoreKeyWatchTests
         world.Counts[("metal", "Copper")] = 50;
         Assert.True(watch.Observe(0, world.Count));
         Assert.Equal((1, 40, 0), (watch.Report.MovedStacks, watch.Report.MovedUnits, watch.Report.Unconfirmed));
-        Assert.Equal("Store key: stored 1 stack (40 items)", watch.Report.Summary());
+        Assert.Equal("Stashed 1 stack (40 items).", EnglishText.Of(watch.Report.Summary()));
     }
 
     [Fact]
@@ -38,7 +38,7 @@ public sealed class StoreKeyWatchTests
         Assert.Equal(0, watch.Report.MovedUnits + watch.Report.Unconfirmed);
         world.Counts[("bob", "Copper")] = 40;
         Assert.True(watch.Observe(0.5, world.Count));
-        Assert.Equal("Store key: stored 1 stack (40 items), 1 via MultiUserChest", watch.Report.Summary());
+        Assert.Equal("Stashed 1 stack (40 items), 1 via MultiUserChest.", EnglishText.Of(watch.Report.Summary()));
     }
 
     // R1's shape: Azu said "Stored", nothing arrived. Unconfirmed after the window, and not before.
@@ -51,7 +51,8 @@ public sealed class StoreKeyWatchTests
         Assert.False(watch.Observe(StoreKeyWatch.WindowSeconds - 1, world.Count));
         Assert.True(watch.Observe(StoreKeyWatch.WindowSeconds, world.Count));
         Assert.Equal((0, 1), (watch.Report.MovedUnits, watch.Report.Unconfirmed));
-        Assert.Equal("Store key: stored 0 stacks (0 items) · 1 unconfirmed", watch.Report.Summary());
+        Assert.Equal("Nothing stashed: 1 unconfirmed (not retried).", EnglishText.Of(watch.Report.Summary()));
+        Assert.Equal(RunKind.StoreKey, watch.Report.Kind);
     }
 
     [Fact]

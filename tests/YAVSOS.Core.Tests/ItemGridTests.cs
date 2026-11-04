@@ -5,6 +5,7 @@ using Xunit;
 using YAVSOS.Core.Catalog;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using static YAVSOS.Core.Tests.ClassificationContractFixture;
 
 namespace YAVSOS.Core.Tests;
@@ -110,8 +111,23 @@ public sealed class ItemGridTests
         Assert.Equal(GridMark.Always, ItemGrid.Next(GridMark.None));
         Assert.Equal(GridMark.Never, ItemGrid.Next(GridMark.Always));
         Assert.Equal(GridMark.None, ItemGrid.Next(GridMark.Never));
-        Assert.Contains("wins over chests that take it only by category", ItemGrid.MarkText(GridMark.Always, true));
-        Assert.Contains("no ticked category", ItemGrid.MarkText(GridMark.Always, false));
+        Assert.Contains("preferred over chests that accept it only by category", EnglishText.Of(ItemGrid.MarkText(GridMark.Always, true)));
+        Assert.Equal("Always here, although no ticked category accepts it.", EnglishText.Of(ItemGrid.MarkText(GridMark.Always, false)));
+        Assert.Equal("Never here, whatever the categories say.", EnglishText.Of(ItemGrid.MarkText(GridMark.Never, true)));
+        Assert.Equal("Accepted by this rule's categories.", EnglishText.Of(ItemGrid.MarkText(GridMark.None, true)));
+        Assert.Equal("Not accepted by this rule.", EnglishText.Of(ItemGrid.MarkText(GridMark.None, false)));
+        Assert.Equal("Click: Always → Never → clear.", EnglishText.Of(ItemGrid.ClickHint));
+    }
+
+    // P10-04: the group titles are plural messages with the count as a value; the marks' names come from their own keys.
+    [Fact]
+    public void Titles_NameEachGroupWithItsCount()
+    {
+        Assert.Equal("In this chest or your inventory (3)", EnglishText.Of(ItemGrid.Title(GridSection.Here, 3)));
+        Assert.Equal("Always or Never, outside the categories (1)", EnglishText.Of(ItemGrid.Title(GridSection.Marked, 1)));
+        Assert.Equal("Accepted by this rule (12)", EnglishText.Of(ItemGrid.Title(GridSection.Rule, 12)));
+        Assert.Equal("Other items (40)", EnglishText.Of(ItemGrid.Title(GridSection.Found, 40)));
+        Assert.Equal(Message.Of("yavsos_grid_rule").Count(12), ItemGrid.Title(GridSection.Rule, 12));
     }
 
     [Fact]

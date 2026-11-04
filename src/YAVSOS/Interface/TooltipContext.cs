@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using UnityEngine;
 using YAVSOS.Cleanup;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 
 namespace YAVSOS.Interface;
 
@@ -67,7 +68,7 @@ internal sealed class TooltipContext : IDisposable
 
     // A cheap signature of what an inventory holds and where: stack count, total units, and an order-free sum of each
     // stack's prefab, size, cell, quality and equipped state (equipped stacks and protected cells stay in place).
-    private static long Contents(Inventory? inventory)
+    internal static long Contents(Inventory? inventory)
     {
         if (inventory == null) return 0;
         long count = 0, units = 0, sum = 0;
@@ -100,12 +101,13 @@ internal sealed class TooltipContext : IDisposable
     internal void Fail() { failed = true; Dispose(); }
 
     internal ExplanationAnswer Stash(StashRunner runner, ItemDrop.ItemData item) =>
-        failed || stashSide == null ? Failed(item) : runner.Answer(stashSide, item);
+        failed || stashSide == null ? ExplanationAnswer.Without(Failed(item)) : runner.Answer(stashSide, item);
 
     internal ExplanationAnswer Cleanup(CleanupRunner runner, ItemDrop.ItemData item) =>
-        failed || cleanupSide == null ? Failed(item) : runner.Answer(cleanupSide, item);
+        failed || cleanupSide == null ? ExplanationAnswer.Without(Failed(item)) : runner.Answer(cleanupSide, item);
 
-    private static ExplanationAnswer Failed(ItemDrop.ItemData item) => ExplanationAnswer.Without(RuleControls.ItemName(item) + " can't be explained right now.");
+    /// <summary>The note when there is no answer because the gather or the answer failed; the caller logged a warning.</summary>
+    internal static Message Failed(ItemDrop.ItemData item) => Message.Of("yavsos_where_note_failed").With("item", RuleControls.ItemName(item));
 
     public void Dispose()
     {

@@ -13,13 +13,13 @@ public sealed class ClassificationRuleSetTests
         new ClassificationOverride(match, selector, OverrideOperation.Replace, new[] { category });
 
     [Fact]
-    public void FromSchema1_ExactAssignmentReplacesAutomaticMembershipsWithoutChangingDocument()
+    public void FromPolicy_ExactAssignmentReplacesAutomaticMembershipsWithoutChangingDocument()
     {
         var xml = CategoryPolicyCodecTests.Wrap("<category id=\"chosen\" displayName=\"Chosen\"/>",
             "<assignment match=\"exact\" selector=\"Sword\"><member category=\"chosen\"/></assignment>");
         Assert.True(CategoryPolicyCodec.TryParse(xml, out var policy, out var error), error);
         var canonical = policy!.CanonicalXml; var fingerprint = policy.Fingerprint;
-        var rules = ClassificationRuleSet.FromSchema1(policy);
+        var rules = ClassificationRuleSet.FromPolicy(policy);
         var item = Build(new[] { Item("Sword", "OneHandedWeapon", quest: true) }, rules).Items["Sword"];
         Assert.Equal(OverrideOperation.Replace, Assert.Single(rules.Overrides).Operation);
         Assert.Equal(new[] { "chosen" }, Categories(item)); Assert.Equal("chosen", item.Primary);

@@ -229,13 +229,13 @@ public sealed class StoreOrderTests
         var bread = input.Player.Stacks.First(x => x.Identity.Prefab == "Bread").Handle;
         var blocked = PlacementExplainer.Stash(input, copper, detail: false);
         Assert.Equal(PlacementOutcome.Blocked, blocked.Outcome);
-        Assert.Equal("Stash stack: AzuAutoStore's own settings decide (AzuAutoStore's config excludes it)",
-            ExplanationView.Tooltip(blocked, false, azuStores: true));
-        Assert.Equal("Stash stack: AzuAutoStore's own settings decide (no chest rule nearby takes it)",
-            ExplanationView.Tooltip(PlacementExplainer.Stash(input, bread, detail: false), false, azuStores: true));
+        Assert.Equal("Stash stack: AzuAutoStore's own settings decide (AzuAutoStore's exclusions keep it out)",
+            PlacementExplainerTests.Where(blocked, false, azuStores: true));
+        Assert.Equal("Stash stack: AzuAutoStore's own settings decide (no nearby chest's rule accepts it)",
+            PlacementExplainerTests.Where(PlacementExplainer.Stash(input, bread, detail: false), false, azuStores: true));
         var goes = world.Stash(azu: true);
-        Assert.Equal("Stash stack: a-metal (counts as Metals)",
-            ExplanationView.Tooltip(PlacementExplainer.Stash(goes, goes.Player.Stacks.First(x => x.Identity.Prefab == "Copper").Handle, detail: false), false,
-                id => id, azuStores: true));
+        Assert.Equal("Stash stack: a-metal 3 m away (counts as Metals)",
+            PlacementExplainerTests.Where(PlacementExplainer.Stash(goes, goes.Player.Stacks.First(x => x.Identity.Prefab == "Copper").Handle, detail: false), false,
+                id => ChestName.Away(id, 3), azuStores: true));
     }
 }

@@ -7,6 +7,7 @@ using UnityEngine;
 using YAVSOS.Cleanup;
 using YAVSOS.Core.Classification;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Integrations;
 using YAVSOS.Transfers;
 
@@ -19,8 +20,9 @@ namespace YAVSOS.Interface;
 /// the chest closes (<see cref="HighlightLinger"/>); the Items tab's search asks for the items its grid shows. VNEI 0.17.6 has no chest highlight or find-item API to adopt (decompiled
 /// 2026-10-20), so this is YAVSOS's own: a uniform colour through the game's <c>MaterialMan</c> property blocks, the
 /// mechanism of vanilla <c>WearNTear.Highlight</c>, set and reset by YAVSOS. Visual only: no ZDO, inventory or rule
-/// write. Rules are checked a few chests per frame, and at most <see cref="MaximumLit"/> chests are lit. Unity game
-/// thread only.
+/// write. The first scan judges <see cref="ChecksPerFrame"/> chests a frame; then, while the search is on, every chest
+/// found is judged again once a second in one frame (B2-03 measured that at 0.54 ms at most, 2026-11-03). At most
+/// <see cref="MaximumLit"/> chests are lit. Unity game thread only.
 /// </summary>
 internal sealed class ChestHighlight
 {
@@ -34,11 +36,15 @@ internal sealed class ChestHighlight
     private readonly List<Container> queue = new List<Container>();
     private readonly List<(Container Chest, GameObject Target, Kind Kind)> lit = new List<(Container, GameObject, Kind)>();
     private string category = "", key = "", holdsCategory = "", subject = "";
+    private int subjects;
     private bool withTakes;
     private readonly List<string> items = new List<string>();
     private readonly HashSet<string> wantedSet = new HashSet<string>(StringComparer.Ordinal);
     private readonly Dictionary<string, bool> inCategory = new Dictionary<string, bool>(StringComparer.Ordinal);
-    private readonly Dictionary<Container, (Kind Kind, string Why)> why = new Dictionary<Container, (Kind, string)>();
+    // The searched items' shown names, escaped for the label's rich text, looked up once per request (rechecks reuse them).
+    private readonly Dictionary<string, string> names = new Dictionary<string, string>(StringComparer.Ordinal);
+    // B2-06: why each chest is lit, as a message (data, not English); ChestLabels.WhyLine formats it.
+    private readonly Dictionary<Container, (Kind Kind, Message Why)> why = new Dictionary<Container, (Kind, Message)>();
     private readonly HighlightLinger linger = new HighlightLinger();
     private float nextRefresh, nextRecheck;
     /// <summary>The chests found so far for the current request, nearest first, with what lit them; read by the panel.</summary>
@@ -72,10 +78,12 @@ internal sealed class ChestHighlight
     /// Starts a new search for chests that hold or take <paramref name="focus"/> (a category, or "") or any of
     /// <paramref name="wanted"/> (at most <see cref="MaximumItems"/>). D122: <paramref name="holdsOf"/> is a category whose
     /// every member counts as held (a category search; its first members alone may miss some); <paramref name="takes"/>
-    /// also lights the chests whose rule would take a match; <paramref name="about"/> names the search for labels. The same
+    /// also lights the chests whose rules accept a match; <paramref name="about"/> is a category search's shown name (safe
+    /// for rich text) for the "Accepts …" label, while an item search names the items each chest accepts (X54). The same
     /// request while it is still on only holds it again, unless <paramref name="rescan"/> says a rule changed since (P6-13).
+    /// <paramref name="named"/> is how many names an item search shows (look-alike copies share one), for "this" or "these".
     /// </summary>
-    internal void Request(string focus, IReadOnlyList<string> wanted, bool rescan = false, string holdsOf = "", bool takes = false, string about = "")
+    internal void Request(string focus, IReadOnlyList<string> wanted, bool rescan = false, string holdsOf = "", bool takes = false, string about = "", int named = 0)
     {
         focus ??= ""; wanted ??= Array.Empty<string>(); holdsOf ??= "";
         var asked = focus + "\n" + holdsOf + "\n" + takes + "\n" + about + "\n" + string.Join("\n", wanted.Take(MaximumItems));
@@ -83,9 +91,9 @@ internal sealed class ChestHighlight
         Clear();
         var player = Player.m_localPlayer; var settings = Plugin.Instance?.Settings;
         if (!player || settings == null || focus.Length == 0 && wanted.Count == 0) return;
-        category = focus; key = asked; holdsCategory = holdsOf; withTakes = takes; subject = about ?? "";
+        category = focus; key = asked; holdsCategory = holdsOf; withTakes = takes; subject = about ?? ""; subjects = named;
         items.AddRange(wanted.Take(MaximumItems)); wantedSet.UnionWith(items);
-        // One scene query per request; rules are then read a few chests per frame in Update.
+        // One scene query per request; Update then judges ChecksPerFrame chests a frame (the recheck later does all at once).
         var started = UiCost.Start();
         queue.AddRange(CleanupRunner.Nearby(player!, settings.EffectiveCleanupRange).Take(256));
         UiCost.Stop("highlight scene query", started);
@@ -100,8 +108,8 @@ internal sealed class ChestHighlight
     internal void Clear()
     {
         Expire();
-        queue.Clear(); Found.Clear(); items.Clear(); wantedSet.Clear(); inCategory.Clear(); why.Clear();
-        category = key = holdsCategory = subject = ""; withTakes = false; linger.End();
+        queue.Clear(); Found.Clear(); items.Clear(); wantedSet.Clear(); inCategory.Clear(); names.Clear(); why.Clear();
+        category = key = holdsCategory = subject = ""; subjects = 0; withTakes = false; linger.End();
         Revision++;
     }
 
@@ -164,9 +172,9 @@ internal sealed class ChestHighlight
     // matches goes dark. Only a change is repainted.
     private void Judge(Plugin plugin, Container chest)
     {
-        (Kind Kind, string Why)? now = null;
+        (Kind Kind, Message Why)? now = null;
         if (Holds(plugin, chest) is { } held) now = (Kind.Holds, held);
-        else if (withTakes && Takes(plugin, chest)) now = (Kind.Takes, HighlightText.Takes(subject));
+        else if (withTakes && Takes(plugin, chest) is { } accepts) now = (Kind.Takes, accepts);
         var found = Found.FindIndex(x => ReferenceEquals(x.Chest, chest));
         var index = lit.FindIndex(x => ReferenceEquals(x.Chest, chest));
         if (now == null)
@@ -182,7 +190,8 @@ internal sealed class ChestHighlight
             return;
         }
         var (kind, reason) = now.Value;
-        if (found >= 0 && Found[found].Kind == kind && why.TryGetValue(chest, out var known) && known.Why == reason) return;
+        // B2-06: the same message (key and values) is no change, so the label and colour stay as they are.
+        if (found >= 0 && Found[found].Kind == kind && why.TryGetValue(chest, out var known) && known.Why.Equals(reason)) return;
         if (found >= 0) Found[found] = (chest, kind); else Found.Add((chest, kind));
         why[chest] = (kind, reason);
         if (index >= 0) { lit[index] = (chest, lit[index].Target, kind); PaintUnlessGlowing(lit[index].Target, kind); }
@@ -197,9 +206,9 @@ internal sealed class ChestHighlight
         Paint(target, kind);
     }
 
-    // D122: the label line when the chest holds a match ("holds Copper ×57 +1 more"), else null. Read from the chest's
+    // D122: the label line when the chest holds a match ("Holds Copper ×57 +1 more"), else null. Read from the chest's
     // inventory as the game has loaded it; a category search counts every member of the category.
-    private string? Holds(Plugin plugin, Container chest)
+    private Message? Holds(Plugin plugin, Container chest)
     {
         var inventory = chest.GetInventory();
         if (inventory == null) return null;
@@ -211,7 +220,13 @@ internal sealed class ChestHighlight
             first ??= prefab;
             if (prefab == first) count += item!.m_stack; else (kinds ??= new HashSet<string>(StringComparer.Ordinal)).Add(prefab);
         }
-        return first == null ? null : HighlightText.Holds(CleanupRunner.Name(first), count, kinds?.Count ?? 0);
+        return first == null ? null : HighlightText.Holds(NameOf(first), count, kinds?.Count ?? 0);
+    }
+
+    private string NameOf(string prefab)
+    {
+        if (!names.TryGetValue(prefab, out var name)) names[prefab] = name = Texts.Escape(GameText.ItemName(prefab));
+        return name;
     }
 
     private bool Member(Plugin plugin, string prefab)
@@ -222,8 +237,8 @@ internal sealed class ChestHighlight
         return inCategory[prefab] = result != null && result.Memberships.Any(x => plugin.RuleTaxonomy.IsAncestorOrSelf(holdsCategory, x.Category));
     }
 
-    /// <summary>D122: why the chest is lit by the current search ("holds Copper ×57", "takes Copper"), for its label; null when it isn't.</summary>
-    internal (Kind Kind, string Why)? Reason(Container chest) => Active && why.TryGetValue(chest, out var reason) ? reason : null;
+    /// <summary>D122: why the chest is lit by the current search ("Holds Copper ×57", "Accepts Copper"), for its label; null when it isn't.</summary>
+    internal (Kind Kind, Message Why)? Reason(Container chest) => Active && why.TryGetValue(chest, out var reason) ? reason : null;
 
     /// <summary>D122: the colour of a kind, from the player's settings, without alpha.</summary>
     internal static Color ColorOf(Kind kind)
@@ -233,20 +248,29 @@ internal sealed class ChestHighlight
         color.a = 1; return color;
     }
 
-    private bool Takes(Plugin plugin, Container chest)
+    // The "Accepts …" label line when the chest's rule accepts a match, else null. X54: an item search names the items
+    // this chest accepts ("Accepts Copper, Tin"); a category search names the category.
+    private Message? Takes(Plugin plugin, Container chest)
     {
         var payload = ChestRuleStore.Payload(chest);
-        if (payload.Length == 0) return false;
+        if (payload.Length == 0) return null;
         var taxonomy = plugin.RuleTaxonomy; var answers = plugin.CategoryAnswers;
+        var named = holdsCategory.Length != 0 ? HighlightText.Accepts(HighlightText.Names(new[] { subject })) : null;
         // P8-18 (Q14): an item search asks the rule itself (exact items, never-lists, filters), with filters on what a
         // stack is set aside, since a search has no stack; a category search compares categories.
         if (items.Count != 0 && answers != null)
         {
-            foreach (var item in items) if (plugin.RuleEvaluator.CouldAccept(payload, item, taxonomy, answers)) return true;
-            return false;
+            List<string>? accepted = null;
+            foreach (var item in items)
+            {
+                if (!plugin.RuleEvaluator.CouldAccept(payload, item, taxonomy, answers)) continue;
+                if (named != null) return named; // A category's members: the label names the category.
+                (accepted ??= new List<string>()).Add(NameOf(item));
+            }
+            return accepted == null ? null : HighlightText.Accepts(HighlightText.Names(accepted));
         }
         var rules = plugin.RuleEvaluator.Read(payload, taxonomy).Rules;
-        return RuleText.TakesCategory(rules, taxonomy, category);
+        return RuleText.TakesCategory(rules, taxonomy, category) ? named ?? HighlightText.Accepts(HighlightText.Names(new[] { subject })) : null;
     }
 
     /// <summary>
@@ -314,11 +338,11 @@ internal sealed class ChestHighlight
         Expire(); // Best effort: undo what was already painted; further failures are silent.
     }
 
-    /// <summary>D101 (C7), D122: "2 hold this · 1 more takes it", "No chest within 10 m holds this.", or nothing while the first chests are checked.</summary>
-    internal string Status() =>
+    /// <summary>D101 (C7), D122: "2 chests hold this · 1 more accepts it.", "No chest within 10 m holds this.", or null while the first chests are checked.</summary>
+    internal Message? Status() =>
         HighlightText.Status(Active, Found.Count(x => x.Kind == Kind.Holds), Found.Count(x => x.Kind == Kind.Takes), Scanning,
-            Plugin.Instance?.Settings.EffectiveCleanupRange ?? 0, category.Length == 0 && items.Count > 1, withTakes);
+            Plugin.Instance?.Settings.EffectiveCleanupRange ?? 0, category.Length != 0 ? 1 : subjects > 0 ? subjects : items.Count, withTakes);
 
     /// <summary>The chests found of one kind, nearest first, named by <paramref name="name"/>, for the status line's tooltip.</summary>
-    internal IReadOnlyList<string> Chests(Kind kind, Func<Container, string> name) => Found.Where(x => x.Chest && x.Kind == kind).Select(x => name(x.Chest)).ToList();
+    internal IReadOnlyList<Message> Chests(Kind kind, Func<Container, Message> name) => Found.Where(x => x.Chest && x.Kind == kind).Select(x => name(x.Chest)).ToList();
 }

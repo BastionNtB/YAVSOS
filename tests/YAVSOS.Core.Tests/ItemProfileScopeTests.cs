@@ -118,7 +118,7 @@ public sealed class ItemProfileScopeTests
     {
         var catalog = Catalog();
         Assert.True(CategoryPolicyCodec.TryParse(CategoryPolicyCodec.EmptyDocument, out var policy, out var error), error);
-        var classified = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromSchema1(policy!), LoadedSourceReceipt.Build(catalog, Array.Empty<LoadedSourceFact>()).Snapshot);
+        var classified = ClassificationPipeline.Build(catalog, ClassificationRuleSet.FromPolicy(policy!), LoadedSourceReceipt.Build(catalog, Array.Empty<LoadedSourceFact>()).Snapshot);
         var assignment = AuthoritativeAssignmentSnapshot.Create(catalog, classified, policy!);
         var decoded = AuthoritativeAssignmentsCodec.ParseWire(AuthoritativeAssignmentsCodec.ToWire(assignment), policy!);
         Assert.Equal(assignment.Fingerprint, decoded.Fingerprint);

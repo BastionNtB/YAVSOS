@@ -4,6 +4,7 @@ using BepInEx.Logging;
 using UnityEngine;
 using YAVSOS.Configuration;
 using YAVSOS.Core.Interface;
+using YAVSOS.Core.Messages;
 using YAVSOS.Integrations;
 
 namespace YAVSOS.Interface;
@@ -12,9 +13,9 @@ namespace YAVSOS.Interface;
 /// D121: shows where YAVSOS's own stash and cleanup put items. Each chest a move lands in plays the player's
 /// <c>ChestArrivalEffect</c> (a game effect prefab) and glows gold for <c>HighlightSecondsAfterClose</c> seconds
 /// (<see cref="ArrivalGlow{TKey}"/>), coloured through <see cref="ChestHighlight"/>, which owns chest painting and its
-/// D058 check. AzuAutoStore's store key keeps AzuAutoStore's own ping; YAVSOS adds nothing to it. D123: a chest cleanup
-/// left something in that the player can act on is lit in <c>StaysColor</c> for the same time, with no effect, and its
-/// label says why (<see cref="Stayed"/>).
+/// D058 check. AzuAutoStore's stash key keeps AzuAutoStore's own ping; YAVSOS adds nothing to it. D123: a chest where
+/// something stays after cleanup that the player can act on is lit in <c>StaysColor</c> for the same time, with no
+/// effect, and its label says why (<see cref="Stayed"/>; B2-06: kept as a message, formatted by ChestLabels).
 /// Visual and local only: the effect is created with the game's <c>ZNetView.m_forceDisableInit</c>, so it never becomes
 /// a networked object, and is destroyed after <see cref="EffectLifetime"/> seconds at most. No ZDO, inventory or rule
 /// write. A failure turns off only the part that failed. Unity game thread only.
@@ -27,7 +28,7 @@ internal sealed class ChestArrivals
     private readonly PluginSettings settings;
     private readonly ArrivalGlow<Container> glow = new();
     private readonly Dictionary<Container, GameObject> targets = new();
-    private readonly Dictionary<Container, string> kept = new();
+    private readonly Dictionary<Container, Message> kept = new();
     private bool effectsOff, glowOff;
     private string missing = "";
 
@@ -49,8 +50,8 @@ internal sealed class ChestArrivals
         catch (Exception error) when (OptionalFailure.Recoverable(error)) { log.LogWarning("Chest arrival effect failed: " + error.GetType().Name + ": " + error.Message); }
     }
 
-    /// <summary>D123: cleanup left items in the chest because no chest takes them or those chests are full; <paramref name="why"/> is its label line.</summary>
-    internal void Stayed(Container chest, string why)
+    /// <summary>D123: items stay in the chest after cleanup because no chest accepts them or those chests are full; <paramref name="why"/> is its label line.</summary>
+    internal void Stayed(Container chest, Message why)
     {
         try
         {
@@ -64,8 +65,8 @@ internal sealed class ChestArrivals
         catch (Exception error) when (OptionalFailure.Recoverable(error)) { log.LogWarning("Chest stays mark failed: " + error.GetType().Name + ": " + error.Message); }
     }
 
-    /// <summary>D123: why a chest cleanup left something in is lit, for its label; null otherwise.</summary>
-    internal (ChestHighlight.Kind Kind, string Why)? Reason(Container chest) =>
+    /// <summary>D123: why a chest where something stays after cleanup is lit, for its label; null otherwise.</summary>
+    internal (ChestHighlight.Kind Kind, Message Why)? Reason(Container chest) =>
         kept.TryGetValue(chest, out var why) && glow.Light(chest, Time.unscaledTime) != null ? (ChestHighlight.Kind.Stays, why) : null;
 
     /// <summary>The glow is colouring this chest now; the search highlight leaves it alone until the glow ends.</summary>

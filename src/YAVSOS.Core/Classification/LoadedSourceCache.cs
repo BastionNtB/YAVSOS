@@ -11,9 +11,9 @@ public enum LoadedSourceState { Offline, Pending, Capturing, Building, Ready, Fa
 
 /// <summary>
 /// Single main-thread capture and single detached worker; invalidation withdraws accepted evidence immediately. A failed
-/// capture or build is tried again a bounded number of times after a pause: another mod can still be changing its
+/// capture or build is tried again a few times after a short pause: another mod can still be changing its
 /// registries (EpicLoot applying the server's files on join, runtime 2026-10-21), and no evidence is accepted from the
-/// failed attempt.
+/// failed attempt. After those, it keeps trying with a growing pause (D144, <see cref="StageRetry"/>).
 /// </summary>
 public sealed class LoadedSourceCache : IDisposable
 {
@@ -28,24 +28,33 @@ public sealed class LoadedSourceCache : IDisposable
     private long revision, workerRevision;
     private CatalogSnapshot? workerCatalog;
     private bool active;
-    private double started;
-    private int bytes, attempts;
-    private readonly int retries;
-    private readonly double retryMilliseconds;
-    private double retryAt;
+    // D144: the capture's limit counts only time spent capturing; the build's limit starts with the build.
+    private double started, working, buildStarted;
+    public const double CaptureWallMilliseconds = 600_000;
+    private int bytes;
+    private readonly StageRetry retry;
     public LoadedSourceState State { get; private set; }
     public LoadedSourceReceipt? Current { get; private set; }
     public string Diagnostic { get; private set; } = "No active source session.";
     public long Revision => revision;
     public double MaximumStepMilliseconds { get; private set; }
+    // D144: where the time went for the last ready result, for the log line (capture work, capture elapsed, build).
+    public double LastCaptureWorkMilliseconds { get; private set; }
+    public double LastCaptureElapsedMilliseconds { get; private set; }
+    public double LastBuildMilliseconds { get; private set; }
+    private void RecordTiming()
+    {
+        LastCaptureWorkMilliseconds = working; LastCaptureElapsedMilliseconds = buildStarted - started;
+        LastBuildMilliseconds = clock() - buildStarted;
+    }
     /// <summary>Failed attempts since the inputs last changed; the last one is in <see cref="Diagnostic"/>.</summary>
-    public int Retries => attempts;
+    public int Retries => retry.Attempts;
     public LoadedSourceCache(LoadedSourceLimits? limits = null,
         Func<CatalogSnapshot, IReadOnlyList<LoadedSourceFact>, CancellationToken, Task<LoadedSourceReceipt>>? build = null,
         Func<double>? milliseconds = null, int retries = 0, double retrySeconds = 3)
     {
         if (retries < 0 || retries > 10 || double.IsNaN(retrySeconds) || retrySeconds < 0 || retrySeconds > 60) throw new ArgumentOutOfRangeException(nameof(retries));
-        this.retries = retries; retryMilliseconds = retrySeconds * 1000;
+        retry = new StageRetry(retries, retrySeconds, 1000);
         this.limits = limits ?? new LoadedSourceLimits();
         this.build = build ?? ((loaded, facts, token) => Task.Run(() => LoadedSourceReceipt.Build(loaded, facts, this.limits, token), token));
         clock = milliseconds ?? (() => Stopwatch.GetTimestamp() * (1000d / Stopwatch.Frequency));
@@ -59,7 +68,7 @@ public sealed class LoadedSourceCache : IDisposable
     }
     public void Invalidate()
     {
-        revision++; Current = null; cancellation?.Cancel(); attempts = 0; retryAt = 0;
+        revision++; Current = null; cancellation?.Cancel(); retry.Reset();
         var cleanup = ReleaseCapture(); State = active ? LoadedSourceState.Pending : LoadedSourceState.Offline;
         Diagnostic = active ? "Fresh loaded source inputs pending." : "No active source session.";
         if (cleanup != null && active) { State = LoadedSourceState.Failed; Diagnostic = "Source cleanup failed: " + cleanup.Message; }
@@ -71,7 +80,7 @@ public sealed class LoadedSourceCache : IDisposable
         {
             if (!worker.IsCompleted)
             {
-                if (State == LoadedSourceState.Building && clock() - started >= limits.BuildSeconds * 1000)
+                if (State == LoadedSourceState.Building && clock() - buildStarted >= limits.BuildSeconds * 1000)
                     Fail("Loaded source build deadline exceeded.");
                 return;
             }
@@ -80,26 +89,32 @@ public sealed class LoadedSourceCache : IDisposable
                 var candidate = worker.GetAwaiter().GetResult();
                 if (active && State == LoadedSourceState.Building && workerRevision == revision && ReferenceEquals(workerCatalog, catalog))
                 {
-                    if (clock() - started >= limits.BuildSeconds * 1000) Fail("Loaded source build deadline exceeded.");
+                    if (clock() - buildStarted >= limits.BuildSeconds * 1000) Fail("Loaded source build deadline exceeded.");
                     else if (candidate.Snapshot.CatalogFingerprint != catalog!.Fingerprint) Fail("Source worker returned a different catalog binding.");
-                    else { Current = candidate; State = LoadedSourceState.Ready; Diagnostic = "Fresh bounded loaded-definition receipt ready; coverage is partial."; }
+                    else { RecordTiming(); Current = candidate; State = LoadedSourceState.Ready; Diagnostic = "Fresh bounded loaded-definition receipt ready; coverage is partial."; }
                 }
             }
             catch (Exception error) { if (State == LoadedSourceState.Building && workerRevision == revision) Fail(error.GetType().Name + ": " + error.Message); }
             finally { worker = null; workerCatalog = null; cancellation!.Dispose(); cancellation = null; }
         }
-        if (!active || catalog == null || State is LoadedSourceState.Ready or LoadedSourceState.Failed) return;
+        if (!active || catalog == null || State == LoadedSourceState.Ready) return;
+        if (State == LoadedSourceState.Failed)
+        {
+            if (!retry.Take(clock())) return;
+            State = LoadedSourceState.Pending; Diagnostic = "Trying again after a failure; fresh loaded source inputs pending.";
+        }
         try
         {
             var sliceStart = clock();
             if (State == LoadedSourceState.Pending)
             {
-                if (sliceStart < retryAt) return;
+                if (retry.Scheduled && !retry.Take(sliceStart)) return;
                 var source = open(); if (source == null) return;
-                started = sliceStart; rows = new List<LoadedSourceFact>(); bytes = 0;
+                started = sliceStart; working = 0; rows = new List<LoadedSourceFact>(); bytes = 0;
                 reader = source.GetEnumerator(); State = LoadedSourceState.Capturing;
             }
-            if (clock() - started >= limits.BuildSeconds * 1000) { Fail("Loaded source build deadline exceeded."); return; }
+            if (working >= limits.BuildSeconds * 1000) { Fail($"Loaded source capture deadline exceeded ({limits.BuildSeconds:0.#} s of capture work)."); return; }
+            if (sliceStart - started >= CaptureWallMilliseconds) { Fail("Loaded source capture deadline exceeded (10 min since the capture started)."); return; }
             for (var step = 0; step < limits.StepsPerTick && clock() - sliceStart < limits.SliceMilliseconds; step++)
             {
                 var stepStart = clock(); var more = reader!.MoveNext();
@@ -115,11 +130,12 @@ public sealed class LoadedSourceCache : IDisposable
                 {
                     var detached = rows!.AsReadOnly(); var cleanup = ReleaseCapture(); if (cleanup != null) throw cleanup;
                     cancellation = new CancellationTokenSource(); workerRevision = revision; workerCatalog = catalog;
-                    State = LoadedSourceState.Building;
+                    State = LoadedSourceState.Building; buildStarted = clock();
                     worker = build(catalog, detached, cancellation.Token) ?? throw new InvalidOperationException("Source worker was not created.");
                     break;
                 }
             }
+            working += clock() - sliceStart;
         }
         catch (Exception error) { Fail(error.GetType().Name + ": " + error.Message); }
     }
@@ -133,9 +149,9 @@ public sealed class LoadedSourceCache : IDisposable
         cancellation?.Cancel(); if (worker == null) { cancellation?.Dispose(); cancellation = null; }
         var cleanup = ReleaseCapture(); Current = null; State = LoadedSourceState.Failed;
         Diagnostic = message + (cleanup == null ? "" : " Cleanup: " + cleanup.Message);
-        if (!active || cleanup != null || attempts >= retries) return;
-        attempts++; retryAt = clock() + retryMilliseconds; State = LoadedSourceState.Pending;
-        Diagnostic += $" Trying again in {retryMilliseconds / 1000:0.#} s ({attempts} of {retries}).";
+        if (!active || cleanup != null) { retry.Hold(); return; }
+        Diagnostic += retry.Schedule(clock());
+        if (!retry.Slow) State = LoadedSourceState.Pending; // Quick retry; a slow one waits in Failed, shown as given up (D087).
     }
     public void Dispose()
     {

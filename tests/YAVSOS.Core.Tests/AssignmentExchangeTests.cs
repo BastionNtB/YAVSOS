@@ -77,7 +77,7 @@ public sealed class AssignmentExchangeTests
         cache.BeginSession(false); Assert.Null(cache.Current);
     }
     [Fact]
-    public void Exchange_DeadlineWithdrawsCompletedResultAndDoesNotRetryUntilInvalidated()
+    public void Exchange_DeadlineWithdrawsCompletedResultAndRetriesOnlyAfterAPause()
     {
         var (catalog, policy, classified) = Inputs(); double now = 0; var calls = 0;
         var job = new TaskCompletionSource<AssignmentPublication>(); CancellationToken token = default;
@@ -85,8 +85,13 @@ public sealed class AssignmentExchangeTests
         cache.BeginSession(true); cache.SetInputs(true, catalog, policy, classified); cache.Tick();
         job.SetResult(new AssignmentPublication(AuthoritativeAssignmentSnapshot.Create(catalog, classified, policy), "wire"));
         now = 10; cache.Tick(); Assert.Null(cache.Current); Assert.True(token.IsCancellationRequested);
-        Assert.Contains("deadline", cache.Diagnostic); cache.Tick(); Assert.Equal(1, calls);
-        cache.Invalidate(); cache.Tick(); Assert.Equal(2, calls);
+        Assert.Contains("deadline", cache.Diagnostic); Assert.True(cache.Faulted); cache.Tick(); Assert.Equal(1, calls);
+        // D144 (issue #4): the same input is tried again after a growing pause, and a success clears the fault.
+        Assert.Contains("Trying again in 60 s (failure 1)", cache.Diagnostic);
+        now = 69.9; cache.Tick(); Assert.Equal(1, calls);
+        now = 70; cache.Tick(); Assert.Equal(2, calls); cache.Tick();
+        Assert.NotNull(cache.Current); Assert.False(cache.Faulted); Assert.Equal("Authoritative assignments validated.", cache.Diagnostic);
+        cache.Invalidate(); cache.Tick(); Assert.Equal(3, calls);
     }
     [Fact]
     public void Exchange_IdenticalInputsAndIdleTicksReuseOnePublication()

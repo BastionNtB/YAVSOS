@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.1 (2026-11-05)
+
+### Fixed
+
+- A busy dedicated server no longer runs out of time while it loads categories, which could leave them "still loading" for good and chests taking only their Always items and items they already held. Update YAVSOS on the server to get the fix; players can keep 1.2.0.
+- If loading the categories fails, the server now tries again after a minute, then at longer intervals, up to 5 minutes apart. Before, it waited for a restart, which could fail the same way.
+
+### Changed
+
+- When YAVSOS can't build the categories, the panel's message now ends "YAVSOS tries again every few minutes."
+
 ## 1.2.0 (2026-11-04)
 
 ### Changed

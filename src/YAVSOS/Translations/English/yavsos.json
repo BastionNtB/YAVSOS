@@ -323,7 +323,7 @@
   "yavsos_mark_azu_rules_broken": "AzuAutoStore changed, so YAVSOS can't apply chest rules to AzuAutoStore's stash key. AzuAutoStore keeps working on its own.",
   "yavsos_mark_categories_from_game": "This game's own category settings apply.",
   "yavsos_mark_categories_from_server": "The server's category settings apply.",
-  "yavsos_mark_categories_gave_up": "YAVSOS couldn't build the categories, so categories in rules accept nothing (see the log). Always and Never items still work. YAVSOS tries again when mods or settings change.",
+  "yavsos_mark_categories_gave_up": "YAVSOS couldn't build the categories, so categories in rules accept nothing (see the log). Always and Never items still work. YAVSOS tries again every few minutes.",
   "yavsos_mark_categories_loading": "Categories are still loading. Always and Never items already work; categories work once they're ready.",
   "yavsos_mark_categories_name": "Categories",
   "yavsos_mark_categories_ready_one": "{{count}} item is sorted into categories.",

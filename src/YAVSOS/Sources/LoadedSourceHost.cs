@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using BepInEx.Logging;
 using UnityEngine;
+using YAVSOS.Core;
 using YAVSOS.Core.Catalog;
 using YAVSOS.Core.Classification;
 using YAVSOS.Integrations;
@@ -15,6 +16,7 @@ internal sealed class LoadedSourceHost : IDisposable
 {
     private const int MaxRoots = 32768, MaxNestedEntries = 256;
     private readonly LoadedSourceCache cache;
+    private readonly RestartWatch restarts = new RestartWatch("Loaded sources"); // D144: no silent restart loop.
     private ObjectDB? ordinaryDb;
     private readonly OptionalDefinitionWork optionalWork = new();
     private readonly ManualLogSource log;
@@ -44,14 +46,19 @@ internal sealed class LoadedSourceHost : IDisposable
     {
         active = isActive; ordinaryDb = null; catalog = null; scene = null;
         prefabs = null; optional = null; store = null; currency = null;
-        cache.BeginSession(isActive); reported = cache.State;
+        cache.BeginSession(isActive); reported = cache.State; restarts.Reset();
     }
     // In-place definition edits must call this after their complete registration transaction.
-    internal void Invalidate() => cache.Invalidate();
+    internal void Invalidate() { NoteRestart("the item registry was updated"); cache.Invalidate(); }
+    // D144: only work in progress that is thrown away counts; pending or finished sources lose nothing.
+    private void NoteRestart(string why)
+    {
+        if (cache.State is LoadedSourceState.Capturing or LoadedSourceState.Building) restarts.Restarted(Time.realtimeSinceStartupAsDouble, why);
+    }
     /// <summary>P6-14: EpicLoot is installed and its verified reader works, so its rarity filter can apply.</summary>
     internal bool EpicLootRarityOffered => optional != null && optional.EpicLoot.State == OptionalCapabilityState.Supported;
     internal OptionalCapabilityState EpicLootState => optional?.EpicLoot.State ?? OptionalCapabilityState.Absent;
-    /// <summary>Loaded sources gave up for their current inputs after their retries (D086 B5.36): the reason, else null.</summary>
+    /// <summary>Loaded sources failed their quick retries (D086 B5.36) and wait for a slow one (D144): the reason, else null.</summary>
     internal string? GaveUp => active && cache.State == LoadedSourceState.Failed ? cache.Diagnostic : null;
     // P6-07b filters: empty means plain (EpicLoot absent, or verifiably no magic item); a reader that is not ready or
     // cannot read this instance gives an Unreadable row, so a "plain" rule never takes an item it could not check.
@@ -64,6 +71,7 @@ internal sealed class LoadedSourceHost : IDisposable
     internal void Update(CatalogSnapshot? loaded)
     {
         optionalWork.ReapRetired();
+        if (!ReferenceEquals(catalog, loaded)) NoteRestart("the item catalog changed");
         catalog = loaded; cache.SetCatalog(loaded);
         if (active)
         {
@@ -73,12 +81,20 @@ internal sealed class LoadedSourceHost : IDisposable
             if (!ReferenceEquals(ordinaryDb, db) || !ReferenceEquals(scene, net) || !ReferenceEquals(prefabs, definitions) ||
                 prefabCount != (definitions?.Count ?? 0) || !ReferenceEquals(store, nextStore) || !ReferenceEquals(currency, nextCurrency))
             {
+                NoteRestart(!ReferenceEquals(ordinaryDb, db) ? "the item database was replaced"
+                    : !ReferenceEquals(scene, net) ? "the prefab registry was replaced"
+                    : prefabCount != (definitions?.Count ?? 0) ? $"the prefab count changed ({prefabCount} → {definitions?.Count ?? 0})"
+                    : !ReferenceEquals(prefabs, definitions) ? "the prefab list was replaced" : "the trader or its currency changed");
                 ordinaryDb = db; scene = net; prefabs = definitions; prefabCount = definitions?.Count ?? 0;
                 store = nextStore; currency = nextCurrency; cache.Invalidate();
             }
         }
         cache.Tick(open);
-        if (cache.Retries > reportedRetries) log.LogWarning("Fresh loaded sources rejected: " + cache.Diagnostic);
+        var stalled = restarts.Poll(Time.realtimeSinceStartupAsDouble);
+        if (stalled != null) log.LogWarning(stalled);
+        // One warning per failure, also after the count restarted for new inputs (D144: retries no longer stop).
+        var failed = cache.Retries != reportedRetries && cache.Retries > 0;
+        if (failed) log.LogWarning("Fresh loaded sources rejected: " + cache.Diagnostic);
         reportedRetries = cache.Retries;
         if (reported == cache.State) return;
         reported = cache.State;
@@ -87,14 +103,17 @@ internal sealed class LoadedSourceHost : IDisposable
             var receipt = cache.Current!;
             log.LogInfo($"Fresh loaded sources: {receipt.Facts.Count} detached facts, " +
                 $"{receipt.Snapshot.Routes.Count} routes, {receipt.ScalarBytes} UTF-8 scalar bytes, maximum capture step {cache.MaximumStepMilliseconds:F3} ms, " +
+                $"capture {cache.LastCaptureWorkMilliseconds:F0} ms of work over {cache.LastCaptureElapsedMilliseconds / 1000:F1} s, build {cache.LastBuildMilliseconds:F0} ms, " +
                 $"SHA-256 {receipt.Snapshot.Fingerprint}.");
             // D087: evidence rows skipped one by one (D086 D3) are named once, for the mod that supplies them.
             foreach (var gap in receipt.Coverage)
                 if (gap.EndsWith("; skipped", StringComparison.Ordinal) && malformedReported.Add(gap))
                     log.LogWarning("Loaded sources: " + gap + ". Only this evidence is missing; report it to the mod that adds the item.");
             ReportCapture(optional);
+            var finished = restarts.Finished(Time.realtimeSinceStartupAsDouble);
+            if (finished != null) log.LogInfo(finished);
         }
-        else if (reported == LoadedSourceState.Failed) log.LogWarning("Fresh loaded sources rejected: " + cache.Diagnostic);
+        else if (reported == LoadedSourceState.Failed && !failed) log.LogWarning("Fresh loaded sources rejected: " + cache.Diagnostic);
     }
     private IEnumerable<LoadedSourceFact?>? OpenOrdinaryCapture() => catalog != null && ordinaryDb && scene && prefabs != null
         ? CaptureOrdinary(catalog, ordinaryDb, scene, prefabs) : null;

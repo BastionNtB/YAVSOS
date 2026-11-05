@@ -43,12 +43,20 @@ body:
   - type: textarea
     id: log
     attributes:
-      label: Log file
+      label: Your log file
       description: |
         Drag `BepInEx/LogOutput.log` into this box (it's in your game folder or mod manager profile).
         Upload it right after the problem happens, before you restart the game.
     validations:
       required: true
+  - type: textarea
+    id: server-log
+    attributes:
+      label: Server log file (dedicated servers)
+      description: |
+        If you play on a dedicated server, add its log too: the server sorts items into categories, so some problems show up only in its log.
+        Drag the server's `BepInEx/LogOutput.log` into this box. On a rented server, download it with the host's file manager. If you don't run the server, ask its admin for the file.
+        Get it before the server restarts, because a restart replaces it.
   - type: textarea
     id: mods
     attributes:

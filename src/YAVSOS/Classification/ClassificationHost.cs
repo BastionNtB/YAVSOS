@@ -22,7 +22,7 @@ internal sealed class ClassificationHost : IDisposable
     private readonly HashSet<string> skippedReported = new(StringComparer.Ordinal);
     internal ClassifiedCatalog? Current => InputsAreCurrent() ? cache.Current : null;
     internal long Revision => cache.Revision;
-    /// <summary>The classification build failed for its current inputs (D087): the reason, else null.</summary>
+    /// <summary>The classification build failed (D087) and waits for its next retry (D144): the reason, else null.</summary>
     internal string? GaveUp => cache.State == ClassificationState.Failed ? cache.Diagnostic : null;
     internal ClassificationHost(Action<string> info, Action<string> warning, PolicyLifecycle policy, Func<CatalogSnapshot?> getCatalog, ClassificationCache? cache = null,
         Func<ClassificationSourceSnapshot?>? getSources = null, bool requireSources = false)

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using BepInEx.Logging;
 using UnityEngine;
+using YAVSOS.Core;
 using YAVSOS.Core.Catalog;
 
 namespace YAVSOS.Catalog;
@@ -12,8 +13,9 @@ namespace YAVSOS.Catalog;
 internal sealed class LoadedCatalogHost : IDisposable
 {
     private readonly CatalogCache cache = new CatalogCache(retries: 3, retrySeconds: 3); // D086 B5.36: as loaded sources.
+    private readonly RestartWatch restarts = new RestartWatch("The item catalog"); // D144: no silent restart loop.
     private int reportedRetries;
-    /// <summary>The catalog gave up for its current inputs (D086 B5.36): the reason, else null.</summary>
+    /// <summary>The catalog failed its quick retries (D086 B5.36) and waits for a slow one (D144): the reason, else null.</summary>
     internal string? GaveUp => active && cache.GaveUp ? cache.Diagnostic : null;
     private readonly ManualLogSource log;
     private readonly Func<IEnumerable<CatalogFact?>?> open;
@@ -29,10 +31,15 @@ internal sealed class LoadedCatalogHost : IDisposable
     internal void BeginSession(bool isActive)
     {
         active = isActive; database = null; itemList = null; recipeList = null;
-        cache.BeginSession(isActive); reported = cache.State;
+        cache.BeginSession(isActive); reported = cache.State; restarts.Reset();
     }
 
-    internal void Invalidate() => cache.Invalidate();
+    internal void Invalidate() { NoteRestart("the item registry was updated"); cache.Invalidate(); }
+    // D144: only work in progress that is thrown away counts; a pending or finished catalog loses nothing.
+    private void NoteRestart(string why)
+    {
+        if (cache.State is CatalogState.Capturing or CatalogState.Building) restarts.Restarted(Time.realtimeSinceStartupAsDouble, why);
+    }
 
     internal void Update()
     {
@@ -42,19 +49,32 @@ internal sealed class LoadedCatalogHost : IDisposable
         if (!ReferenceEquals(database, db) || !ReferenceEquals(itemList, items) || !ReferenceEquals(recipeList, recipes) ||
             itemCount != (items?.Count ?? 0) || recipeCount != (recipes?.Count ?? 0))
         {
+            NoteRestart(!ReferenceEquals(database, db) ? "the item database was replaced"
+                : itemCount != (items?.Count ?? 0) ? $"the item count changed ({itemCount} → {items?.Count ?? 0})"
+                : recipeCount != (recipes?.Count ?? 0) ? $"the recipe count changed ({recipeCount} → {recipes?.Count ?? 0})"
+                : "the item or recipe list was replaced");
             database = db; itemList = items; recipeList = recipes;
             itemCount = items?.Count ?? 0; recipeCount = recipes?.Count ?? 0;
             cache.Invalidate();
         }
         cache.Tick(open);
-        if (cache.Retries > reportedRetries) log.LogWarning("Loaded catalog rejected: " + cache.Diagnostic);
+        var stalled = restarts.Poll(Time.realtimeSinceStartupAsDouble);
+        if (stalled != null) log.LogWarning(stalled);
+        // One warning per failure, also after the count restarted for new inputs (D144: retries no longer stop).
+        var failed = cache.Retries != reportedRetries && cache.Retries > 0;
+        if (failed) log.LogWarning("Loaded catalog rejected: " + cache.Diagnostic);
         reportedRetries = cache.Retries;
         if (reported == cache.State) return;
         reported = cache.State;
         if (reported == CatalogState.FactsReady)
+        {
             log.LogInfo($"Loaded catalog: {cache.Current!.Items.Count} items, {cache.Current.Recipes.Count} recipes, " +
-                $"{cache.Current.ScalarBytes} UTF-8 scalar bytes, SHA-256 {cache.Current.Fingerprint}. Classification pending.");
-        else if (reported == CatalogState.Failed) log.LogWarning("Loaded catalog rejected: " + cache.Diagnostic);
+                $"{cache.Current.ScalarBytes} UTF-8 scalar bytes, SHA-256 {cache.Current.Fingerprint}. " +
+                $"Capture {cache.LastCaptureWorkMilliseconds:F0} ms of work over {cache.LastCaptureElapsedMilliseconds / 1000:F1} s, build {cache.LastBuildMilliseconds:F0} ms. Classification pending.");
+            var finished = restarts.Finished(Time.realtimeSinceStartupAsDouble);
+            if (finished != null) log.LogInfo(finished);
+        }
+        else if (reported == CatalogState.Failed && !failed) log.LogWarning("Loaded catalog rejected: " + cache.Diagnostic);
     }
 
     private IEnumerable<CatalogFact?>? OpenCapture() => database && itemList != null && recipeList != null && itemCount > 0

@@ -112,11 +112,27 @@ public sealed class ClassificationCacheTests
         for(var i=0;i<10;i++)cache.Tick();Assert.Equal(1,calls);Assert.Null(cache.Current);
     }
 
+    // D144 (issue #4): a failed or timed-out build is tried again for the same inputs after a growing pause.
+    [Fact]
+    public void Cache_FailedBuildIsTriedAgainAfterAPause()
+    {
+        double now=0; var calls=0; var catalog=CatalogSnapshot.Build(new[]{Item()});
+        using var cache=new ClassificationCache((c,r,s,t)=>++calls==1
+            ?Task.FromException<ClassifiedCatalog>(new InvalidOperationException("busy host"))
+            :Task.FromResult(ClassificationPipeline.Build(c,r,s,t)),()=>now);
+        cache.BeginSession(true);cache.SetInputs(catalog,Rules());cache.Tick();cache.Tick();
+        Assert.Equal(ClassificationState.Failed,cache.State);Assert.Contains("Trying again in 60 s (failure 1)",cache.Diagnostic);
+        now=59999;cache.Tick();Assert.Equal(1,calls);
+        now=60000;cache.Tick();cache.Tick();
+        Assert.Equal(2,calls);Assert.Equal(ClassificationState.Ready,cache.State);Assert.NotNull(cache.Current);
+        cache.Invalidate();Assert.Equal(0,cache.Retries);
+    }
+
     [Theory]
     [InlineData("synchronous")]
     [InlineData("worker")]
     [InlineData("null-task")]
-    public void Cache_FailuresRemainClosedAndExplicitInvalidationRecovers(string kind)
+    public void Cache_FailuresWaitForTheirRetryAndExplicitInvalidationRecovers(string kind)
     {
         var calls=0;var catalog=CatalogSnapshot.Build(new[]{Item()});
         using var cache=new ClassificationCache((c,r,s,t)=>{

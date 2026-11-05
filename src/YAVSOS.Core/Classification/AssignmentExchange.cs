@@ -15,7 +15,10 @@ public sealed class AssignmentPublication
     { Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot)); Wire = wire ?? throw new ArgumentNullException(nameof(wire)); }
 }
 
-/// <summary>One serial detached codec worker, one latest input, no network or mutation authority.</summary>
+/// <summary>
+/// One serial detached codec worker, one latest input, no network or mutation authority. A rejected or timed-out input
+/// is tried again with a growing pause (D144, <see cref="StageRetry"/>) until it succeeds or the input changes.
+/// </summary>
 public sealed class AssignmentExchange : IDisposable
 {
     private readonly Func<Func<AssignmentPublication>, CancellationToken, Task<AssignmentPublication>> schedule;
@@ -30,9 +33,12 @@ public sealed class AssignmentExchange : IDisposable
     private double started;
     private Task<AssignmentPublication>? worker;
     private CancellationTokenSource? cancellation;
+    private readonly StageRetry retry = new StageRetry(0, 0, 1);
+    /// <summary>Failed attempts since the input last changed.</summary>
+    public int Retries => retry.Attempts;
     public AssignmentPublication? Current { get; private set; }
     public string Diagnostic { get; private set; } = "Authoritative assignments pending.";
-    /// <summary>The latest input was rejected or exceeded its deadline; cleared by the next input.</summary>
+    /// <summary>The latest input was rejected or exceeded its deadline; cleared by the next input or a successful retry.</summary>
     public bool Faulted { get; private set; }
     public long Revision => revision;
     public AssignmentExchange(Func<Func<AssignmentPublication>, CancellationToken, Task<AssignmentPublication>>? schedule = null,
@@ -50,7 +56,7 @@ public sealed class AssignmentExchange : IDisposable
     }
     public void Invalidate()
     {
-        revision++; Current = null; Faulted = false; pending = active && catalog != null && policy != null && (server || wire.Length != 0); cancellation?.Cancel();
+        revision++; Current = null; Faulted = false; retry.Reset(); pending = active && catalog != null && policy != null && (server || wire.Length != 0); cancellation?.Cancel();
         Diagnostic = "Authoritative assignments pending.";
     }
     public void SetInputs(bool isServer, CatalogSnapshot? nextCatalog, CategoryPolicy? nextPolicy,
@@ -67,7 +73,10 @@ public sealed class AssignmentExchange : IDisposable
         if (worker != null)
         {
             if (clock() - started >= deadline && workerRevision == revision)
-            { Invalidate(); pending = false; Faulted = true; Diagnostic = "Authoritative assignment worker deadline exceeded; readiness blocked."; }
+            {
+                Invalidate(); pending = false; Faulted = true;
+                Diagnostic = "Authoritative assignment worker deadline exceeded; readiness blocked." + retry.Schedule(clock());
+            }
             if (!worker.IsCompleted) return;
             var job = worker; worker = null;
             var accepted = !disposed && active && workerRevision == revision && !cancellation!.IsCancellationRequested;
@@ -75,11 +84,13 @@ public sealed class AssignmentExchange : IDisposable
             try
             {
                 var result = job.GetAwaiter().GetResult();
-                if (accepted) { Current = result ?? throw new InvalidOperationException("Assignment worker returned no result."); Diagnostic = "Authoritative assignments validated."; }
+                if (accepted) { Current = result ?? throw new InvalidOperationException("Assignment worker returned no result."); Faulted = false; Diagnostic = "Authoritative assignments validated."; }
             }
             catch (Exception error)
-            { if (accepted) { Current = null; Faulted = true; Diagnostic = "Authoritative assignments rejected; readiness blocked: " + error.Message; } }
+            { if (accepted) { Current = null; Faulted = true; Diagnostic = "Authoritative assignments rejected; readiness blocked: " + error.Message + retry.Schedule(clock()); } }
         }
+        if (!disposed && active && Faulted && worker == null && retry.Take(clock()))
+            pending = catalog != null && policy != null && (server || wire.Length != 0);
         if (!disposed && active && pending && worker == null) StartWorker();
     }
     private void StartWorker()
@@ -100,7 +111,7 @@ public sealed class AssignmentExchange : IDisposable
             }, token) ?? throw new InvalidOperationException("Assignment scheduler returned no task.");
         }
         catch (Exception error)
-        { cancellation.Dispose(); cancellation = null; Faulted = true; Diagnostic = "Authoritative assignments rejected; readiness blocked: " + error.Message; }
+        { cancellation.Dispose(); cancellation = null; Faulted = true; Diagnostic = "Authoritative assignments rejected; readiness blocked: " + error.Message + retry.Schedule(clock()); }
     }
     public void Dispose()
     {

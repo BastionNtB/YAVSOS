@@ -9,7 +9,10 @@ namespace YAVSOS.Core.Classification;
 
 public enum ClassificationState { Offline, Pending, Building, Ready, Failed }
 
-/// <summary>Main-thread owned, serial detached worker, immediate stale-result withdrawal.</summary>
+/// <summary>
+/// Main-thread owned, serial detached worker, immediate stale-result withdrawal. A failed build is tried again for the
+/// same inputs with a growing pause (D144, <see cref="StageRetry"/>); it stays <see cref="ClassificationState.Failed"/> meanwhile.
+/// </summary>
 public sealed class ClassificationCache : IDisposable
 {
     private readonly Func<CatalogSnapshot, ClassificationRuleSet, ClassificationSourceSnapshot?, CancellationToken, Task<ClassifiedCatalog>>? build;
@@ -25,6 +28,9 @@ public sealed class ClassificationCache : IDisposable
     private long revision, workerRevision;
     private bool active, disposed;
     private double started;
+    private readonly StageRetry retry = new StageRetry(0, 0, 1000);
+    /// <summary>Failed builds since the inputs last changed.</summary>
+    public int Retries => retry.Attempts;
     public ClassificationState State { get; private set; }
     public ClassifiedCatalog? Current { get; private set; }
     public long Revision => revision;
@@ -66,7 +72,7 @@ public sealed class ClassificationCache : IDisposable
     }
     public void Invalidate()
     {
-        revision++; Current = null; cancellation?.Cancel();
+        revision++; Current = null; cancellation?.Cancel(); retry.Reset();
         State = active ? ClassificationState.Pending : ClassificationState.Offline;
         Diagnostic = active ? "Classification inputs pending." : "No active classification session.";
     }
@@ -92,6 +98,7 @@ public sealed class ClassificationCache : IDisposable
             catch (Exception error) { if (State == ClassificationState.Building && workerRevision == revision) Fail(error.GetType().Name + ": " + error.Message); }
             finally { worker = null; cancellation!.Dispose(); cancellation = null; }
         }
+        if (active && State == ClassificationState.Failed && retry.Take(clock())) { State = ClassificationState.Pending; Diagnostic = "Trying again after a failure."; }
         if (!active || State != ClassificationState.Pending || catalog == null || rules == null && policy == null) return;
         cancellation = new CancellationTokenSource(); workerRevision = revision; started = clock(); State = ClassificationState.Building;
         try
@@ -113,7 +120,11 @@ public sealed class ClassificationCache : IDisposable
             }, token)
             : build != null ? build(capturedCatalog, capturedRules!, capturedSources, token)
                 : schedule(() => ClassificationPipeline.Build(capturedCatalog, capturedRules!, capturedSources, token), token);
-    private void Fail(string message) { cancellation?.Cancel(); Current = null; State = ClassificationState.Failed; Diagnostic = message; }
+    private void Fail(string message)
+    {
+        cancellation?.Cancel(); Current = null; State = ClassificationState.Failed;
+        Diagnostic = message + (active ? retry.Schedule(clock()) : "");
+    }
     public void Dispose()
     {
         if (disposed) return;

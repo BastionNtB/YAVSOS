@@ -25,9 +25,10 @@ public sealed class CatalogCacheTests
         Assert.Equal(CatalogState.FactsReady, cache.State);
     }
 
-    // D086 B5.36: the catalog gets the same few retries as loaded sources, then gives up until its inputs change.
+    // D086 B5.36: the catalog gets the same few quick retries as loaded sources. D144 (issue #4): then it shows that it
+    // gave up and keeps trying with a growing pause, so it recovers without an input change.
     [Fact]
-    public void Cache_RetriesAFailedCapture_ThenGivesUpUntilInputsChange()
+    public void Cache_RetriesAFailedCaptureQuickly_ThenWithAGrowingPause()
     {
         var now = 0d;
         using var cache = new CatalogCache(null, (rows, token) => Task.FromResult(CatalogSnapshot.Build(rows, null, token)), () => now, retries: 2, retrySeconds: 3);
@@ -38,12 +39,17 @@ public sealed class CatalogCacheTests
         Assert.Contains("Trying again in 3 s (1 of 2)", cache.Diagnostic);
         now = 2999; cache.Tick(() => throw new Exception("Must wait for the pause."));
         now = 3000; cache.Tick(Broken); now = 6000; cache.Tick(Broken);
-        Assert.Equal(CatalogState.Failed, cache.State); Assert.True(cache.GaveUp); Assert.Equal(2, cache.Retries);
-        now = 9000; cache.Tick(() => throw new Exception("A cache that gave up must not reopen the registry."));
+        Assert.Equal(CatalogState.Failed, cache.State); Assert.True(cache.GaveUp); Assert.Equal(3, cache.Retries);
+        Assert.Contains("Trying again in 60 s (failure 3)", cache.Diagnostic);
+        now = 65999; cache.Tick(() => throw new Exception("A slow retry must wait for its pause."));
+        now = 66000; cache.Tick(Broken);
+        Assert.Equal(CatalogState.Failed, cache.State); Assert.Contains("Trying again in 120 s (failure 4)", cache.Diagnostic);
+        now = 186000; Complete(cache, Item()); Assert.False(cache.GaveUp);
         cache.Invalidate(); Assert.Equal(0, cache.Retries);
         Complete(cache, Item());
         using var once = Immediate(); once.BeginSession(true); once.Tick(Broken);
-        Assert.Equal(CatalogState.Failed, once.State); // By default, no retries.
+        Assert.Equal(CatalogState.Failed, once.State); // By default no quick retries: the slow one comes after 60 s.
+        Assert.Contains("Trying again in 60 s (failure 1)", once.Diagnostic);
     }
 
     [Fact]
@@ -204,22 +210,49 @@ public sealed class CatalogCacheTests
         Assert.Equal(CatalogState.Offline, workerCache.State); Assert.Null(workerCache.Current);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void Cache_DeadlineRejectsCaptureAndLateCompletedWorker(bool worker)
+    [Fact]
+    public void Cache_DeadlineRejectsLateCompletedWorker()
     {
         double now = 0;
         var job = new TaskCompletionSource<CatalogSnapshot>(); CancellationToken token = default;
-        using var cache = new CatalogCache(new CatalogLimits(stepsPerTick: worker ? 64 : 1, buildSeconds: 1),
-            (_, t) => { token = t; return job.Task; }, () => now);
+        using var cache = new CatalogCache(new CatalogLimits(buildSeconds: 1), (_, t) => { token = t; return job.Task; }, () => now);
         cache.BeginSession(true); cache.Tick(() => new[] { Item(), Item("Stone") });
-        now = 1000;
-        if (worker) job.SetResult(CatalogSnapshot.Build(new[] { Item() }));
+        now = 1000; job.SetResult(CatalogSnapshot.Build(new[] { Item() }));
         cache.Tick(() => throw new Exception("Deadline must not reopen the registry."));
         Assert.Equal(CatalogState.Failed, cache.State); Assert.Null(cache.Current);
-        Assert.Contains("deadline", cache.Diagnostic);
-        if (worker) Assert.True(token.IsCancellationRequested);
+        Assert.Contains("deadline", cache.Diagnostic); Assert.True(token.IsCancellationRequested);
+    }
+
+    // D144 (issue #4): a host with a low frame rate takes many frames for a capture. The limit counts the time spent
+    // capturing, not the frames in between; a wall-clock backstop still ends a capture that never finishes.
+    [Fact]
+    public void Cache_CaptureLimitCountsCaptureWorkNotTheFramesBetween()
+    {
+        double now = 0;
+        var limits = new CatalogLimits(stepsPerTick: 1, buildSeconds: 1);
+        var facts = new[] { Item("A"), Item("B"), Item("C") };
+        using (var slowHost = Immediate(limits, () => now))
+        {
+            slowHost.BeginSession(true);
+            for (var frame = 0; frame < 6 && slowHost.State != CatalogState.FactsReady; frame++) { slowHost.Tick(() => facts); now += 900; }
+            Assert.Equal(CatalogState.FactsReady, slowHost.State); Assert.Equal(3, slowHost.Current!.Items.Count);
+            // The log line's timing: no work inside the frames, 2.7 s from the capture's start to the build, one frame of build.
+            Assert.Equal(0, slowHost.LastCaptureWorkMilliseconds); Assert.Equal(2700, slowHost.LastCaptureElapsedMilliseconds);
+            Assert.Equal(900, slowHost.LastBuildMilliseconds);
+        }
+        now = 0;
+        IEnumerable<CatalogFact?> Costly() { foreach (var fact in facts) { now += 400; yield return fact; } }
+        using (var costly = Immediate(limits, () => now))
+        {
+            costly.BeginSession(true);
+            for (var frame = 0; frame < 4; frame++) costly.Tick(Costly);
+            Assert.Equal(CatalogState.Failed, costly.State); Assert.Contains("1 s of capture work", costly.Diagnostic);
+        }
+        now = 0;
+        using var stuck = Immediate(limits, () => now);
+        stuck.BeginSession(true); stuck.Tick(() => facts);
+        now = 600_000; stuck.Tick(() => throw new Exception("A running capture must not reopen the registry."));
+        Assert.Equal(CatalogState.Failed, stuck.State); Assert.Contains("10 min since the capture started", stuck.Diagnostic);
     }
 
     [Fact]
@@ -234,7 +267,7 @@ public sealed class CatalogCacheTests
     }
 
     [Fact]
-    public void Cache_WorkerFailureDoesNotPublishAndDoesNotRetry()
+    public void Cache_WorkerFailureDoesNotPublishAndWaitsForItsRetry()
     {
         using var cache = new CatalogCache(build: (_, _) => Task.FromException<CatalogSnapshot>(new IOException("seal failed")), milliseconds: () => 0);
         cache.BeginSession(true); cache.Tick(() => new[] { Item() });

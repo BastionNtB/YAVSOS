@@ -20,15 +20,16 @@ public sealed class CatalogCache : IDisposable
     private CancellationTokenSource? cancellation;
     private long revision, workerRevision;
     private bool active;
-    private double started;
-    // D086 B5.36: like loaded sources, a failed capture or build is tried again a few times per change of inputs.
-    private readonly int retries;
-    private readonly double retryMilliseconds;
-    private int attempts;
-    private double retryAt;
+    // D144: the capture's limit counts only the time spent capturing, so a host with a low frame rate isn't failed
+    // for the frames in between; the build's limit starts with the build. A wall-clock backstop still ends a capture.
+    private double started, working, buildStarted;
+    public const double CaptureWallMilliseconds = 600_000;
+    // D086 B5.36: like loaded sources, a failed capture or build is tried again a few times per change of inputs;
+    // D144: then again with a growing pause.
+    private readonly StageRetry retry;
     /// <summary>Failed attempts since the inputs last changed; the last one is in <see cref="Diagnostic"/>.</summary>
-    public int Retries => attempts;
-    /// <summary>Every retry for the current inputs failed; nothing more happens until they change (shown, D087).</summary>
+    public int Retries => retry.Attempts;
+    /// <summary>The quick retries for the current inputs failed (shown, D087). A slow retry is due later (D144).</summary>
     public bool GaveUp => State == CatalogState.Failed;
     private int bytes, items, recipes;
     public CatalogState State { get; private set; }
@@ -36,13 +37,22 @@ public sealed class CatalogCache : IDisposable
     public string Diagnostic { get; private set; } = "No active catalog session.";
     public long Revision => revision;
     public double MaximumStepMilliseconds { get; private set; }
+    // D144: where the time went for the last ready result, for the log line (capture work, capture elapsed, build).
+    public double LastCaptureWorkMilliseconds { get; private set; }
+    public double LastCaptureElapsedMilliseconds { get; private set; }
+    public double LastBuildMilliseconds { get; private set; }
+    private void RecordTiming()
+    {
+        LastCaptureWorkMilliseconds = working; LastCaptureElapsedMilliseconds = buildStarted - started;
+        LastBuildMilliseconds = clock() - buildStarted;
+    }
 
     public CatalogCache(CatalogLimits? limits = null,
         Func<IReadOnlyList<CatalogFact>, CancellationToken, Task<CatalogSnapshot>>? build = null, Func<double>? milliseconds = null,
         int retries = 0, double retrySeconds = 3)
     {
         if (retries < 0 || retries > 10 || double.IsNaN(retrySeconds) || retrySeconds < 0 || retrySeconds > 60) throw new ArgumentOutOfRangeException(nameof(retries));
-        this.retries = retries; retryMilliseconds = retrySeconds * 1000;
+        retry = new StageRetry(retries, retrySeconds, 1000);
         this.limits = limits ?? new CatalogLimits();
         this.build = build ?? ((facts, token) => Task.Run(() => CatalogSnapshot.Build(facts, this.limits, token), token));
         clock = milliseconds ?? (() => Stopwatch.GetTimestamp() * (1000d / Stopwatch.Frequency));
@@ -57,7 +67,7 @@ public sealed class CatalogCache : IDisposable
 
     public void Invalidate()
     {
-        revision++; Current = null; attempts = 0; retryAt = 0;
+        revision++; Current = null; retry.Reset();
         cancellation?.Cancel();
         var cleanupError = ReleaseCapture();
         State = active ? CatalogState.Pending : CatalogState.Offline;
@@ -72,7 +82,7 @@ public sealed class CatalogCache : IDisposable
         {
             if (!worker.IsCompleted)
             {
-                if (State == CatalogState.Building && clock() - started >= limits.BuildSeconds * 1000) Fail("Catalog build deadline exceeded.");
+                if (State == CatalogState.Building && clock() - buildStarted >= limits.BuildSeconds * 1000) Fail("Catalog build deadline exceeded.");
                 return; // Cancelled workers finish before another generation is admitted.
             }
             try
@@ -80,26 +90,32 @@ public sealed class CatalogCache : IDisposable
                 var candidate = worker.GetAwaiter().GetResult();
                 if (active && State == CatalogState.Building && workerRevision == revision)
                 {
-                    if (clock() - started >= limits.BuildSeconds * 1000) Fail("Catalog build deadline exceeded.");
-                    else { Current = candidate; State = CatalogState.FactsReady; Diagnostic = "Loaded facts ready; classification remains pending."; }
+                    if (clock() - buildStarted >= limits.BuildSeconds * 1000) Fail("Catalog build deadline exceeded.");
+                    else { RecordTiming(); Current = candidate; State = CatalogState.FactsReady; Diagnostic = "Loaded facts ready; classification remains pending."; }
                 }
             }
             catch (Exception error) { if (State == CatalogState.Building && workerRevision == revision) Fail(error.GetType().Name + ": " + error.Message); }
             finally { worker = null; cancellation!.Dispose(); cancellation = null; }
         }
-        if (!active || State is CatalogState.FactsReady or CatalogState.Failed) return;
+        if (!active || State == CatalogState.FactsReady) return;
+        if (State == CatalogState.Failed)
+        {
+            if (!retry.Take(clock())) return;
+            State = CatalogState.Pending; Diagnostic = "Trying again after a failure; facts pending.";
+        }
         try
         {
             var sliceStart = clock();
             if (State == CatalogState.Pending)
             {
-                if (sliceStart < retryAt) return;
+                if (retry.Scheduled && !retry.Take(sliceStart)) return;
                 var source = open();
                 if (source == null) return;
-                started = sliceStart; rows = new List<CatalogFact>(); bytes = items = recipes = 0;
+                started = sliceStart; working = 0; rows = new List<CatalogFact>(); bytes = items = recipes = 0;
                 reader = source.GetEnumerator(); State = CatalogState.Capturing;
             }
-            if (clock() - started >= limits.BuildSeconds * 1000) { Fail("Catalog build deadline exceeded."); return; }
+            if (working >= limits.BuildSeconds * 1000) { Fail($"Catalog capture deadline exceeded ({limits.BuildSeconds:0.#} s of capture work)."); return; }
+            if (sliceStart - started >= CaptureWallMilliseconds) { Fail("Catalog capture deadline exceeded (10 min since the capture started)."); return; }
             for (var step = 0; step < limits.StepsPerTick && clock() - sliceStart < limits.SliceMilliseconds; step++)
             {
                 var stepStart = clock();
@@ -116,10 +132,12 @@ public sealed class CatalogCache : IDisposable
                     var cleanupError = ReleaseCapture();
                     if (cleanupError != null) throw cleanupError;
                     cancellation = new CancellationTokenSource(); workerRevision = revision; State = CatalogState.Building;
+                    buildStarted = clock();
                     worker = build(detached, cancellation.Token) ?? throw new InvalidOperationException("Catalog worker was not created.");
                     break;
                 }
             }
+            working += clock() - sliceStart;
         }
         catch (Exception error) { Fail(error.GetType().Name + ": " + error.Message); }
     }
@@ -136,9 +154,9 @@ public sealed class CatalogCache : IDisposable
         if (worker == null) { cancellation?.Dispose(); cancellation = null; }
         var cleanupError = ReleaseCapture(); Current = null; State = CatalogState.Failed;
         Diagnostic = message + (cleanupError == null ? "" : " Cleanup: " + cleanupError.Message);
-        if (!active || cleanupError != null || attempts >= retries) return;
-        attempts++; retryAt = clock() + retryMilliseconds; State = CatalogState.Pending;
-        Diagnostic += $" Trying again in {retryMilliseconds / 1000:0.#} s ({attempts} of {retries}).";
+        if (!active || cleanupError != null) { retry.Hold(); return; }
+        Diagnostic += retry.Schedule(clock());
+        if (!retry.Slow) State = CatalogState.Pending; // Quick retry; a slow one waits in Failed, shown as given up (D087).
     }
     public void Dispose()
     {

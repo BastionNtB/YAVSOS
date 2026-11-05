@@ -130,8 +130,10 @@ optional piece disables only itself:
 
 - one item whose data can't be read lands in Misc alone, named in the log;
 - a stack that can't be captured safely is skipped and the rest of the inventory is stashed;
-- if a category build step still fails after 3 retries, 3 seconds apart, the Categories mark
-  says so, and Always and Never items keep working.
+- if a category build step fails (reading items and their sources first gets 3 retries,
+  3 seconds apart), the Categories mark says so, and Always and Never items keep working.
+  YAVSOS tries the step again after a minute, then less often, up to every 5 minutes, and at
+  once when items or settings change.
 
 The status marks at the top right of the panel use four states: a tick (working), amber
 ("This chest:" a caution about the open chest, or "Partly working:" one optional part is

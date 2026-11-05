@@ -45,8 +45,9 @@ public sealed class LoadedSourceCacheTests
         cache.Invalidate(); Assert.Equal(0, cache.Retries);
     }
 
+    // D144 (issue #4): after its quick retries the cache shows that it gave up and tries again after a growing pause.
     [Fact]
-    public void Cache_StopsAfterItsRetriesAndByDefaultDoesNotRetry()
+    public void Cache_AfterItsQuickRetriesWaitsForASlowOneAndRecovers()
     {
         var now = 0d;
         using var cache = new LoadedSourceCache(null, (catalog, rows, token) => Task.FromResult(LoadedSourceReceipt.Build(catalog, rows, null, token)),
@@ -54,10 +55,12 @@ public sealed class LoadedSourceCacheTests
         Start(cache);
         IEnumerable<LoadedSourceFact?> Broken() { if (now >= 0) throw new InvalidDataException("broken"); yield break; }
         cache.Tick(Broken); now = 1000; cache.Tick(Broken);
-        Assert.Equal(LoadedSourceState.Failed, cache.State); Assert.Equal(1, cache.Retries);
-        now = 5000; cache.Tick(() => throw new Exception("A failed cache must not reopen definitions."));
+        Assert.Equal(LoadedSourceState.Failed, cache.State); Assert.Equal(2, cache.Retries);
+        Assert.Contains("Trying again in 60 s (failure 2)", cache.Diagnostic);
+        now = 60999; cache.Tick(() => throw new Exception("A failed cache must wait for its slow retry."));
+        now = 61000; Complete(cache);
         using var once = Immediate(); Start(once); once.Tick(Broken);
-        Assert.Equal(LoadedSourceState.Failed, once.State);
+        Assert.Equal(LoadedSourceState.Failed, once.State); Assert.Contains("Trying again in 60 s (failure 1)", once.Diagnostic);
     }
 
     [Fact]
@@ -167,7 +170,8 @@ public sealed class LoadedSourceCacheTests
         var catalog = MakeCatalog("Wood");
         using var cache = new LoadedSourceCache(new LoadedSourceLimits(stepsPerTick: stage == "capture" ? 1 : 32, buildSeconds: 1),
             (_, _, nextToken) => { token = nextToken; return job.Task; }, () => now);
-        Start(cache, catalog); cache.Tick(() => new[] { Use(), Coverage() }); now = 1000;
+        Start(cache, catalog); cache.Tick(() => new[] { Use(), Coverage() });
+        now = stage == "capture" ? LoadedSourceCache.CaptureWallMilliseconds : 1000; // D144: a capture ends by its backstop.
         if (stage == "completed-worker") job.SetResult(Receipt(catalog, Use()));
         cache.Tick(() => throw new Exception("Deadline must not reopen definitions."));
         Assert.Equal(LoadedSourceState.Failed, cache.State); Assert.Null(cache.Current); Assert.Contains("deadline", cache.Diagnostic);
@@ -175,8 +179,18 @@ public sealed class LoadedSourceCacheTests
         if (stage == "running-worker") Assert.False(job.Task.IsCompleted);
     }
 
+    // D144 (issue #4): frames far apart on a slow host do not count against the capture limit (the old rule failed at 1.8 s).
     [Fact]
-    public void Cache_FaultDoesNotRetryAndExplicitInvalidationRecovers()
+    public void Cache_CaptureSpreadOverSlowFramesStillCompletes()
+    {
+        var now = 0d;
+        using var cache = Immediate(new LoadedSourceLimits(stepsPerTick: 1, buildSeconds: 1), () => now); Start(cache);
+        for (var frame = 0; frame < 6 && cache.State != LoadedSourceState.Ready; frame++) { cache.Tick(() => new[] { Use(), Coverage() }); now += 900; }
+        Assert.Equal(LoadedSourceState.Ready, cache.State);
+    }
+
+    [Fact]
+    public void Cache_FaultWaitsForItsRetryAndExplicitInvalidationRecovers()
     {
         using var cache = Immediate(); Start(cache); cache.Tick(() => throw new IOException("registry unavailable"));
         Assert.Equal(LoadedSourceState.Failed, cache.State); Assert.Contains("registry unavailable", cache.Diagnostic); Assert.Null(cache.Current);

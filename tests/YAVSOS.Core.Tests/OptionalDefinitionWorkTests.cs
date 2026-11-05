@@ -173,7 +173,7 @@ public sealed class OptionalDefinitionWorkTests
         cache.Tick(Open); Assert.Equal(LoadedSourceState.Capturing, cache.State);
         if (deadline)
         {
-            now = 1000; cache.Tick(Open); Assert.Equal(LoadedSourceState.Failed, cache.State);
+            now = LoadedSourceCache.CaptureWallMilliseconds; cache.Tick(Open); Assert.Equal(LoadedSourceState.Failed, cache.State);
             Assert.Contains("deadline", cache.Diagnostic);
         }
         else cache.Invalidate();

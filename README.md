@@ -215,7 +215,7 @@ The result panel will show a summary of where items ended up. If they can’t al
 - **For chests with a rule:** Your items end up in the chests according to the rules that were set up, regardless of whether the item is already in the chest or not.
 - **For chests without a rule:** The chest will accept items where existing items already match. (Just like AAS's default behavior.)
 
-Equipped items are never stashed. Items in your hotbar or AzuExtendedPlayerInventory (AzuEPI) quick slots are by default not stashed. These are configured through AAS when installed, or YAVSOS when standalone.
+Equipped or favorited items (from supported mods) are never stashed. Items in your hotbar or AzuExtendedPlayerInventory (AzuEPI) quick slots are by default not stashed. These are configured through AAS when installed, or YAVSOS when standalone.
 
 ![Pointing at a stack of copper in the inventory: the tooltip reads "Stash stack (Middle mouse): Black Metal Chest 3 m away (counts as Metals)". A middle-click sends only that stack, and the result panel confirms it.](assets/media/where-it-goes.gif)
 
@@ -275,10 +275,11 @@ Everything goes through **GitHub issues**: bugs, questions, ideas and requests.
 - **InfinityHammer:** Copying a chest with InfinityHammer copies the rules along with it.
 - **The game's "Place stacks" button** works as it always has and doesn't follow rules.
 - **Item origin:** the "item origin" filter knows items registered through Jotunn or ItemManager. Items a mod adds some other way show their origin as "origin not known", and base game items show as “Base game”
+- **Favorites:** YAVSOS tries to respect favorites from other mods such as AzuAutoStore, Quick Stack Store, or ItemFavoriteFramework meaning favorited items won't be stashed. Unfavorite them to allow stashing.
 
 ![ZenUI's item tooltip for raspberries ending in YAVSOS's stash line, and BetterUI's chest hover showing YAVSOS's label "Metals · priority 2 (Urgent)". Additional mods shown: ZenUI, BetterUI.](assets/media/ui-mods.png)
 
-Tested with AzuAutoStore 3.1.7, Jotunn 2.30.2, EpicLoot 0.15.6, RossItemDrawers 1.3.0 and AzuExtendedPlayerInventory 2.6.6. During the testing, other mods were tested as well, but they won't be listed here; the mod is designed to generally be compatible by default. If specific compatibilities need to be expanded or made, create an issue on the GitHub for it!
+Tested with AzuAutoStore 3.1.7, Jotunn 2.30.2, EpicLoot 0.15.6, RossItemDrawers 1.3.0, Quick Stack Store 1.4.16,  ItemFavoriteFramework 1.0.0, and AzuExtendedPlayerInventory 2.6.6. During the testing, other mods were tested as well, but they won't be listed here; the mod is designed to generally be compatible by default. If specific compatibilities need to be expanded or made, create an issue on the GitHub for it!
 
 ## Licence and credits
 

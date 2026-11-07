@@ -78,12 +78,14 @@ public sealed class ExplanationAnswer
     private readonly Func<string, ChestName?>? chestName;
     private readonly bool azuStores;
     private readonly MessageList? stackKey;
+    private readonly Message? keptReason;
 
+    /// <param name="keptReason">#64: why a kept stack stays, in place of "protected or held" (a favorite names its mod).</param>
     public ExplanationAnswer(PlacementExplanation explanation, bool cleanup, Message? note, Func<string, ChestName?>? chestName = null, bool azuStores = false,
-        MessageList? stackKey = null)
+        MessageList? stackKey = null, Message? keptReason = null)
     {
         Explanation = explanation ?? throw new ArgumentNullException(nameof(explanation));
-        Cleanup = cleanup; Note = note; this.chestName = chestName; this.azuStores = azuStores; this.stackKey = stackKey;
+        Cleanup = cleanup; Note = note; this.chestName = chestName; this.azuStores = azuStores; this.stackKey = stackKey; this.keptReason = keptReason;
     }
 
     private ExplanationAnswer(Message? note) => Note = note;
@@ -92,7 +94,7 @@ public sealed class ExplanationAnswer
     public static ExplanationAnswer Without(Message? note) => new ExplanationAnswer(note);
 
     /// <summary>The tooltip line (<see cref="ExplanationView.Tooltip"/>), or null when there is no answer.</summary>
-    public WhereLine? Line => Explanation == null ? null : ExplanationView.Tooltip(Explanation, Cleanup, chestName, azuStores, stackKey);
+    public WhereLine? Line => Explanation == null ? null : ExplanationView.Tooltip(Explanation, Cleanup, chestName, azuStores, stackKey, keptReason);
 }
 
 /// <summary>
@@ -114,8 +116,9 @@ public static class ExplanationView
     /// names it, since the tooltip is about this one stack; the lead reads "Stash stack [Middle mouse]:"; null or empty
     /// keeps "Stash stack:".
     /// </param>
+    /// <param name="keptReason">#64: why a kept stack stays, in place of "protected or held"; a favorite names its mod.</param>
     public static WhereLine Tooltip(PlacementExplanation explanation, bool cleanup, Func<string, ChestName?>? chestName = null, bool azuStores = false,
-        MessageList? stackKey = null)
+        MessageList? stackKey = null, Message? keptReason = null)
     {
         if (explanation == null) throw new ArgumentNullException(nameof(explanation));
         var lead = cleanup ? Message.Of("yavsos_where_lead_cleanup")
@@ -137,7 +140,7 @@ public static class ExplanationView
             PlacementOutcome.NoRoom => Message.Of("yavsos_where_reason_full"),
             PlacementOutcome.NoChest => Message.Of("yavsos_where_reason_no_chest"),
             PlacementOutcome.Blocked when explanation.Blocked != null => RunReport.Reason(explanation.Blocked.Value),
-            PlacementOutcome.Kept => Message.Of("yavsos_where_reason_kept"),
+            PlacementOutcome.Kept => keptReason ?? Message.Of("yavsos_where_reason_kept"),
             PlacementOutcome.NotReady => Message.Of("yavsos_where_reason_loading"),
             PlacementOutcome.OptedOut => Message.Of("yavsos_where_reason_opted_out").With("option", Message.Of("yavsos_cleanup_optout")),
             PlacementOutcome.Skipped => RunReport.Reason(RunReason.ChestLimit),

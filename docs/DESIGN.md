@@ -310,9 +310,12 @@ before a feature is restricted.
 
 **Protected slots.** Equipped and quest items are never moved. The hotbar and
 AzuExtendedPlayerInventory's quick slots are kept by default; settings can include them.
-With AzuAutoStore installed, its own settings decide.
+Other mods' favorites always stay: a stack that ItemFavoriteFramework, Quick Stack Store or
+AzuExtendedPlayerInventory marks, as an item or by its slot. A favorites mod YAVSOS can't
+read leaves stashing working; the next stash result names it once. With AzuAutoStore
+installed, its own settings and favorites decide.
 
-Decisions: D004 (as amended), D005, D041, D042, D043, D057, D061, D065, D083, D093.
+Decisions: D004 (as amended), D005, D041, D042, D043, D057, D061, D065, D083, D093, D151.
 
 ## 7. Server, hosted and client-only
 

@@ -27,6 +27,21 @@ internal static class StashLab
           $"muc={(MucRoute.Available(out var source) ? source : "none")}; bundled={MucRoute.BundledStatus}; active={BundledCopy.Active}; probe={NativeInventoryProbe.Status}"
         : "not loaded";
 
+    /// <summary>#64: which favorites mods are read, and what they mark in the player's inventory now.</summary>
+    public static string Favorites()
+    {
+        var player = Player.m_localPlayer; if (!player) return "no player";
+        var found = Integrations.Favorites.Read(player, player.GetInventory());
+        return Integrations.Favorites.LabStatus() + " | items=" + string.Join(",", found.Items.Select(x => x.Key.m_dropPrefab?.name + "@" + x.Key.m_gridPos.x + "," + x.Key.m_gridPos.y + "(" + x.Value + ")")) +
+            " | cells=" + string.Join(",", found.Cells.OrderBy(x => x.Key).Select(x => x.Key + "(" + x.Value + ")"));
+    }
+
+    /// <summary>#64 fixture: mark or unmark a favorite in a favorites mod ("iff", "qss", "epi"), "item" or "slot" at (x, y).</summary>
+    public static string Favorite(string mod, string what, int x, int y, bool on) => Integrations.Favorites.LabMark(mod, what, x, y, on);
+
+    /// <summary>#64, D088: every favorites reader throws until turned off.</summary>
+    public static string FavoritesFault(bool on) => Integrations.Favorites.LabFault(on);
+
     /// <summary>Fixture: add a stack to the player's inventory at a cell (-1, -1: the first free one), with optional metadata.</summary>
     public static string Give(string prefab, int count, int quality, string crafter, string customData, int x, int y)
     {

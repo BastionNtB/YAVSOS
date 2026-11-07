@@ -96,7 +96,12 @@ public sealed class PlacementExplainerTests
         // A protected stack never moves: kept, and the chests are not considered.
         var hotbar = Stack("Copper", isProtected: true);
         var kept = new StashInput(Taxonomy, new Answers(), Inventory("player", 8, new[] { hotbar }), new[] { Box("metal", Rule(new[] { "materials.metal" })) });
-        Assert.Equal(PlacementOutcome.Kept, PlacementExplainer.Stash(kept, hotbar.Handle).Outcome);
+        var keptAnswer = PlacementExplainer.Stash(kept, hotbar.Handle);
+        Assert.Equal(PlacementOutcome.Kept, keptAnswer.Outcome);
+        Assert.Equal("Stash stack: stays in your inventory (protected or held)", EnglishText.Of(ExplanationView.Tooltip(keptAnswer, false).Whole));
+        // #64: a favorite names its mod instead.
+        Assert.Equal("Stash stack: stays in your inventory (Quick Stack Store favorite)", EnglishText.Of(new ExplanationAnswer(keptAnswer, false, null,
+            keptReason: Message.Of("yavsos_where_reason_favorite").With("mod", "Quick Stack Store")).Line!.Whole));
         // An unruled chest that already holds the item is a holder.
         var (holder, holderStack) = Player("Wood", new[] { Box("pile", "", 4, true, OwnerMucState.Usable, Stack("Wood", 5)) });
         var held = PlacementExplainer.Stash(holder, holderStack.Handle);

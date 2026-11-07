@@ -45,7 +45,7 @@ Your own.
 
 | Setting | Default | Allowed | What it does |
 | --- | --- | --- | --- |
-| `IncludeHotbar` | off | — | Also stash items from your hotbar (the first inventory row) with the stash key and the stack key. Equipped and quest items are never stashed. Used only without AzuAutoStore, which applies its own "Player Ignore Hotbar" setting. |
+| `IncludeHotbar` | off | — | Also stash items from your hotbar (the first inventory row) with the stash key and the stack key. Equipped items, quest items and favorites from AzuExtendedPlayerInventory, Quick Stack Store or ItemFavoriteFramework are never stashed. Used only without AzuAutoStore, which applies its own "Player Ignore Hotbar" setting. |
 | `IncludeQuickSlots` | off | — | Also stash items from AzuExtendedPlayerInventory's quick slots with the stash key and the stack key. Used only without AzuAutoStore, which never stashes them. |
 | `Range` | 10 m | 1–100 m | How far from you, in meters, the stash key and the stack key look for chests. The server's MaximumRange caps it. Used only without AzuAutoStore. |
 | `Shortcut` | . | — | The stash key: it stashes items from your inventory into nearby chests whose rules accept them, and into chests without a rule that already hold them. Used only without AzuAutoStore. |

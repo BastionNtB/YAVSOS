@@ -142,6 +142,7 @@ public sealed class Plugin : BaseUnityPlugin
     {
         Texts.Listen();
         MucRoute.Initialize(Logger);
+        Favorites.Initialize(Logger); // #64: other mods' favorites, bound by shape once every plugin has loaded (D058).
         if (!ServerYavsosProbe.Supported) // D058: only detection is off; clients wait for server settings as before.
             Logger.LogWarning("Server detection turned off: the bundled ServerSync changed. On a server without YAVSOS chest rules stay off.");
         ruleControls?.Probe(); // D058: the styled panel's GUIManager members.

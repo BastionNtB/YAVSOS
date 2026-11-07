@@ -65,7 +65,7 @@ internal sealed class ResultPanel
                 places.GetComponent<VerticalLayoutGroup>().padding = new RectOffset(PlaceIndent, 0, 0, 0);
             }
             ui.Label(place ? places! : lines, ResultSummary.Bound(Texts.Get(line.Text), ResultSummary.MaximumText), JotunnWidgets.SmallSize,
-                line.Kind switch { ResultKind.Refused or ResultKind.Unconfirmed => ui.Orange, ResultKind.MorePlaces => ui.Faint, _ => (Color?)null });
+                line.Kind switch { ResultKind.Refused or ResultKind.Unconfirmed or ResultKind.Notice => ui.Orange, ResultKind.MorePlaces => ui.Faint, _ => (Color?)null });
         }
         // Lines past the bound are still counted in the one-line summary.
         more.gameObject.SetActive(summary.MoreLines != 0);

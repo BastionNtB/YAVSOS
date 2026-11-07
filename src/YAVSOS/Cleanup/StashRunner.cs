@@ -40,6 +40,10 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         internal ItemDrop.ItemData? Single;
         /// <summary>The game's tooltip shown when the key was pressed: the only one the run may close.</summary>
         internal object? Tooltip;
+        /// <summary>#64: other mods' favorites in the player's inventory at the last capture.</summary>
+        internal Favorites.Found Favored = Favorites.Found.None;
+        /// <summary>#64: the stack key's refusal with its parameters, when <c>Gather</c> fails with one; else the key alone.</summary>
+        internal Message? Refusal;
         internal Run() { Report = RunReport.ForStash(); }
         internal override IReadOnlyList<StashMove> Moves => Plan.Moves;
     }
@@ -111,13 +115,15 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal), Single = single,
             Tooltip = single == null ? null : ShownTooltip() };
         var input = Gather(plugin, answers, player!, run, single, out var unreadable, out var mucSource, out var failure);
-        if (input == null) { run.Adapter.Dispose(); return CleanupRunner.Refuse(failure); }
+        if (input == null) { run.Adapter.Dispose(); return run.Refusal != null ? CleanupRunner.Refuse(run.Refusal) : CleanupRunner.Refuse(failure); }
         var plan = StashPlanner.Plan(input, plugin.RuleEvaluator);
         // D086 D4 (M12): while categories load, Always rules and chests already holding the item still take it.
         if (plan.CategoriesPending && plan.Moves.Count == 0)
         { run.Adapter.Dispose(); return CleanupRunner.Refuse("yavsos_stash_categories_partial"); }
         run.Plan = plan;
         foreach (var stack in input.Player.Stacks) run.Keys[stack.Handle] = stack.MergeKey;
+        // #64 (D151): a favorites mod YAVSOS couldn't read is named once, in the first stash result after it failed.
+        foreach (var mod in Favorites.TakeUnreadable()) run.Report.Note(Message.Of("yavsos_stash_favorites_unreadable").With("mod", mod));
         foreach (var rest in plan.Remainders) run.Report.Remain(rest.Reason, rest.Identity.Prefab);
         // SF3 (D087): a chest that couldn't be read is reported as not supported, as cleanup does; the log names it.
         for (var i = 0; i < unreadable; i++) run.Report.Remain(RunReason.ChestUnreadable);
@@ -179,6 +185,13 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         if (drag != null && run.Adapter.TryHandle(player.GetInventory(), drag, out var dragHandle)) held.Add(dragHandle);
         if (single != null)
         {
+            // #64 (D151): a favorite says why it stays, instead of the general refusal (wording from the D150 wireframe).
+            if (run.Favored.ModOf(single) is { } mod)
+            {
+                failure = "yavsos_stash_single_favorite";
+                run.Refusal = Message.Of(failure).With("item", GameText.Localize(single.m_shared.m_name)).With("mod", mod);
+                return null;
+            }
             if (!run.Adapter.TryHandle(player.GetInventory(), single, out var picked)) { failure = "yavsos_stash_single_refused"; return null; }
             only.Add(picked);
         }
@@ -336,8 +349,11 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         var answer = prepared.Context.Explain(handle, null, GameText.ItemName, openName: RuleControls.OpenValueName, detail: false,
             timed: UiCost.Timer("stash explain ")); // X16: this stack's routes.
         UiCost.Stop("stash explain plan", timed);
+        // #64 (D151): a favorite names its mod as the reason it stays ("AzuExtendedPlayerInventory favorite", D150 wireframe).
+        var favorite = prepared.Azu ? null : prepared.Run.Favored.ModOf(item);
         return new ExplanationAnswer(answer, false, prepared.Note, prepared.Names, azuStores: prepared.Azu,
-            stackKey: CleanupTriggers.StackKey(prepared.Azu, settings.StashItemShortcut));
+            stackKey: CleanupTriggers.StackKey(prepared.Azu, settings.StashItemShortcut),
+            keptReason: favorite == null ? null : Message.Of("yavsos_where_reason_favorite").With("mod", favorite));
     }
 
     protected override void ExecuteChecked(Run run, StashMove move)
@@ -438,7 +454,8 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
     }
 
     // The hotbar (first row) and AzuEPI's quick slots are protected unless the player's settings include them, for the
-    // single-item key too; AzuAutoStore protects them the same way when it does the stashing (D061 Q3, D065).
+    // single-item key too; AzuAutoStore protects them the same way when it does the stashing (D061 Q3, D065). Other
+    // mods' favorites are always protected (#64, D151); the last read is kept on the run for the stack key's refusal.
     // Equipped and quest items are protected by the adapter itself.
     // With AzuAutoStore (explanations only), the stacks Azu's store key skips are the protected ones.
     private GameInventoryCapture CapturePlayer(Run run, Player player, bool azu = false)
@@ -449,10 +466,12 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
                 AzuStoreOrder.Skips, Array.Empty<int>(), () => NativeInventoryProbe.Supported, keepUncapturable: true);
         var quick = QuickSlots.Items(inventory, log);
         var keepQuick = !settings.StashQuickSlots.Value;
+        // #64 (D151): other mods' favorites always stay, as items and as slots; no setting includes them.
+        var favorites = run.Favored = Favorites.Read(player, inventory);
         var cells = (settings.StashHotbar.Value ? Enumerable.Empty<int>() : Enumerable.Range(0, inventory.GetWidth()))
-            .Concat(keepQuick ? quick.Cells : Enumerable.Empty<int>());
+            .Concat(keepQuick ? quick.Cells : Enumerable.Empty<int>()).Concat(favorites.Cells.Keys);
         return run.Adapter.Capture(inventory, PlayerId, zdo.GetOwner(), zdo.OwnerRevision, CleanupRunner.Registration,
-            item => keepQuick && quick.Items.Contains(item), cells.Distinct().ToArray(), () => NativeInventoryProbe.Supported, keepUncapturable: true);
+            item => keepQuick && quick.Items.Contains(item) || favorites.Items.ContainsKey(item), cells.Distinct().ToArray(), () => NativeInventoryProbe.Supported, keepUncapturable: true);
     }
 
     private static (long, ushort) PlayerOwner(Player player)

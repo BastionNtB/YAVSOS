@@ -77,6 +77,12 @@ public sealed class RunReport
             ? Message.Of("yavsos_reason_azu_excluded_types_more").With("types", MessageList.Of(ListKind.Comma, types))
             : Message.Of("yavsos_reason_azu_excluded_types").With("types", MessageList.Of(ListKind.And, types));
     }
+    private readonly List<Message> notes = new();
+    /// <summary>#64: warnings about the run as a whole, such as a favorites mod YAVSOS couldn't read; one line each, last.</summary>
+    public IReadOnlyList<Message> Notes => notes;
+    /// <summary>#64: adds a warning line, shown after the outcomes in the summary and the result panel.</summary>
+    public void Note(Message note) => notes.Add(note ?? throw new ArgumentNullException(nameof(note)));
+
     public void Refuse(TransferRefusal reason, string? item = null)
     {
         if (reason == TransferRefusal.None || reason == TransferRefusal.Unconfirmed) throw new ArgumentException("Not a refusal.", nameof(reason));
@@ -163,7 +169,7 @@ public sealed class RunReport
     }
 
     // Every outcome with a count, in report order: moved, what stays (each reason, then MultiUserChest's causes),
-    // unreadable chests, refusals, unconfirmed.
+    // unreadable chests, refusals, unconfirmed; then the notes.
     private List<Part> Parts()
     {
         var parts = new List<Part>();
@@ -180,6 +186,7 @@ public sealed class RunReport
             parts.Add(new Part(ResultKind.Unconfirmed, 0, Unconfirmed, MucUnconfirmed == 0
                 ? Message.Of("yavsos_result_unconfirmed").Count(Unconfirmed)
                 : Message.Of("yavsos_result_unconfirmed_via").Count(Unconfirmed).With("via", Message.Of("yavsos_result_via_muc").Count(MucUnconfirmed))));
+        foreach (var note in notes) parts.Add(new Part(ResultKind.Notice, 0, 0, note));
         return parts;
     }
 
@@ -251,7 +258,9 @@ public sealed class RunReport
         }
         if (placeName != null && Placed(lines, maximumLines, itemName, namesPerLine, placeName) is { } placed)
             return new ResultSummary(Kind, Summary(), placed, 0);
-        var kept = lines.Take(maximumLines).ToList();
+        // #64: notes stay within the bound; the outcome lines before them make room.
+        var notices = lines.Where(x => x.Kind == ResultKind.Notice).Take(maximumLines).ToList();
+        var kept = lines.Where(x => x.Kind != ResultKind.Notice).Take(maximumLines - notices.Count).Concat(notices).ToList();
         var dropped = lines.Count - kept.Count;
         return new ResultSummary(Kind, Summary(), kept, dropped);
     }
@@ -367,7 +376,9 @@ public enum ResultKind
     /// <summary>X55: one chest or drawer that received items, under the moved line; its label names the place.</summary>
     Place,
     /// <summary>X55: "+N more places", the places the line bound left out; <see cref="ResultLine.Count"/> is N.</summary>
-    MorePlaces
+    MorePlaces,
+    /// <summary>#64: a warning about the run as a whole (<see cref="RunReport.Note"/>); its count is 0.</summary>
+    Notice
 }
 
 /// <summary>

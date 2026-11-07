@@ -93,4 +93,25 @@ public sealed class ResultSummaryTests
         Assert.Equal(100 - RunReport.MaximumNamesPerLine, line.More);
         Assert.Equal("Moved 100 stacks (100 items).", EnglishText.Of(report.Summary()));
     }
+    [Fact]
+    public void Notes_FollowTheOutcomes_AndStayWithinTheLineBound()
+    {
+        // #64: a favorites mod YAVSOS couldn't read is named after the outcomes, in the summary and as a result line.
+        var report = RunReport.ForStash();
+        report.Moved(40, item: "Copper");
+        foreach (var reason in new[] { RunReason.NoCapacity, RunReason.Held, RunReason.Budget }) report.Remain(reason, "X");
+        report.Note(Messages.Message.Of("yavsos_stash_favorites_unreadable").With("mod", "Quick Stack Store"));
+        const string note = "YAVSOS couldn't read Quick Stack Store's favorites and stashes them like other items (see the log)";
+        Assert.Equal("Stashed 1 stack (40 items) · 1 stays in your inventory (no room) · 1 stays in your inventory (held) · " +
+            "1 stays in your inventory (run limit reached; try again) · " + note + ".", EnglishText.Of(report.Summary()));
+        var all = report.Detail();
+        Assert.Equal(ResultKind.Notice, all.Lines[^1].Kind); Assert.Equal(note, EnglishText.Of(all.Lines[^1].Text)); Assert.Equal(0, all.Lines[^1].Count);
+        // A tight bound drops outcome lines, never the note.
+        var tight = report.Detail(maximumLines: 2);
+        Assert.Equal(new[] { ResultKind.Moved, ResultKind.Notice }, tight.Lines.Select(x => x.Kind)); Assert.Equal(3, tight.MoreLines);
+        // A stash that found nothing to move still names it.
+        var empty = RunReport.ForStash();
+        empty.Note(Messages.Message.Of("yavsos_stash_favorites_unreadable").With("mod", "ItemFavoriteFramework"));
+        Assert.StartsWith("Nothing stashed: YAVSOS couldn't read ItemFavoriteFramework's favorites", EnglishText.Of(empty.Summary()));
+    }
 }

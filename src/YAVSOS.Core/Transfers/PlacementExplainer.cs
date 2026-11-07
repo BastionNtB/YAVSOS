@@ -246,7 +246,7 @@ public static class PlacementExplainer
         // then the routes in order: gates first, then room.
         StashPlanner.Route? chosen = null; var full = new HashSet<StashPlanner.Route>(); RunReason? blocked = null;
         PlacementOutcome outcome; string summary;
-        if (kept) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + (unselected ? "not selected" : "protected (equipped, quest item, hotbar or quick slot)"); }
+        if (kept) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + (unselected ? "not selected" : "protected (equipped, quest item, hotbar, quick slot or favorite)"); }
         else if (routes.Count == 0) { outcome = PlacementOutcome.NoChest; summary = item + " stays: no chest in range takes it"; }
         else if (!stack.TransferSupported) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + Diagnostic(RunReason.Unsupported); }
         else if (input.Held.Contains(stack.Handle)) { outcome = PlacementOutcome.Kept; summary = item + " stays: " + Diagnostic(RunReason.Held); }

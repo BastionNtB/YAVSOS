@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.2 (2026-11-07)
+
+### Changed
+
+- Without AzuAutoStore, YAVSOS's stash key and stack key now skip favorites from AzuExtendedPlayerInventory, Quick Stack Store and ItemFavoriteFramework, so stacks you favorited and anything in a favorited slot stay in your inventory. Unfavorite a stack to stash it. (With AzuAutoStore installed, AzuAutoStore stashes and keeps its own favorites, as before.)
+- Pressing the stack key on a favorite now says why it stays, such as "Wood stays: it's a favorite in Quick Stack Store. Unfavorite it to stash it." instead of "YAVSOS can't stash this stack." The item tooltip now says "stays in your inventory (Quick Stack Store favorite)" instead of "(protected or held)".
+- If YAVSOS can't read one of those mods' favorites, stashing still works and stashes them like other items. The result panel names that mod once per game session.
+
 ## 1.2.1 (2026-11-05)
 
 ### Fixed
@@ -93,3 +101,13 @@ First public release.
 - Hover labels, item tooltips and search that lights up the chests taking an item.
 - Dedicated servers, Steam-hosted worlds, single-player, and joining a server without YAVSOS.
 - Works with MultiUserChest, EpicLoot and the other mods the guide lists under "Other mods"; each integration is checked when the game starts and turns off alone if it doesn't fit.
+
+## 1.2.2 changes not in the store text (2026-11-07, D151)
+
+- **Client log:** at startup, one line per favorites mod YAVSOS reads ("Stash keeps … favorites in your inventory."), or a warning saying why it can't.
+- **Lab fixtures:** `StashLab.Favorites` (what the readers find), `StashLab.Favorite` (mark or unmark through a mod's own API) and `StashLab.FavoritesFault` (every reader throws, D088).
+
+## 1.2.1 hotfix changes not in the store text (2026-11-05, D144)
+
+- **Server and client log:** a loading stage that keeps restarting without finishing is named, with its count and last cause, after 60 s and 3 discarded captures, then after 1, 2, 4, 8 and 16 minutes and every 30 minutes; an info line when it finishes. The "Loaded catalog" and "Fresh loaded sources" lines now give capture work, capture elapsed and build time. Each failure logs one warning, also after its count restarted.
+- **Bug report template:** a field for the server's log next to the client's.

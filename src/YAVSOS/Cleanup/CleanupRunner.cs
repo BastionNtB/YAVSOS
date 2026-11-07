@@ -198,9 +198,10 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     }
 
     /// <summary>A start refused with message <paramref name="key"/>, said on screen.</summary>
-    internal static RunStart Refuse(string key)
+    internal static RunStart Refuse(string key) => Refuse(Message.Of(key));
+
+    internal static RunStart Refuse(Message message)
     {
-        var message = Message.Of(key);
         GameText.Say(message);
         return new RunStart(RunOutcome.Refused, message);
     }

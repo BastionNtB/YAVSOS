@@ -85,7 +85,7 @@ public static class TransferLimits
     /// Inventories one stash or cleanup run may capture (A03): the player plus every chest the planners consider. The
     /// stash explanation captures chests before the player, so a smaller limit failed on the player's own inventory.
     /// </summary>
-    public const int MaximumRunInventories = 256 + 1;
+    public const int MaximumRunInventories = 512 + 1; // X67 (D156): the planners' 512-chest bound.
     public const int MaximumTerminalEntries = 4096;
 }
 

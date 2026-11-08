@@ -82,7 +82,9 @@ public enum ChestVerdict
     /// <summary>Beyond the run's chest limit.</summary>
     OverLimit,
     /// <summary>Not looked at: the item stays for a reason of its own.</summary>
-    NotConsidered
+    NotConsidered,
+    /// <summary>Its rule takes it and it has room, but the chest itself refuses it: the game's check, which a mod such as Storehouse narrows (F14).</summary>
+    Refused
 }
 
 public sealed class ChestExplanation
@@ -102,7 +104,10 @@ public sealed class PlacementExplanation
     public string Prefab { get; }
     public PlacementOutcome Outcome { get; }
     public string? ChosenId { get; }
-    /// <summary>For <see cref="PlacementOutcome.Blocked"/>: the first gate that closed an accepting chest, as the run reports it.</summary>
+    /// <summary>
+    /// For <see cref="PlacementOutcome.Blocked"/>: the first gate that closed an accepting chest, as the run reports it. For
+    /// <see cref="PlacementOutcome.NotReady"/>: why categories aren't ready (X71, <see cref="RunReasons.Waiting"/>).
+    /// </summary>
     public RunReason? Blocked { get; }
     /// <summary>X1: why <see cref="ChosenId"/> takes it; <see cref="PlacementBasis.None"/> when nothing was chosen.</summary>
     public PlacementBasis Basis { get; }
@@ -173,9 +178,9 @@ public sealed class CleanupExplainContext
     {
         Input = input ?? throw new ArgumentNullException(nameof(input));
         Evaluator = evaluator ?? new ChestRuleEvaluator();
-        Ordered = CleanupPlanner.Considered(input.Chests);
-        Sources = CleanupPlanner.Sources(Ordered);
+        Ordered = CleanupPlanner.Considered(input.Chests, input.MaximumChests);
         Ruled = CleanupPlanner.Receivers(Ordered, Evaluator, input.Taxonomy);
+        Sources = CleanupPlanner.Sources(Ordered, input, Evaluator, Ruled);
     }
 
     /// <summary>Whether <paramref name="handle"/> is a stack of chest <paramref name="sourceId"/> in this input.</summary>
@@ -235,7 +240,8 @@ public static class PlacementExplainer
         if (!input.Answers.CategoriesReady && routes.Count == 0 && !kept)
         {
             rows.AddRange(input.Chests.Select(x => new ChestExplanation(x.Id, ChestVerdict.CategoriesPending, "categories not ready yet", null)));
-            return Done(PlacementOutcome.NotReady, item + " stays: categories are not ready yet, try again shortly");
+            var waiting = RunReasons.Waiting(input.CategoriesWait);
+            return Done(PlacementOutcome.NotReady, item + " stays: " + NotReady(waiting), blocked: waiting);
         }
         var resolved = input.Answers.Resolve(prefab);
         var raw = input.InstanceFacets?.Invoke(stack);
@@ -275,8 +281,17 @@ public static class PlacementExplainer
                 continue;
             }
             if (kept) { rows.Add(new ChestExplanation(chest.Id, ChestVerdict.NotConsidered, "not considered", null)); continue; }
-            if (evaluator.Unruled(chest.RulePayload, input.Taxonomy)) { rows.Add(new ChestExplanation(chest.Id, ChestVerdict.NoRule, "no rule, and it holds no " + item, null)); continue; }
-            rows.Add(Refusal(chest.Id, chest.RulePayload, prefab, resolved, input.Taxonomy, input.Answers, evaluator, raw, openName));
+            // F14: the planner leaves out a chest that refuses the item itself; say so instead of a rule reason.
+            // X60 (D160): or its type's filter refuses it, known in advance.
+            bool Refuses() => ContainerFilter.Refuses(chest.Filter, prefab) || input.TakesCheck.Refuses(chest.Id, chest.Inventory, stack);
+            if (evaluator.Unruled(chest.RulePayload, input.Taxonomy))
+            {
+                var holds = !input.AzuStores && chest.Inventory.Stacks.Any(x => StringComparer.Ordinal.Equals(x.Identity.Prefab, prefab));
+                rows.Add(holds && Refuses() ? new ChestExplanation(chest.Id, ChestVerdict.Refused, "no rule, already holds this item; but " + RefusedText, null)
+                    : new ChestExplanation(chest.Id, ChestVerdict.NoRule, "no rule, and it holds no " + item, null));
+                continue;
+            }
+            rows.Add(Refusal(chest.Id, chest.RulePayload, prefab, resolved, input.Taxonomy, input.Answers, evaluator, raw, openName, Refuses));
         }
         var basis = chosen == null ? default : chosen.Tier == StashTier.Holder ? (PlacementBasis.Holds, null) : names.Basis(chosen.Ranked!, resolved, facets);
         return Done(outcome, summary, chosen?.Chest.Id, blocked, basis);
@@ -318,13 +333,17 @@ public static class PlacementExplainer
         void Rest(ChestVerdict verdict, string text)
         { foreach (var chest in input.Chests) rows.Add(new ChestExplanation(chest.Id, ReferenceEquals(chest, source) ? ChestVerdict.Current : verdict, ReferenceEquals(chest, source) ? "where it is" : text, null)); }
         if (!input.Answers.CategoriesReady)
-        { Rest(ChestVerdict.CategoriesPending, "categories not ready yet"); return Done(PlacementOutcome.NotReady, item + " stays: categories are not ready yet, try again shortly"); }
+        {
+            Rest(ChestVerdict.CategoriesPending, "categories not ready yet");
+            var waiting = RunReasons.Waiting(input.CategoriesWait);
+            return Done(PlacementOutcome.NotReady, item + " stays: " + NotReady(waiting), blocked: waiting);
+        }
         if (source.OptOut)
         { Rest(ChestVerdict.NotConsidered, "not considered"); return Done(PlacementOutcome.OptedOut, item + " stays: its chest is set to \"Don't clean up\""); }
         // The planner's own limits (D086 D9): the nearest chests, then the nearest sources that are not opted out and hold items.
         var ordered = context.Ordered;
         if (!ordered.Contains(source) || !context.Sources.Contains(source.Id))
-        { Rest(ChestVerdict.NotConsidered, "not considered"); return Done(PlacementOutcome.Skipped, item + " stays: " + Diagnostic(RunReason.ChestLimit)); }
+        { Rest(ChestVerdict.NotConsidered, "not considered"); return Done(PlacementOutcome.Skipped, item + " stays: " + Diagnostic(RunReason.ChestLimit, input.MaximumSources)); }
 
         var ruled = context.Ruled;
         var assessed = CleanupPlanner.Assess(input, evaluator, ruled, source, stack);
@@ -391,6 +410,7 @@ public static class PlacementExplainer
                 {
                     CleanupGate.NotBetter => new ChestExplanation(chest.Id, ChestVerdict.NotBetter, why + "; no better than " + here, row.Ranked),
                     CleanupGate.RuleMismatch => new ChestExplanation(chest.Id, ChestVerdict.RuleRejects, "its rule doesn't take it", row.Ranked),
+                    CleanupGate.Refused => new ChestExplanation(chest.Id, ChestVerdict.Refused, why + "; but " + RefusedText, row.Ranked),
                     CleanupGate.Blocked => Routed(chest.Id, row.Blocked, false, false, why, row.Ranked),
                     _ => outcome == PlacementOutcome.Kept ? new ChestExplanation(chest.Id, ChestVerdict.NotConsidered, why + "; but the item stays", row.Ranked)
                         : Routed(chest.Id, null, ReferenceEquals(row, chosen), chosen != null && !full.Contains(row), why, row.Ranked)
@@ -420,9 +440,14 @@ public static class PlacementExplainer
             : new ChestExplanation(id, ChestVerdict.Full, why + "; no room", rank);
     }
 
-    // A chest whose rule did not rank the item: the evaluator's answer, with "Never" and unreadable rules named.
+    // F14: the explanation text of a chest that refuses the item itself.
+    private const string RefusedText = "the chest itself refuses it (the game's check, which a mod can narrow)";
+
+    // A chest whose rule did not rank the item: the evaluator's answer, with "Never" and unreadable rules named. With
+    // refuses (stash), a chest whose rule takes the item may have been left out because it refuses the item itself (F14).
     private static ChestExplanation Refusal(string id, string payload, string prefab, ClassificationResult? item, ClassificationTaxonomy taxonomy,
-        ICategoryAnswers answers, ChestRuleEvaluator evaluator, IReadOnlyList<FacetEvidence>? facets, Func<string, string, string>? openName)
+        ICategoryAnswers answers, ChestRuleEvaluator evaluator, IReadOnlyList<FacetEvidence>? facets, Func<string, string, string>? openName,
+        Func<bool>? refuses = null)
     {
         var read = evaluator.Read(payload, taxonomy);
         if (read.State == ContainerPolicyReadState.Unsupported) return new ChestExplanation(id, ChestVerdict.RuleUnreadable, "its rule can't be read by this version", null);
@@ -431,7 +456,8 @@ public static class PlacementExplainer
         if (!answers.CategoriesReady && read.Rules.Acceptance.Rules.Count != 0) return new ChestExplanation(id, ChestVerdict.CategoriesPending, "categories not ready yet", null);
         if (item == null) return new ChestExplanation(id, ChestVerdict.RuleRejects, "this item has no categories", null);
         return evaluator.Evaluate(payload, prefab, taxonomy, answers, facets) == ChestRuleDecision.Accept
-            ? new ChestExplanation(id, ChestVerdict.RuleRejects, "its rule takes it, but routing ranked it out", null)
+            ? refuses?.Invoke() == true ? new ChestExplanation(id, ChestVerdict.Refused, "its rule takes it; but " + RefusedText, null)
+                : new ChestExplanation(id, ChestVerdict.RuleRejects, "its rule takes it, but routing ranked it out", null)
             : new ChestExplanation(id, ChestVerdict.RuleRejects, Missed(read.Rules, item, ClassificationFilters.InstanceFacets(item, facets), taxonomy, openName), null);
     }
 
@@ -456,7 +482,10 @@ public static class PlacementExplainer
 
     // P10-04: diagnostic English for Summary and ChestExplanation.Text, which no player reads (tests and Lab only), like a
     // log line. The item tooltip says these causes with RunReport.Reason (ExplanationView).
-    private static string Diagnostic(RunReason reason) => reason switch
+    private static string NotReady(RunReason waiting) =>
+        waiting == RunReason.CategoriesPending ? "categories are not ready yet, try again shortly" : Diagnostic(waiting);
+
+    private static string Diagnostic(RunReason reason, int sources = CleanupPlanner.DefaultSources) => reason switch
     {
         RunReason.NoCapacity => "no room",
         RunReason.NoDestination => "no chest takes it",
@@ -465,7 +494,7 @@ public static class PlacementExplainer
         RunReason.Unsupported => "protected",
         RunReason.MucBusy => "other player's chest busy, run again",
         RunReason.Budget => "run limit reached, run again",
-        RunReason.ChestLimit => "in a chest farther than the nearest " + CleanupPlanner.MaximumSources + " with items; clean up again closer to it",
+        RunReason.ChestLimit => "in a chest this cleanup didn't reach (it takes items out of " + sources + " chests per run); clean up again",
         RunReason.OtherOwnerNoMuc => "another player's chest, no MultiUserChest",
         RunReason.BothRemote => "both chests are other players'",
         RunReason.OtherOwnerMucUnusable => "another player's chest; their MultiUserChest can't take requests",
@@ -473,6 +502,8 @@ public static class PlacementExplainer
         RunReason.OtherOwnerMucChecking => "another player's chest; still checking their MultiUserChest, run again in a moment",
         RunReason.OtherOwnerFormatUnknown => "another player's chest; their MultiUserChest format is unknown",
         RunReason.CategoriesPending => "waiting for categories to load, run again shortly",
+        RunReason.CategoriesServerFailed => "the server couldn't build the categories (see the server's log)",
+        RunReason.CategoriesFailed => "YAVSOS couldn't build the categories (see the log)",
         RunReason.OptedOut => "its chest was set to be left alone",
         RunReason.ChestUnreadable => "couldn't be read (see the log)",
         _ => reason.ToString()

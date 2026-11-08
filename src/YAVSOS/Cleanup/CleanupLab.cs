@@ -28,6 +28,29 @@ internal static class CleanupLab
         plugin.SettingsForLab.AllowCleanup.Value = on;
         return "allowCleanup=" + plugin.SettingsForLab.AllowCleanup.Value;
     }
+    /// <summary>
+    /// X67 fixture: set this peer's Server.MaximumChests and Server.MaximumSources (0 leaves one as it is), for a local world
+    /// where the player's own Server settings apply; on a dedicated server the server's file decides. Returns both, as the
+    /// planner will use them.
+    /// </summary>
+    public static string Limits(int chests, int sources)
+    {
+        if (Plugin.Instance is not { } plugin) return "not loaded";
+        var settings = plugin.SettingsForLab;
+        if (chests > 0) settings.MaximumChests.Value = chests;
+        if (sources > 0) settings.MaximumSources.Value = sources;
+        return $"maximumChests={settings.MaximumChests.Value} (effective {settings.EffectiveMaximumChests}); maximumSources={settings.MaximumSources.Value} (effective {settings.EffectiveMaximumSources})";
+    }
+
+    /// <summary>X60 fixture: this peer's Storehouse.AutomaticRules and DefaultPriority (priority 0 leaves it), for a local world.</summary>
+    public static string StoreRules(bool on, int priority)
+    {
+        if (Plugin.Instance is not { } plugin) return "not loaded";
+        var settings = plugin.SettingsForLab;
+        settings.StoreAutomaticRules.Value = on;
+        if (priority > 0) settings.StoreDefaultPriority.Value = priority;
+        return $"automaticRules={settings.StoreAutomaticRules.Value}; defaultPriority={settings.StoreDefaultPriority.Value}";
+    }
     public static string Step(int moves) { CleanupRunner.DiagnosticSteps += Math.Max(0, moves); return "steps=" + CleanupRunner.DiagnosticSteps; }
 
     /// <summary>Fixture: place a piece (for example piece_chest_wood) the vanilla way, at an offset from the player.</summary>

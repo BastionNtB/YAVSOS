@@ -12,7 +12,8 @@ CONFIGURATION = sys.argv[1] if len(sys.argv) > 1 else "Release"
 if CONFIGURATION not in ("Release", "Lab"):
     raise SystemExit("Usage: verify-build.py [Release|Lab]")
 OUTPUT = ROOT / f"artifacts/build/YAVSOS/{CONFIGURATION}/netstandard2.1"
-LAB_TYPES = ("YAVSOS.Transfers.RuleLab", "YAVSOS.Transfers.FaultLab", "YAVSOS.Cleanup.StashLab", "YAVSOS.Cleanup.CleanupLab", "YAVSOS.Interface.UiLab")
+LAB_TYPES = ("YAVSOS.Transfers.RuleLab", "YAVSOS.Transfers.FaultLab", "YAVSOS.Transfers.StoreLab", "YAVSOS.Cleanup.StashLab", "YAVSOS.Cleanup.CleanupLab", "YAVSOS.Interface.UiLab", "YAVSOS.Catalog.SliceLab",
+             "YAVSOS.Interface.StackLab", "YAVSOS.Interface.ThroughWallsLab", "YAVSOS.Interface.TemplateLab")
 
 
 def require(condition, message):
@@ -46,6 +47,8 @@ require(f"Version:       {version}.0" in metadata(core, "assembly"), "Core assem
 refs = metadata(plugin, "assemblyref")
 require("Name=ServerSync\n" not in refs, "Plugin still depends on an external ServerSync assembly.")
 require("Name=YAVSOS.MultiUserChest\n" not in refs, "Plugin depends on an external MultiUserChest assembly.")
+# X66 (D163): Zen.ModLib's outline is an optional adapter, reached by reflection only.
+require("Name=Zen.ModLib\n" not in refs, "Plugin references Zen.ModLib; its outline must stay optional (D163).")
 # D062: Jotunn is a required, separately installed dependency: referenced, never merged or packaged.
 require("Name=Jotunn\n" in refs, "Plugin lacks its required Jotunn reference (D062).")
 core_refs = metadata(core, "assemblyref")

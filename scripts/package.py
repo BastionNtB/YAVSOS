@@ -241,7 +241,7 @@ def nexus_bbcode(markdown):
 
 
 def changelog(version):
-    """Only released-version sections (`## x.y.z`) go into the package; the development history above them stays here."""
+    """The `## x.y.z` sections of CHANGELOG.md, without its header comment, for the package (D167)."""
     text = (ROOT / "CHANGELOG.md").read_text()
     sections = re.findall(r"^## (\d+\.\d+\.\d+)(.*?)$\n(.*?)(?=^## |\Z)", text, flags=re.M | re.S)
     if not any(found == version for found, _, _ in sections):

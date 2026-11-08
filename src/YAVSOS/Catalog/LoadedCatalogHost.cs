@@ -12,11 +12,19 @@ namespace YAVSOS.Catalog;
 /// <summary>Read-only, main-thread adapter. Never loads world/location/room assets.</summary>
 internal sealed class LoadedCatalogHost : IDisposable
 {
+#if YAVSOS_LAB
+    // X63 (D145): the Lab build reads its slice from BepInEx/config/yavsos-lab-slices.txt (SliceLab); else the defaults.
+    private readonly CatalogCache cache = new CatalogCache(SliceLab.Catalog, retries: 3, retrySeconds: 3);
+    internal CatalogState LabState => cache.State; // SliceLab's frame phases only.
+#else
     private readonly CatalogCache cache = new CatalogCache(retries: 3, retrySeconds: 3); // D086 B5.36: as loaded sources.
+#endif
     private readonly RestartWatch restarts = new RestartWatch("The item catalog"); // D144: no silent restart loop.
     private int reportedRetries;
     /// <summary>The catalog failed its quick retries (D086 B5.36) and waits for a slow one (D144): the reason, else null.</summary>
     internal string? GaveUp => active && cache.GaveUp ? cache.Diagnostic : null;
+    /// <summary>X62: seconds until the catalog tries again; negative when nothing is scheduled.</summary>
+    internal double RetryInSeconds => cache.RetryInSeconds;
     private readonly ManualLogSource log;
     private readonly Func<IEnumerable<CatalogFact?>?> open;
     private ObjectDB? database;

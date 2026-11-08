@@ -12,6 +12,7 @@
     <Compile Include="../../src/YAVSOS/Classification/ClassificationHost.cs" Link="Adapters/ClassificationHost.cs" />
     <Compile Include="../../src/YAVSOS/Interface/JotunnGuiCapability.cs" Link="Adapters/JotunnGuiCapability.cs" />
     <Compile Include="../../src/YAVSOS/Interface/ChestHighlightCapability.cs" Link="Adapters/ChestHighlightCapability.cs" />
+    <Compile Include="../../src/YAVSOS/Interface/ThroughWalls/ZenHighlightCapability.cs" Link="Adapters/ZenHighlightCapability.cs" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
@@ -19,6 +20,7 @@
     <Compile Include="../../src/YAVSOS/Networking/PeerIdentityGate.cs" Link="Adapters/PeerIdentityGate.cs" />
     <Compile Include="../../src/YAVSOS/Networking/ServerSyncVersionAdvertisement.cs" Link="Adapters/ServerSyncVersionAdvertisement.cs" />
     <Compile Include="../../src/YAVSOS/Networking/CategoryPolicyFileReader.cs" Link="Adapters/CategoryPolicyFileReader.cs" />
+    <Compile Include="../../src/YAVSOS/Interface/PersonalTemplateFile.cs" Link="Adapters/PersonalTemplateFile.cs" />
     <Compile Include="../../src/YAVSOS/Networking/ServerSyncSettingsBridge.cs" Link="Adapters/ServerSyncSettingsBridge.cs" />
     <Compile Include="../../src/YAVSOS.MultiUserChest/Bundle/UnknownFormatGuard.cs" Link="Adapters/UnknownFormatGuard.cs" />
     <Compile Include="../../src/YAVSOS.MultiUserChest/Bundle/FormatProbe.cs" Link="Adapters/FormatProbe.cs" />

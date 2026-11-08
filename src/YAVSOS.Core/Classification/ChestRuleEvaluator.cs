@@ -42,7 +42,9 @@ public sealed class ChestRuleEvaluator
     private ClassificationTaxonomy? taxonomy;
     private long generation = long.MinValue;
 
-    public ChestRuleEvaluator(int maximumRules = 256, int maximumDecisions = 65536)
+    /// <summary>X67 (D156): 512 chests in one run each read their rule, so the rule cache holds more than that.</summary>
+    public const int DefaultMaximumRules = 1024, DefaultMaximumDecisions = 131072;
+    public ChestRuleEvaluator(int maximumRules = DefaultMaximumRules, int maximumDecisions = DefaultMaximumDecisions)
     {
         if (maximumRules < 1) throw new ArgumentOutOfRangeException(nameof(maximumRules));
         if (maximumDecisions < 1) throw new ArgumentOutOfRangeException(nameof(maximumDecisions));
@@ -146,10 +148,15 @@ public sealed class ChestRuleEvaluator
     {
         if (Contains(chest.Excludes, prefab)) return ChestRuleDecision.Reject;
         if (Contains(chest.Includes, prefab)) return ChestRuleDecision.Accept;
-        if (chest.Acceptance.Rules.Count == 0) return ChestRuleDecision.Reject;
+        // X60: a container filter's category isn't known until the filters are read this session (or at all, with the game's
+        // check off). A rule naming one waits, as a category part does while categories load, so nothing moves on its account.
+        var filterPending = answers is IFilterCategoryState { FilterCategoriesPending: true } &&
+            chest.UnknownCategories.Any(ContainerFilterSet.IsFilterCategory);
+        if (chest.Acceptance.Rules.Count == 0) return filterPending ? ChestRuleDecision.RejectCategoriesPending : ChestRuleDecision.Reject;
         if (!answers.CategoriesReady) return ChestRuleDecision.RejectCategoriesPending;
         var item = answers.Resolve(prefab);
-        return item != null && chest.Acceptance.Accepts(item, instance) ? ChestRuleDecision.Accept : ChestRuleDecision.Reject;
+        return item != null && chest.Acceptance.Accepts(item, instance) ? ChestRuleDecision.Accept
+            : filterPending ? ChestRuleDecision.RejectCategoriesPending : ChestRuleDecision.Reject;
     }
 
     // ChestRules keeps exact lists in ordinal order.

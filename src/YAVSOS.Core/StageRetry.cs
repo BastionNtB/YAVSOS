@@ -21,6 +21,8 @@ public sealed class StageRetry
     /// <summary>The last scheduled retry comes after the quick ones: the stage has given up for now (shown, D087).</summary>
     public bool Slow => Scheduled && Attempts > quickRetries;
     public double RetryAt { get; private set; }
+    /// <summary>X62: seconds from <paramref name="now"/> until the scheduled retry (0 once due); negative when none is scheduled.</summary>
+    public double SecondsUntil(double now) => Scheduled ? Math.Max(0, (RetryAt - now) / unitsPerSecond) : -1;
 
     public StageRetry(int quickRetries, double quickSeconds, double unitsPerSecond)
     {

@@ -19,8 +19,12 @@ public sealed class StashChest
     public bool LocallyOwned { get; }
     /// <summary>For another player's chest: whether a MultiUserChest request to its owner can be read correctly, and if not, why (D061 Q8, F3).</summary>
     public OwnerMucState OwnerMuc { get; }
-    public StashChest(string id, string rulePayload, TransferInventorySnapshot inventory, bool locallyOwned, OwnerMucState ownerMuc = OwnerMucState.Usable)
+    /// <summary>X60 (D160): the container type's built-in filter; null for a type that takes everything. A chest never receives what it refuses.</summary>
+    public ContainerFilter? Filter { get; }
+    public StashChest(string id, string rulePayload, TransferInventorySnapshot inventory, bool locallyOwned, OwnerMucState ownerMuc = OwnerMucState.Usable,
+        ContainerFilter? filter = null)
     {
+        Filter = filter;
         Id = TransferCanonical.Text(id, 256, false);
         RulePayload = rulePayload ?? throw new ArgumentNullException(nameof(rulePayload));
         Inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
@@ -58,12 +62,26 @@ public sealed class StashInput
     public bool AzuStores { get; }
     /// <summary>AzuAutoStore's own exclusions, by chest id; a chest it excludes the item from is no destination.</summary>
     public Func<string, TransferItemIdentity, bool>? AzuAllows { get; }
+    /// <summary>
+    /// F14 (D129): the game's own answer whether a chest, by id, takes one unit of a stack (<c>Inventory.CanAddItem(item, 1)</c>);
+    /// a mod's filter, such as a Storehouse store's, can say no. Asked only when the chest's snapshot has room for one unit,
+    /// and only for a chest that would otherwise receive. Null: not asked.
+    /// </summary>
+    public Func<string, TransferStack, bool>? Takes { get; }
+    internal ChestTakes TakesCheck { get; }
+    /// <summary>
+    /// X71 (D159): why categories aren't ready, which picks the reason a waiting stack stays for
+    /// (<see cref="RunReasons.Waiting"/>). Ignored while they are ready.
+    /// </summary>
+    public CategoryWaitState CategoriesWait { get; }
     public StashInput(ClassificationTaxonomy taxonomy, ICategoryAnswers answers, TransferInventorySnapshot player, IEnumerable<StashChest> chests,
         Func<string, int>? categorySize = null, bool mucAvailable = false, IEnumerable<Guid>? held = null, IEnumerable<Guid>? only = null,
         Func<TransferStack, IReadOnlyList<FacetEvidence>>? instanceFacets = null, bool azuStores = false,
-        Func<string, TransferItemIdentity, bool>? azuAllows = null)
+        Func<string, TransferItemIdentity, bool>? azuAllows = null, Func<string, TransferStack, bool>? takes = null,
+        CategoryWaitState categoriesWait = CategoryWaitState.Loading)
     {
-        InstanceFacets = instanceFacets; AzuStores = azuStores; AzuAllows = azuAllows;
+        InstanceFacets = instanceFacets; AzuStores = azuStores; AzuAllows = azuAllows; Takes = takes; TakesCheck = new ChestTakes(takes);
+        CategoriesWait = categoriesWait;
         Taxonomy = taxonomy ?? throw new ArgumentNullException(nameof(taxonomy));
         Answers = answers ?? throw new ArgumentNullException(nameof(answers));
         Player = player ?? throw new ArgumentNullException(nameof(player));
@@ -150,13 +168,15 @@ public sealed class StashPlan
 /// Deterministic, advisory stash planning (P5-01, D061): the player's inventory into nearby chests when YAVSOS does
 /// the stashing (AzuAutoStore absent). Each stack goes first to ruled chests that accept it, in
 /// <see cref="DestinationRouting.Rank"/> order (priority, then specificity), then to unruled chests that already hold
-/// that item, nearest first. Equipped and quest items and protected cells never give items. Stacks are taken in cell
-/// order. An item no chest takes stays in the inventory without a report; only an item a chest would take but cannot
-/// is reported. Every move is rechecked at its write.
+/// that item, nearest first. A chest that refuses the item itself (the game's check, F14) is no destination. Equipped
+/// and quest items and protected cells never give items. Stacks are taken in cell order. An item no chest takes stays
+/// in the inventory without a report; only an item a chest would take but cannot is reported. Every move is rechecked
+/// at its write.
 /// </summary>
 public static class StashPlanner
 {
-    public const int MaximumChests = 256;
+    /// <summary>X67 (D156, amending D095): the planner's own bound; the server's <c>MaximumChests</c> (default 256) can't exceed it.</summary>
+    public const int MaximumChests = 512;
     public const int MaximumMoves = 512;
 
     public static StashPlan Plan(StashInput input, ChestRuleEvaluator? evaluator = null)
@@ -185,7 +205,7 @@ public static class StashPlanner
             {
                 // D087: an item that waits for categories is reported, not left silently (D086 D4).
                 if (Waiting(input, evaluator, ruled, stack.Identity.Prefab).Count != 0 && !Kept(input, stack))
-                    remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, RunReason.CategoriesPending));
+                    remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, RunReasons.Waiting(input.CategoriesWait)));
                 continue;
             }
             if (!stack.TransferSupported) { remainders.Add(new StashRemainder(stack.Handle, stack.Identity, stack.Quantity, RunReason.Unsupported)); continue; }
@@ -256,6 +276,14 @@ public static class StashPlanner
     {
         var taxonomy = input.Taxonomy; var answers = input.Answers; var prefab = stack.Identity.Prefab;
         var routes = new List<Route>();
+        // F14: a chest that would receive but refuses the item itself is left out, as if its rule didn't take it. X60 (D160):
+        // so is one whose type's filter refuses it, known in advance (narrow only), full or not.
+        void Add(StashChest chest, StashTier tier, RankedDestination? ranked)
+        {
+            if (ContainerFilter.Refuses(chest.Filter, prefab)) return;
+            var route = Gate(input, chest, tier, ranked, stack);
+            if (route.Blocked != null || !input.TakesCheck.Refuses(chest.Id, chest.Inventory, stack)) routes.Add(route);
+        }
         var item = answers.CategoriesReady ? answers.Resolve(prefab) : null;
         if (item == null)
         {
@@ -263,7 +291,7 @@ public static class StashPlanner
             var chests = ruled.ToDictionary(x => x.Candidate, x => x.Chest);
             foreach (var row in DestinationRouting.ExactOnly(prefab, ruled.Select(x => x.Candidate)))
                 if (evaluator.Evaluate(chests[row.Candidate].RulePayload, prefab, taxonomy, answers) == ChestRuleDecision.Accept)
-                    routes.Add(Gate(input, chests[row.Candidate], StashTier.Ruled, row, stack));
+                    Add(chests[row.Candidate], StashTier.Ruled, row);
             // A category chest that may take it once categories are ready, and would rank above an Always chest, keeps it
             // from that chest and from unruled holders meanwhile, so cleanup need not move it again later (D092).
             var waiting = Waiting(input, evaluator, ruled, prefab);
@@ -280,11 +308,11 @@ public static class StashPlanner
             var chests = ruled.ToDictionary(x => x.Candidate, x => x.Chest);
             foreach (var row in StoreOrder.Accepting(item, prefab, ruled.Select(x => x.Candidate), x => chests[x].RulePayload, facets, taxonomy, answers,
                          input.CategorySize, evaluator))
-                routes.Add(Gate(input, chests[row.Candidate], StashTier.Ruled, row, stack));
+                Add(chests[row.Candidate], StashTier.Ruled, row);
         }
         if (input.AzuStores) return routes;
         foreach (var chest in unruled)
-            if (chest.Inventory.Stacks.Any(x => StringComparer.Ordinal.Equals(x.Identity.Prefab, prefab))) routes.Add(Gate(input, chest, StashTier.Holder, null, stack));
+            if (chest.Inventory.Stacks.Any(x => StringComparer.Ordinal.Equals(x.Identity.Prefab, prefab))) Add(chest, StashTier.Holder, null);
         return routes;
     }
 
@@ -292,7 +320,8 @@ public static class StashPlanner
     internal static List<(StashChest Chest, DestinationCandidate Candidate)> Waiting(StashInput input, ChestRuleEvaluator evaluator,
         List<(StashChest Chest, DestinationCandidate Candidate)> ruled, string prefab) =>
         input.Answers.CategoriesReady ? new List<(StashChest, DestinationCandidate)>()
-        : ruled.Where(x => evaluator.Evaluate(x.Chest.RulePayload, prefab, input.Taxonomy, input.Answers) == ChestRuleDecision.RejectCategoriesPending).ToList();
+        : ruled.Where(x => !ContainerFilter.Refuses(x.Chest.Filter, prefab) &&
+            evaluator.Evaluate(x.Chest.RulePayload, prefab, input.Taxonomy, input.Answers) == ChestRuleDecision.RejectCategoriesPending).ToList();
 
     // DestinationRouting.Rank's order before match class: ordinary before overflow, then larger priority. On a tie the
     // Always chest wins (an exact match ranks above a category), so only a strictly better chest outranks it.

@@ -18,6 +18,9 @@ environment variables with the same names. Values are never printed or put on a 
                     (MOD_ID: the page's number; FILE_ID: the API "File ID" under the file's
                     Advanced details, which takes each new version)
 
+With --check-live (after publishing, read-only, no build): each store shows the version, the GitHub release has
+both zips, and every image in the store README loads.
+
 Nexus uses its v3 upload API the way Nexus-Mods/upload-action v1.0.0-beta.11 does. The GitHub
 release (on the --repo-url repository, at the tag, with both zips) uses the gh CLI's own login.
 """
@@ -132,6 +135,19 @@ def check(version, tag, publishing):
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
     print(f"   version {version}, commit {head}, CHANGELOG entry present"
           f"{' (marked unreleased)' if version in unreleased else ''}")
+    # The player text checks: the guide (formatting, spelling, full stops) and the English messages (the word
+    # list's rules, spelling). Their scripts aren't part of the public export, so a public checkout skips them.
+    for script, args, what in (("scripts/guide_review.py", ["check"], "the player guide"),
+                               ("scripts/messages_check.py", [], "the English message file"),
+                               ("scripts/workarounds.py", [], "a workaround for another mod (its marker)"),
+                               ("scripts/guide_review.py", ["spell", "--public"], "the public docs' spelling"),
+                               ("scripts/docs_touched.py", ["--check-map"], "the map from code to doc sections")):
+        if not (ROOT / script).is_file():
+            continue
+        result = subprocess.run([sys.executable, str(ROOT / script), *args], cwd=ROOT, capture_output=True, text=True)
+        print("\n".join(f"   {line}" for line in (result.stdout + result.stderr).strip().splitlines()[-12:]))
+        if result.returncode != 0:
+            fail(f"{what} doesn't pass its check; run {script} {' '.join(args)} and fix what it lists before releasing.")
 
 
 def build_and_test():
@@ -340,6 +356,58 @@ def package_uuid(store_name, namespace, name):
     return next((p.get("uuid4") for p in listing if p.get("full_name") == f"{namespace}-{name}"), None)
 
 
+def check_live(version, tag, repo_url):
+    """Read-only, after publishing: every store shows this version, the GitHub release has both zips, and every
+    image in the store README loads. Each failure is reported; the run fails if any check does."""
+    step(f"Live pages for {version} (read-only)")
+    config = json.loads(package.CONFIG.read_text())
+    problems = []
+    readme = None
+    for store_name in STORES:
+        store = load_store(store_name)
+        status, _, info = request(store, "GET", f"/api/experimental/package/{config['namespace']}/{config['name']}/")
+        latest = (info.get("latest") or {}).get("version_number") if status == 200 and isinstance(info, dict) else None
+        print(f"   {store_name}: {'shows ' + latest if latest else f'not readable ({status})'}")
+        if latest != version:
+            problems.append(f"{store_name} shows {latest or 'nothing'}, not {version}")
+        if store_name == "thunderstore" and latest == version:
+            status, _, body = request(store, "GET", f"/api/experimental/package/{config['namespace']}/{config['name']}/{version}/readme/")
+            readme = body.get("markdown") if status == 200 and isinstance(body, dict) else None
+    nexus = load_nexus()
+    mod, _ = nexus_resolve(nexus)
+    print(f"   nexus: mod version {mod.get('version')}")
+    if mod.get("version") != version:
+        problems.append(f"nexus shows {mod.get('version')}, not {version}")
+    if repo_url and tag:
+        seen = subprocess.run(["gh", "release", "view", tag, "-R", github_repo(repo_url), "--json", "assets",
+                               "--jq", ".assets | length"], capture_output=True, text=True, timeout=TIMEOUT)
+        count = seen.stdout.strip() if seen.returncode == 0 else ""
+        print(f"   github: release {tag} " + (f"with {count} file(s)" if count else "not found"))
+        if count != "2":
+            problems.append(f"the GitHub release {tag} has {count or 'no'} files, not 2")
+    if readme is None:
+        problems.append("the Thunderstore README for this version isn't readable, so its images weren't checked")
+    else:
+        images = sorted(set(re.findall(r"!\[[^\]]*\]\((https?://[^)\s]+)\)", readme)))
+        broken = []
+        for url in images:
+            call = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "YAVSOS-release"})
+            try:
+                with urllib.request.urlopen(call, timeout=TIMEOUT) as response:
+                    ok = response.status == 200
+            except (urllib.error.URLError, TimeoutError):
+                ok = False
+            if not ok:
+                broken.append(url)
+        print(f"   README images: {len(images) - len(broken)} of {len(images)} load")
+        problems += [f"image doesn't load: {url}" for url in broken]
+    for problem in problems:
+        print(f"   PROBLEM: {problem}")
+    if problems:
+        fail(f"{len(problems)} live check(s) failed; a store may still be catching up, so rerun in a few minutes.")
+    print("   every store shows the version, and every README image loads")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--tag", help="release tag; must be v<ProjectIdentity.Version>")
@@ -348,7 +416,12 @@ def main():
     parser.add_argument("--skip-build", action="store_true", help="package the existing Release build (dry runs only)")
     parser.add_argument("--validate-online", action="store_true", help="ask Thunderstore to validate the parts (publishes nothing)")
     parser.add_argument("--publish", help="comma-separated targets: thunderstore,hexium,nexus,github")
+    parser.add_argument("--check-live", action="store_true",
+                        help="after publishing: check the stores, the GitHub release and the README's images (read-only)")
     args = parser.parse_args()
+    if args.check_live:
+        check_live(args.tag[1:] if args.tag else package.project_version(), args.tag, args.repo_url)
+        return
 
     targets = [s.strip() for s in args.publish.split(",")] if args.publish else []
     unknown = [s for s in targets if s not in TARGETS]

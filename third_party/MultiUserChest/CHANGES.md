@@ -23,7 +23,7 @@ Every change in `Upstream/` is marked `YAVSOS-LOCAL`. [local-changes.diff](local
 
    YAVSOS publishes every peer's format on its player object (`YAVSOS.Cleanup.MucRoute`), or 0 when its copy can't take requests (D086 D13).
 
-   **Removal condition** (D090, extended by the X19 research §7; covers the guard and the probe): MultiUserChest itself handles both formats with a format or version marker in each message, or every copy players still use writes the 0.6.2 format **and** YAVSOS has another way to tell whether a peer has a working copy at all. An AzuAutoStore release with the 0.6.2 format is not enough on its own while older AzuAutoStore builds stay in use.
+   Workaround for AzuAutoStore's bundled MultiUserChest (#42). **Removal condition** (D090, extended by the X19 research §7; covers the guard and the probe): MultiUserChest itself handles both formats with a format or version marker in each message, or every copy players still use writes the 0.6.2 format **and** YAVSOS has another way to tell whether a peer has a working copy at all. An AzuAutoStore release with the 0.6.2 format is not enough on its own while older AzuAutoStore builds stay in use.
 
 ## Updating
 

@@ -29,6 +29,8 @@ public sealed class Tooltip : IEquatable<Tooltip>
         new(heading ?? throw new ArgumentNullException(nameof(heading)), "", null, list ?? throw new ArgumentNullException(nameof(list)));
     /// <summary>A name as the heading ("Copper", "Metals") and a body.</summary>
     public static Tooltip Named(string name, Message? body = null) => new(null, name ?? "", body, null);
+    /// <summary>A name as the heading over a list (X23: a template's name over its details).</summary>
+    public static Tooltip Named(string name, MessageList list) => new(null, name ?? "", null, list ?? throw new ArgumentNullException(nameof(list)));
     /// <summary>A body without a heading, such as a message spot's whole text.</summary>
     public static Tooltip Text(Message body) => new(null, "", body ?? throw new ArgumentNullException(nameof(body)), null);
 

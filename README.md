@@ -147,7 +147,7 @@ they're sent to every player who joins.
 
 ## Setup types
 
-YAVSOS works in single-player, on a server, or just for you on a server that doesn't have it. If the server has YAVSOS installed, every player will need it as well. The server's categories and settings apply to everyone. If it's on client only stashing should work on its own, but stashing into chests another player is using requires the other player(s) to have YAVSOS, AzuAutoStore (AAS), or MultiUserChest (MUC) as well. While this mixing and matching works, it’s recommended that everyone be on the same version of MUC (either the one bundled with YAVSOS, AAS, or Standalone MUC)
+YAVSOS works in single-player, on a server, or just for you on a server that doesn't have it. If the server has YAVSOS installed, every player will need it as well. As with any other mod, it's best to have everyone on the same version. The server's categories and settings apply to everyone. If it's on client only, stashing should work on its own, but stashing into chests another player is using requires the other player(s) to have YAVSOS, AzuAutoStore (AAS), or MultiUserChest (MUC) as well. While this mixing and matching works, it's recommended that everyone be on the same version of MUC (either the one bundled with YAVSOS, AAS, or Standalone MUC).
 
 ![section divider](assets/art/divider-left.png)
 
@@ -155,11 +155,11 @@ YAVSOS works in single-player, on a server, or just for you on a server that doe
 
 ### Create rules in a chest
 
-Open a chest, and the YAVSOS panel shows up beside it. Tick the categories you want it to accept, for example, *Ores & metal scrap* or *Food*. YAVSOS rules are live as soon as you change them. Every item in those categories now belongs there, including ones you haven't found yet.
+Open a chest, click the **YAVSOS** button below the chest interface, and the YAVSOS panel shows up beside it. Tick the categories you want it to accept, for example, *Ores & metal scrap* or *Food*. YAVSOS rules are live as soon as you change them. Every item in those categories now belongs there, including ones you haven't found yet.
 
-![The YAVSOS panel with callouts: the status marks, the rule with its Copy, Paste and Clear rule buttons, the editor tabs, the items the rule accepts, the priority bar, and the “Clean up nearby” button with the “Don’t clean up this chest” tick box.](assets/media/panel-overview.png)
+![The inventory, a Black Metal Chest and the YAVSOS panel beside it, with callouts: the status marks, the rule with its Copy, Paste and Clear rule buttons, the editor tabs, the Templates tab, the All and Clear buttons on an item section, the items (click for Always, again for Never), the priority bar, the clean-up row, and the YAVSOS button that shows and hides the panel.](assets/media/panel-overview.png)
 
-![In an empty chest's panel, search "ore" and tick *Ores & metal scrap*: the item grid fills with every ore, including ones not found yet.](assets/media/set-rule.gif)
+![At an empty Black Metal Chest, a click on the YAVSOS button opens the panel; search "ore" and tick Ores & metal scrap: the rule takes effect at once, and the chest lights up with its "1 of 3" marker.](assets/media/set-rule.gif)
 
 You can always clear a rule with a click of a button or Copy a rule from one chest and paste to another.
 
@@ -167,15 +167,15 @@ You can always clear a rule with a click of a button or Copy a rule from one che
 
 #### Rule management
 
-You can use the ↶ (undo) button beside the Copy and Paste buttons, or press **Ctrl + Z**, which will undo your last change, which will include mistakenly pasting or clearing a rule. If you want to keep what was undone, you can always use the ↷ (redo) button which appears after undoing a change.
+You can use the **↶** (undo) button beside the **Copy** and **Paste** buttons, or press **Ctrl + Z**, which will undo your last change, which will include mistakenly pasting or clearing a rule. If you want to keep what was undone, you can always use the **↷** (redo) button which appears after undoing a change.
 
 Rule editing respects the ward's permission settings when the chest is inside its area; a private chest can only be edited by the builder.
 
 If you want more control:
 
-- **Always or Never.** Under the "Items" tab, you can click an item's icon to mark it *Always*, meaning it will always be accepted there (even if it's not in the category), click again for *Never*, meaning it won't be stashed there (even if it is in the category). Click again to clear it, meaning it will follow the category and filters. This is so you can have fine-grained control over what goes into a chest or not.
+- **Always or Never.** Under the **Items** tab, you can click an item's icon to mark it *Always*, meaning it will always be accepted there (even if it's not in the category), click again for *Never*, meaning it won't be stashed there (even if it is in the category). Click again to clear it, meaning it will follow the category and filters. This is so you can have fine-grained control over what goes into a chest or not. You can also use right-click to cycle through *Always*/*Never* in the other direction. Selected categories will separate the items in the list by the category. You can use the bulk **✕ All** buttons to exclude an entire category with one click, making it easy to allow only specific ones you want.
 
-![Clicking two icons in the item grid: one becomes *Always here*, the other *Always here* and then *Never here*, then both are cleared; the rule's chips change at each click.](assets/media/always-never.gif)
+![The Items tab of a chest set to Metals and Ores & metal scrap: a click marks Bloodgold Never; Bronze goes to Always, then Never, and a right-click steps it back to Always; ✕ All marks the whole Ores & metal scrap section Never, then Black Metal Scrap and Copper Ore are clicked back to follow the category. The rule's chips change at each click.](assets/media/always-never.gif)
 
 - **Filters.** Narrow things down, for example only upgraded gear, items crafted by you, an
   EpicLoot rarity, or food that's mostly health. The panel only offers filters that make
@@ -189,7 +189,13 @@ If you want more control:
 
 #### Rule suggestions
 
-YAVSOS suggests rules based on what is in the chest already when a chest doesn’t have a rule. Click the **✦ Set rule: Metals** suggestion to set the rule. YAVSOS also suggests “always rules” when the chest holds items its rule doesn't accept; simply click the **✓ Always: these items** suggestion to mark them as *Always*. Check the tooltip to see what items would be affected. You can dismiss the suggestion by clicking the ✕.
+YAVSOS suggests rules based on what is in the chest already when a chest doesn't have a rule. Click the **✦ Set rule: Metals** suggestion to set the rule. YAVSOS also suggests "always rules" when the chest holds items its rule doesn't accept; simply click the **✓ Always: these items** suggestion to mark them as *Always*. Check the tooltip to see what items would be affected. You can dismiss the suggestion by clicking the **✕**.
+
+#### Rule templates
+
+Templates offer a simple "click once to set up" way to use a pre-defined chest rule that is also shareable (admins only for now) with others on your server. You can save your own or copy the server's templates for use on any world YAVSOS is installed on.
+
+![On a Food chest's Templates tab, save its rule as a template named "Food"; at an empty chest, select Food under Personal templates and press Apply: the chest takes the rule's category, its two Never items and its priority.](assets/media/templates.gif)
 
 ### Status marks
 
@@ -198,17 +204,17 @@ On the top right of the YAVSOS panel, you can find the status of YAVSOS and its 
 - Green ![green tick](assets/art/mark-ok.png) means everything is active.
 - Amber/yellow ![amber exclamation mark](assets/art/mark-caution.png) means a partial failure or there is something you might need to look at, such as AAS exclusions for a chest or categories for a mod not working.
 - Red ![red cross](assets/art/mark-broken.png) means a mod integration was disabled due to an automatic incompatibility check or functionality of YAVSOS is considered not working.
-- Grey ![grey dash](assets/art/mark-off.png) means a setting has been disabled.
+- Gray ![gray dash](assets/art/mark-off.png) means a setting has been disabled.
 
 ### Stashing
 
 Stashing takes items from your inventory and automatically puts them into nearby chests for you. YAVSOS directs where these items end up by using the rules you set up on each chest.
 
-Press **.** (period) to stash everything in your inventory or **middle-click** a single stack/item in your inventory to stash just that one. With YAVSOS only installed, you will see chests light up and a little ‘puff’ animation on the chests stacked. YAVSOS also will show a result panel in the bottom center of your screen. With AzuAutoStore (AAS) installed, YAVSOS defers to AAS for its stashing and you would use the AAS stash key as usual and see AAS’s stashing animation instead.
+Press **.** (period) to stash everything in your inventory or **Shift + middle-click** a single stack/item in your inventory to stash just that one. With YAVSOS only installed, you will see chests light up and a little "puff" animation on the chests stacked. YAVSOS also will show a result panel in the bottom center of your screen. With AzuAutoStore (AAS) installed, YAVSOS defers to AAS for its stashing and you would use the AAS stash key as usual and see AAS's stashing animation instead.
 
 #### The results panel
 
-The result panel will show a summary of where items ended up. If they can’t all be moved, the results panel will mention what items weren’t moved, similar to how the cleanup’s result panel works.
+The result panel will show a summary of where items ended up. If they can't all be moved, the results panel will mention what items weren't moved, similar to how the cleanup's result panel works.
 
 ![AzuAutoStore's store key fills eight Ross drawers, each reserved for one item, and the result panel lists what went where. Additional mods shown: AzuAutoStore, RossItemDrawers.](assets/media/store-key.gif)
 
@@ -217,13 +223,13 @@ The result panel will show a summary of where items ended up. If they can’t al
 
 Equipped or favorited items (from supported mods) are never stashed. Items in your hotbar or AzuExtendedPlayerInventory (AzuEPI) quick slots are by default not stashed. These are configured through AAS when installed, or YAVSOS when standalone.
 
-![Pointing at a stack of copper in the inventory: the tooltip reads "Stash stack (Middle mouse): Black Metal Chest 3 m away (counts as Metals)". A middle-click sends only that stack, and the result panel confirms it.](assets/media/where-it-goes.gif)
+![Pointing at a stack of 20 copper in the inventory: the tooltip reads "Stash stack (Shift + Middle mouse): Black Metal Chest 3 m away, 2 of 3 from the bottom (counts as Metals)". A Shift + middle-click sends only that stack, the middle chest of the three glows, and the result panel confirms it.](assets/media/where-it-goes.gif)
 
 ### Cleaning up
 
 Sometimes people don't always stash things in the right place, or maybe you want to change the rules or priority on existing chests, or your critical supply chest has run out of items also stored in a lower-priority chest somewhere nearby. The cleanup function can help here!
 
-It finds items that are better placed in other chests (rule mismatch, higher priority, etc.) and moves them to the place within the configured range. This also will move items from unruled chests into ruled ones. You can do this from the YAVSOS panel by clicking on **Clean up nearby** or by pressing **Ctrl + stash key** (default `.`, period). Afterwards, you will see a panel display informing you of what moved or stayed. Additionally, you will see chests light up red if something couldn’t be moved (because it was full or no existing rule takes the item). You can also disallow cleaning a chest with a click of the “Don’t clean up this chest” tick box.
+It finds items that are better placed in other chests (rule mismatch, higher priority, etc.) and moves them to the place within the configured range. This also will move items from unruled chests into ruled ones. You can do this from the YAVSOS panel by clicking on **Clean up nearby** or by pressing **Ctrl + stash key** (default **.**, period). Afterwards, you will see a panel display informing you of what moved or stayed. Additionally, you will see chests light up red if something couldn't be moved (because it was full or no existing rule takes the item). You can also disallow cleaning a chest with a click of the **Don't clean up this chest** tick box.
 
 ![Ctrl + the stash key at a Wood chest holding misplaced ores and a sword: the ores move to the Ores chest, which glows gold; the sword stays, so the Wood chest glows red-orange; the result panel says why.](assets/media/cleanup.gif)
 
@@ -233,9 +239,13 @@ It finds items that are better placed in other chests (rule mismatch, higher pri
 
 - Point at a chest to see its rule, like "Food › eaten by Boar · priority 2 (Urgent)".
 - Point at an item in your inventory to see its categories and where stashing would send it.
-- Search in the panel, and the nearby chests that would take that item light up in blue (if the “Also show chests that accept it” toggle at the end of the search bar is on), while chests that have the item light up gold.
+- Search in the panel, and the nearby chests that would take that item light up in blue (if the **Also show chests that accept it** toggle at the end of the search bar is on), while chests that have the item light up gold.
+- Chests lit up will now show a small marker on the chest, even through walls. If Zen.ModLib is installed, an outline of the chest will display, even through walls, instead of the marker.
+- The tooltip will also show a distinction on stacked chests, denoting where in the stack the chest sits. (Example: "Reinforced Chest 6 m away, 2 of 3 from the bottom").
 
 ![Searching "copper": the two chests holding copper light up gold, and the rule-tag button adds, in blue, the Metals chest that would take it. Pointing at a lit chest says why: "takes Copper" or "holds Copper ×132".](assets/media/finding.gif)
+
+![Behind a wall, search "bait" in a chest's panel and point at the Fishing bait row: the chest that holds bait lights up on the other side, and its "2 of 3" marker shows through the wall (magnified).](assets/media/through-walls.gif)
 
 ## Help and feedback
 
@@ -263,7 +273,7 @@ Everything goes through **GitHub issues**: bugs, questions, ideas and requests.
 
 - **AzuAutoStore:** every item still goes in through AzuAutoStore's own store call, so its
   messages, skip lists and multiplayer handling are unchanged. It matches stacks by name and
-  quality, keeps your equipped items, hotbar, quick slots and favourites, and anything no
+  quality, keeps your equipped items, hotbar, quick slots and favorites, and anything no
   rule asks for follows its own settings.
 - **MultiUserChest:** moves into another player's chest follow MultiUserChest's own rules,
   including what happens if that player lags or leaves while a move is waiting. YAVSOS's copy
@@ -274,14 +284,21 @@ Everything goes through **GitHub issues**: bugs, questions, ideas and requests.
   through AzuAutoStore.
 - **InfinityHammer:** Copying a chest with InfinityHammer copies the rules along with it.
 - **The game's "Place stacks" button** works as it always has and doesn't follow rules.
-- **Item origin:** the "item origin" filter knows items registered through Jotunn or ItemManager. Items a mod adds some other way show their origin as "origin not known", and base game items show as “Base game”
+- **Item origin:** the "item origin" filter knows items registered through Jotunn or ItemManager. Items a mod adds some other way show their origin as "origin not known", and base game items show as "Base game".
 - **Favorites:** YAVSOS tries to respect favorites from other mods such as AzuAutoStore, Quick Stack Store, or ItemFavoriteFramework meaning favorited items won't be stashed. Unfavorite them to allow stashing.
+- **ZenSign:** When ZenSign is installed with YAVSOS, the **Shift + middle-click** won't trigger an item search.
+- **Zen.ModLib:** When Zen.ModLib is installed with YAVSOS, the item search marker changes to the outline from this mod instead.
+- **Storehouse and other "filter container" mods:** For mods with filter containers (like with the Storehouse mod), their containers are given an Automatic rule which will automatically accept the items they want without needing to assign a category to them. You can narrow down the rule in the rule editor to make the rule more exclusive.
+
+![The panel of a Storehouse Armory nobody has set up: its rule reads "Automatic rule · Storehouse Armory", and the Categories tab lists "Storehouse stores (46)" with Armory selected. Callouts: "Automatically sets the container's rule" and "YAVSOS creates categories for all filtered stores". Additional mods shown: Storehouse.](assets/media/storehouse.png)
+
+![The same "bait" search with Zen.ModLib installed: in place of the marker, Zen.ModLib's blue outline traces the chest behind the wall (magnified). Additional mods shown: Zen.ModLib.](assets/media/through-walls-outline.gif)
 
 ![ZenUI's item tooltip for raspberries ending in YAVSOS's stash line, and BetterUI's chest hover showing YAVSOS's label "Metals · priority 2 (Urgent)". Additional mods shown: ZenUI, BetterUI.](assets/media/ui-mods.png)
 
-Tested with AzuAutoStore 3.1.7, Jotunn 2.30.2, EpicLoot 0.15.6, RossItemDrawers 1.3.0, Quick Stack Store 1.4.16,  ItemFavoriteFramework 1.0.0, and AzuExtendedPlayerInventory 2.6.6. During the testing, other mods were tested as well, but they won't be listed here; the mod is designed to generally be compatible by default. If specific compatibilities need to be expanded or made, create an issue on the GitHub for it!
+Tested with AzuAutoStore 3.1.7, Jotunn 2.30.2, EpicLoot 0.15.6, RossItemDrawers 1.3.0, Quick Stack Store 1.4.16, ItemFavoriteFramework 1.0.0, and AzuExtendedPlayerInventory 2.6.6. During the testing, other mods were tested as well, but they won't be listed here; the mod is designed to generally be compatible by default. If specific compatibilities need to be expanded or made, create an issue on the GitHub for it!
 
-## Licence and credits
+## License and credits
 
 YAVSOS is GPL-3.0-or-later ([LICENSE](LICENSE)). YAVSOS wouldn't work without the hard work of these modders and their mods: ServerSync by blaxxun and
 MultiUserChest by MSchmoecker, both MIT ([notices](third_party/README.md)).

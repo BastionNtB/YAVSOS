@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using BepInEx.Configuration;
 using ServerSync;
 using YAVSOS.Cleanup;
+using YAVSOS.Core.Interface;
 using YAVSOS.Core.Messages;
 using YAVSOS.Interface;
 
@@ -23,12 +25,24 @@ internal sealed class PluginSettings
     public ConfigEntry<UnityEngine.Color> TakesColor { get; }
     public ConfigEntry<UnityEngine.Color> StaysColor { get; }
     public ConfigEntry<bool> SearchShowsTakers { get; }
+    public ConfigEntry<bool> ShowThroughWalls { get; }
     public ConfigEntry<float> RulePanelOffsetX { get; }
     public ConfigEntry<float> RulePanelOffsetY { get; }
     public ConfigEntry<bool> RulePanelFolded { get; }
+    /// <summary>#62 (D158): the Items tab shows one section per ticked category, or one for the whole rule. Local, like the fold.</summary>
+    public ConfigEntry<bool> SectionsPerCategory { get; }
+    public ConfigEntry<YAVSOS.Core.Interface.ToggleButtonPlace> ToggleButtonPlace { get; }
+    public ConfigEntry<float> ToggleButtonOffsetX { get; }
+    public ConfigEntry<float> ToggleButtonOffsetY { get; }
     public ConfigEntry<bool> AllowCleanup { get; }
     public ConfigEntry<float> MaximumRange { get; }
     public ConfigEntry<int> MaximumChests { get; }
+    /// <summary>X67 (D156): how many chests one cleanup takes items out of; the planner picks chests with work first.</summary>
+    public ConfigEntry<int> MaximumSources { get; }
+    /// <summary>X60 (D155): a filtering store with no YAVSOS rule acts as if its own category were ticked.</summary>
+    public ConfigEntry<bool> StoreAutomaticRules { get; }
+    /// <summary>X60 (D155): the automatic rules' priority, on the panel's 1–10 scale.</summary>
+    public ConfigEntry<int> StoreDefaultPriority { get; }
     public ConfigEntry<float> CleanupRange { get; }
     public ConfigEntry<KeyboardShortcut> CleanupShortcut { get; }
     public ConfigEntry<bool> AllowStashing { get; }
@@ -41,8 +55,10 @@ internal sealed class PluginSettings
     public float EffectiveStashRange => Math.Max(1f, Math.Min(StashRange.Value, MaximumRange.Value));
     /// <summary>The player's cleanup range, capped by the server's maximum (D057 O1, O9).</summary>
     public float EffectiveCleanupRange => Math.Max(1f, Math.Min(CleanupRange.Value, MaximumRange.Value));
-    /// <summary>D095: the server's chest limit for one stash or cleanup run, never above the planners' own bound.</summary>
+    /// <summary>D095, X67: the server's chest limit for one stash or cleanup run, never above the planners' own bound.</summary>
     public int EffectiveMaximumChests => Math.Max(1, Math.Min(MaximumChests.Value, YAVSOS.Core.Transfers.CleanupPlanner.MaximumChests));
+    /// <summary>X67: the server's source limit for one cleanup, never above the planner's own bound.</summary>
+    public int EffectiveMaximumSources => Math.Max(1, Math.Min(MaximumSources.Value, YAVSOS.Core.Transfers.CleanupPlanner.MaximumSources));
     private readonly List<ConfigEntryBase> sharedEntries = new List<ConfigEntryBase>();
     private readonly List<(ConfigurationManagerAttributes Tag, Message Description)> descriptions = new List<(ConfigurationManagerAttributes, Message)>();
     public ConfigEntryBase[] SharedEntries => sharedEntries.ToArray();
@@ -63,8 +79,10 @@ internal sealed class PluginSettings
         sharedEntries.Add(LockSharedPolicy);
         LockSharedPolicy.SettingChanged += (_, _) => sharedChanged();
         // D042: settings arrive with their working features; unimplemented placeholders are not registered.
-        ShowRuleControls = Bind(file, sync, "Controls", "ShowRuleControls", true,
-            Message.Of("yavsos_setting_controls_showrulecontrols"), false, sharedChanged);
+        // X58 (D148): the YAVSOS button below the chest window writes this setting. New installs start with the panel
+        // hidden; a config file that already exists keeps its value (BepInEx wrote it on first run).
+        ShowRuleControls = Bind(file, sync, "Controls", "ShowRuleControls", false,
+            Message.Of("yavsos_setting_controls_showrulecontrols").With("button", "YAVSOS"), false, sharedChanged);
         // P6-04: the result panel adds item names and reasons to the one-line message, which is shown either way (X14: Azu's too).
         ShowResultPanel = Bind(file, sync, "Controls", "ShowResultPanel", true,
             Message.Of("yavsos_setting_controls_showresultpanel"), false, sharedChanged);
@@ -98,6 +116,9 @@ internal sealed class PluginSettings
             Message.Of("yavsos_setting_controls_stayscolor"), false, sharedChanged);
         SearchShowsTakers = Bind(file, sync, "Controls", "SearchShowsTakers", false,
             Message.Of("yavsos_setting_controls_searchshowstakers").With("button", Message.Of("yavsos_search_takers")), false, sharedChanged);
+        // X66 (D163): glowing chests also show through walls, by Zen.ModLib's outline or YAVSOS's marker; each player's own.
+        ShowThroughWalls = Bind(file, sync, "Controls", "ShowThroughWalls", true,
+            Message.Of("yavsos_setting_controls_showthroughwalls"), false, sharedChanged);
         // P6-03 (D062): the panel follows the chest window, so its position is an offset from there. The earlier absolute IMGUI
         // PanelX/PanelY keys are no longer read; a stale value would have pushed the panel off its window.
         RulePanelOffsetX = Bind(file, sync, "Controls", "PanelOffsetX", 0f,
@@ -107,6 +128,24 @@ internal sealed class PluginSettings
         // X2 (D116): one fold for every chest, not per chest; the panel's arrow sets it.
         RulePanelFolded = Bind(file, sync, "Controls", "PanelFolded", false,
             Message.Of("yavsos_setting_controls_panelfolded"), false, sharedChanged);
+        // #62 (D158): one choice for every chest, remembered on this PC and not synced, like the fold; the Items tab's button sets it.
+        SectionsPerCategory = Bind(file, sync, "Controls", "SectionsPerCategory", true,
+            Message.Of("yavsos_setting_controls_sectionspercategory"), false, sharedChanged);
+        // X58 (D148): the button's place is a preset plus offsets, since other mods put buttons below the chest window too
+        // (Recycle_N_Reclaim's Reclaim sits at the right by default). A preset sets the offsets; they can be changed after.
+        ToggleButtonPlace = Bind(file, sync, "Controls", "ButtonPlace", YAVSOS.Core.Interface.ToggleButtonPlace.Left,
+            Message.Of("yavsos_setting_controls_buttonplace").With("button", "YAVSOS").With("x", "ButtonOffsetX").With("y", "ButtonOffsetY"),
+            false, sharedChanged);
+        // The defaults are PanelToggle.DefaultOffsetX and DefaultOffsetY, written out for settings_doc.py.
+        ToggleButtonOffsetX = Bind(file, sync, "Controls", "ButtonOffsetX", 0f,
+            Message.Of("yavsos_setting_controls_buttonoffsetx").With("button", "YAVSOS"), false, sharedChanged);
+        ToggleButtonOffsetY = Bind(file, sync, "Controls", "ButtonOffsetY", 6f,
+            Message.Of("yavsos_setting_controls_buttonoffsety").With("button", "YAVSOS"), false, sharedChanged);
+        ToggleButtonPlace.SettingChanged += (_, _) =>
+        {
+            ToggleButtonOffsetX.Value = YAVSOS.Core.Interface.PanelToggle.DefaultOffsetX;
+            ToggleButtonOffsetY.Value = YAVSOS.Core.Interface.PanelToggle.DefaultOffsetY;
+        };
         // D079: with AzuAutoStore installed, it does the stashing, so YAVSOS's Stash settings show read-only (values kept for
         // when it is removed). Server settings stay bound on every side for ServerSync and say what applies in each case.
         var azu = !StashRunner.Enabled;
@@ -118,9 +157,19 @@ internal sealed class PluginSettings
         MaximumRange = Bind(file, sync, "Server", "MaximumRange", 50f,
             Message.Of("yavsos_setting_server_maximumrange"), true, sharedChanged, new AcceptableValueRange<float>(1f, 100f));
         MigrateRenamed(file, new ConfigDefinition("Server", "CleanupMaximumRange"), MaximumRange);
-        // D095: one chest limit for cleanup and YAVSOS's own stash; 256 is also the planners' bound, so it can only be lowered.
+        // D095, amended by D156 (X67): one chest limit for cleanup and YAVSOS's own stash, default 256, up to the planners' 512.
         MaximumChests = Bind(file, sync, "Server", "MaximumChests", 256,
-            Message.Of("yavsos_setting_server_maximumchests"), true, sharedChanged, new AcceptableValueRange<int>(16, 256));
+            Message.Of("yavsos_setting_server_maximumchests"), true, sharedChanged, new AcceptableValueRange<int>(16, YAVSOS.Core.Transfers.CleanupPlanner.MaximumChests));
+        // D156 (X67): the chests one cleanup takes items out of; 64 was the fixed limit before. Admins may raise it and pay the cost.
+        MaximumSources = Bind(file, sync, "Server", "MaximumSources", YAVSOS.Core.Transfers.CleanupPlanner.DefaultSources,
+            Message.Of("yavsos_setting_server_maximumsources").With("setting", "MaximumChests"), true, sharedChanged,
+            new AcceptableValueRange<int>(16, YAVSOS.Core.Transfers.CleanupPlanner.MaximumSources));
+        // D155 (X60): synced and locked like every server setting, so every player's game ranks the stores the same way.
+        StoreAutomaticRules = Bind(file, sync, "Storehouse", "AutomaticRules", true,
+            Message.Of("yavsos_setting_storehouse_automaticrules"), true, sharedChanged);
+        StoreDefaultPriority = Bind(file, sync, "Storehouse", "DefaultPriority", 4,
+            Message.Of("yavsos_setting_storehouse_defaultpriority").With("setting", "AutomaticRules"), true, sharedChanged,
+            new AcceptableValueRange<int>(YAVSOS.Core.Interface.ChestPriority.Highest, YAVSOS.Core.Interface.ChestPriority.Lowest));
         CleanupRange = Bind(file, sync, "Cleanup", "Range", 10f,
             Message.Of("yavsos_setting_cleanup_range").With("setting", "MaximumRange"), false, sharedChanged,
             new AcceptableValueRange<float>(1f, 100f));
@@ -137,8 +186,11 @@ internal sealed class PluginSettings
         StashShortcut = Bind(file, sync, "Stash", "Shortcut", new KeyboardShortcut(UnityEngine.KeyCode.Period),
             Stash(Message.Of("yavsos_setting_stash_shortcut")),
             false, sharedChanged, readOnly: azu);
-        StashItemShortcut = Bind(file, sync, "Stash", "SingleItemShortcut", new KeyboardShortcut(UnityEngine.KeyCode.Mouse2),
+        // X68 (D162): Shift + middle mouse, since ZenSign's search is on middle mouse by default; ZenSignSearchGuard keeps
+        // the click from ZenSign. A saved plain middle mouse (the old default) moves once (MoveStackKey).
+        StashItemShortcut = Bind(file, sync, "Stash", "SingleItemShortcut", new KeyboardShortcut(UnityEngine.KeyCode.Mouse2, UnityEngine.KeyCode.LeftShift),
             Stash(Message.Of("yavsos_setting_stash_singleitemshortcut")), false, sharedChanged, readOnly: azu);
+        MoveStackKey(file, StashItemShortcut);
         StashHotbar = Bind(file, sync, "Stash", "IncludeHotbar", false,
             Stash(Message.Of("yavsos_setting_stash_includehotbar").With("setting", "Player Ignore Hotbar")), false, sharedChanged, readOnly: azu);
         StashQuickSlots = Bind(file, sync, "Stash", "IncludeQuickSlots", false,
@@ -160,6 +212,30 @@ internal sealed class PluginSettings
         file.Save();
     }
 
+    /// <summary>
+    /// X68 (D162): a saved stack key equal to the old default (plain middle mouse) moves once to the new default, and the
+    /// file's record of one-time moves (<c>[Internal] SettingMoves</c>, hidden from the Configuration Manager, never
+    /// synchronized) gets this move's name whether or not anything moved, so a player who sets plain middle mouse again
+    /// keeps it. The decision is <see cref="StackKey.ShouldMove"/>.
+    /// </summary>
+    private void MoveStackKey(ConfigFile file, ConfigEntry<KeyboardShortcut> stackKey)
+    {
+        var moves = file.Bind("Internal", "SettingMoves", "", Describe(Message.Of("yavsos_setting_internal_settingmoves"), hidden: true));
+        if (StackKey.Done(moves.Value)) return;
+        var saved = stackKey.Value;
+        if (StackKey.ShouldMove(saved.MainKey.ToString(), saved.Modifiers.Select(x => x.ToString()), moves.Value))
+        {
+            stackKey.Value = (KeyboardShortcut)stackKey.DefaultValue;
+            moved = true;
+        }
+        moves.Value = StackKey.Mark(moves.Value);
+        file.Save();
+    }
+
+    private bool moved;
+    /// <summary>X68: this start moved a saved plain middle mouse to the new default; logged once the logger is up.</summary>
+    internal bool StackKeyMoved => moved;
+
     private ConfigEntry<T> Bind<T>(ConfigFile file, ConfigSync sync, string section, string key, T value,
         Message description, bool shared, Action sharedChanged, AcceptableValueBase? acceptable = null, bool readOnly = false)
     {
@@ -175,9 +251,9 @@ internal sealed class PluginSettings
     /// YAVSOS's own tag holding it in the player's language for the Configuration Manager. Safe in <c>Awake</c>: the lookup
     /// reads the language from <c>PlayerPrefs</c>, never <c>Localization.instance</c>.
     /// </summary>
-    private ConfigDescription Describe(Message description, AcceptableValueBase? acceptable = null, bool readOnly = false)
+    private ConfigDescription Describe(Message description, AcceptableValueBase? acceptable = null, bool readOnly = false, bool hidden = false)
     {
-        var tag = new ConfigurationManagerAttributes { ReadOnly = readOnly ? true : null, Description = Texts.Plain(description) };
+        var tag = new ConfigurationManagerAttributes { ReadOnly = readOnly ? true : null, Browsable = hidden ? false : null, Description = Texts.Plain(description) };
         descriptions.Add((tag, description));
         return new ConfigDescription(Texts.English(description), acceptable, tag);
     }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -11,7 +12,7 @@ namespace YAVSOS.Interface;
 /// P6-18: the Items tab's icon grid, like VNEI's item list. Only the rows in view exist: a fixed pool of icon cells and
 /// section titles is moved and refilled as the list scrolls, so a category of hundreds of items costs what one screen
 /// does. Icons are the game's own sprites; hovering shows the game's item tooltip (filled only for the hovered icon),
-/// with the mark's meaning; a click cycles the mark. Unity game thread only.
+/// with the mark's meaning; a click cycles the mark, a right-click cycles it the other way (X61). Unity game thread only.
 /// </summary>
 internal sealed class ItemGridView
 {
@@ -21,34 +22,46 @@ internal sealed class ItemGridView
     private readonly ScrollRect scroll;
     private readonly RectTransform content;
     private readonly List<CellView> cells = new();
-    private readonly List<Text> headers = new();
-    private readonly Action<GridEntry> click;
+    private readonly List<HeaderView> headers = new();
+    /// <summary>A click on an icon; the flag is true for a right-click (X61).</summary>
+    private readonly Action<GridEntry, bool> click;
     private readonly Func<string, Sprite?> icon;
     private readonly Func<GridEntry, (string Topic, string Text)> tooltip;
     private readonly Func<GridEntry, bool> keptOut;
-    private readonly List<(float Top, string? Title, int First, int Count)> lines = new();
+    /// <summary>X60 (D160): the container's filter refuses the item; its icon is dimmed whatever its mark.</summary>
+    private readonly Func<GridEntry, bool>? cannotHold;
+    private readonly Action<IReadOnlyList<GridEntry>, GridButton> sectionClick;
+    private readonly Func<IReadOnlyList<GridEntry>, GridButton, (string Topic, string Text)?> sectionTip;
+    // A header line has its section's title, its icons' range (First, Count) and (D158) whether Never all works there;
+    // an icon row has no title.
+    private readonly List<(float Top, string? Title, int First, int Count, bool NeverAll)> lines = new();
     private IReadOnlyList<GridEntry> entries = Array.Empty<GridEntry>();
     private int firstShown = -1, lastShown = -1;
     private float viewportShown = -1;
 
-    internal ItemGridView(JotunnWidgets ui, Transform parent, float height, Action<GridEntry> click, Func<string, Sprite?> icon,
-        Func<GridEntry, (string Topic, string Text)> tooltip, Func<GridEntry, bool> keptOut)
+    internal ItemGridView(JotunnWidgets ui, Transform parent, float height, Action<GridEntry, bool> click, Func<string, Sprite?> icon,
+        Func<GridEntry, (string Topic, string Text)> tooltip, Func<GridEntry, bool> keptOut,
+        Action<IReadOnlyList<GridEntry>, GridButton> sectionClick, Func<IReadOnlyList<GridEntry>, GridButton, (string Topic, string Text)?> sectionTip,
+        Func<GridEntry, bool>? cannotHold = null)
     {
-        this.click = click; this.icon = icon; this.tooltip = tooltip; this.keptOut = keptOut;
+        this.cannotHold = cannotHold;
+        this.click = click; this.icon = icon; this.tooltip = tooltip; this.keptOut = keptOut; this.sectionClick = sectionClick; this.sectionTip = sectionTip;
         (scroll, content) = ui.ScrollArea(parent, height);
         scroll.onValueChanged.AddListener(_ => Bind(false));
         WheelStep.Attach(scroll, Cell);
         var rows = Mathf.CeilToInt(height / Cell) + 2;
         for (var i = 0; i < rows * Columns; i++) cells.Add(new CellView(this, content));
-        for (var i = 0; i < 4; i++)
-        {
-            var title = ui.Label(content, "", JotunnWidgets.SmallSize, ui.Orange, false);
-            var rect = title.rectTransform;
-            rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0, 1);
-            rect.sizeDelta = new Vector2(Columns * Cell, Header);
-            title.gameObject.SetActive(false);
-            headers.Add(title);
-        }
+        // X59: a section per ticked category can put several headers in view at once, each a title line.
+        var titles = Mathf.CeilToInt(height / Header) + 2;
+        for (var i = 0; i < titles; i++) headers.Add(new HeaderView(this, ui, content));
+    }
+
+    /// <summary>The icons of the section whose header starts at <paramref name="first"/>, as they are now.</summary>
+    private IReadOnlyList<GridEntry> Section(int first, int count)
+    {
+        var list = new List<GridEntry>(count);
+        for (var i = first; i < first + count && i < entries.Count; i++) list.Add(entries[i]);
+        return list;
     }
 
     /// <summary>The grid's frame (its scroll area), for a note drawn over an empty grid (D101).</summary>
@@ -60,18 +73,21 @@ internal sealed class ItemGridView
     /// <summary>Icon cells in use now: the pool's size bounds the cost however long the list is.</summary>
     internal int Pool => cells.Count;
 
-    internal void Set(IReadOnlyList<GridEntry> rows, Func<GridSection, int, string> title)
+    internal void Set(IReadOnlyList<GridEntry> rows, Func<GridEntry, int, string> title)
     {
         entries = rows; lines.Clear(); Last = this;
         var top = 0f;
         for (var at = 0; at < rows.Count;)
         {
-            var section = rows[at].Section; var end = at;
-            while (end < rows.Count && rows[end].Section == section) end++;
-            lines.Add((top, title(section, end - at), at, 0)); top += Header;
+            // A section ends where the section or (X59) its ticked category changes.
+            var section = rows[at].Section; var group = rows[at].Group; var end = at;
+            while (end < rows.Count && rows[end].Section == section && string.Equals(rows[end].Group, group, StringComparison.Ordinal)) end++;
+            // D158: counted once per rebuild; a mark changes the rule, which rebuilds the grid.
+            var neverAll = ItemGrid.Usable(GridButton.NeverAll, ItemGrid.ToMark(rows, at, end - at, GridButton.NeverAll));
+            lines.Add((top, title(rows[at], end - at), at, end - at, neverAll)); top += Header;
             for (var first = at; first < end; first += Columns)
             {
-                lines.Add((top, null, first, Math.Min(Columns, end - first))); top += Cell;
+                lines.Add((top, null, first, Math.Min(Columns, end - first), true)); top += Cell;
             }
             at = end;
         }
@@ -106,20 +122,18 @@ internal sealed class ItemGridView
         var cell = 0; var header = 0;
         for (var line = first; line <= last && line < lines.Count; line++)
         {
-            var (top, title, start, count) = lines[line];
+            var (top, title, start, count, neverAll) = lines[line];
             if (title != null)
             {
                 if (header == headers.Count) continue;
-                var text = headers[header++];
-                text.text = title; text.rectTransform.anchoredPosition = new Vector2(Pad, -top);
-                if (!text.gameObject.activeSelf) text.gameObject.SetActive(true);
+                headers[header++].Show(title, entries[start].Section, start, count, new Vector2(Pad, -top), neverAll);
                 continue;
             }
             for (var i = 0; i < count && cell < cells.Count; i++)
                 cells[cell++].Show(entries[start + i], new Vector2(Pad + i * Cell, -top));
         }
         for (; cell < cells.Count; cell++) cells[cell].Hide();
-        for (; header < headers.Count; header++) if (headers[header].gameObject.activeSelf) headers[header].gameObject.SetActive(false);
+        for (; header < headers.Count; header++) headers[header].Hide();
         UiCost.Stop("item grid rows", timed);
     }
 
@@ -128,6 +142,91 @@ internal sealed class ItemGridView
         int low = 0, high = lines.Count - 1;
         while (low < high) { var mid = (low + high + 1) / 2; if (lines[mid].Top <= y) low = mid; else high = mid - 1; }
         return Math.Max(0, low);
+    }
+
+    /// <summary>
+    /// A section's title line: the title on the left and (X59, D149) its buttons on the right, Never all as a drawn
+    /// cross with "All", then Clear. Pooled like the cells; a button acts on the section's icons as they are at the click.
+    /// D158: Never all stays in place, greyed out, while the section has more icons to mark than one click marks; its
+    /// tooltip then says why.
+    /// </summary>
+    private sealed class HeaderView
+    {
+        private static readonly Color Back = new Color(0, 0, 0, 0.32f), Cross = new Color(0.95f, 0.3f, 0.25f, 0.85f);
+        private const float Gap = 4;
+        private readonly RectTransform root;
+        private readonly Text title;
+        private readonly (GridButton Button, RectTransform Rect, float Width)[] buttons;
+        private readonly Button neverAll;
+        private readonly Text neverAllLabel;
+        private readonly Image? neverAllCross;
+        private readonly Color label;
+        private (int First, int Count) shown;
+        private string shownTitle = "";
+        private GridSection shownSection = (GridSection)(-1);
+        private bool? shownUsable;
+
+        internal HeaderView(ItemGridView owner, JotunnWidgets ui, RectTransform parent)
+        {
+            var go = new GameObject("Section", typeof(RectTransform));
+            root = (RectTransform)go.transform;
+            root.SetParent(parent, false);
+            root.anchorMin = root.anchorMax = root.pivot = new Vector2(0, 1);
+            root.sizeDelta = new Vector2(Columns * Cell, Header);
+            title = ui.Label(root, "", JotunnWidgets.SmallSize, ui.Orange, false);
+            var rect = title.rectTransform;
+            rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0, 1);
+            rect.anchoredPosition = Vector2.zero;
+            title.horizontalOverflow = HorizontalWrapMode.Wrap; title.verticalOverflow = VerticalWrapMode.Truncate;
+            label = ui.Orange; faint = ui.Faint;
+            Button? never = null; Text? neverText = null; Image? cross = null;
+            buttons = new[] { GridButton.NeverAll, GridButton.Clear }.Select(kind =>
+            {
+                var chip = ui.Chip(root, Texts.Get(ItemGrid.ButtonLabel(kind)), Back, kind == GridButton.NeverAll ? PanelArt.Cross : null, Cross, out var width);
+                var text = chip.GetComponentInChildren<Text>(); if (text) text.color = ui.Orange;
+                var image = chip.GetComponent<Image>(); image.raycastTarget = true;
+                var button = chip.gameObject.AddComponent<Button>(); button.targetGraphic = image;
+                button.onClick.AddListener(() => { if (shown.Count > 0) owner.sectionClick(owner.Section(shown.First, shown.Count), kind); });
+                GameTooltip.Attach(chip.gameObject, () => shown.Count > 0 ? owner.sectionTip(owner.Section(shown.First, shown.Count), kind) : null);
+                if (kind == GridButton.NeverAll) { never = button; neverText = text; cross = chip.Find("Icon")?.GetComponent<Image>(); }
+                return (kind, chip, width);
+            }).ToArray();
+            neverAll = never!; neverAllLabel = neverText!; neverAllCross = cross;
+            go.SetActive(false);
+        }
+        private readonly Color faint;
+
+        internal void Show(string text, GridSection section, int first, int count, Vector2 at, bool neverAllUsable)
+        {
+            if (!root.gameObject.activeSelf) root.gameObject.SetActive(true);
+            root.anchoredPosition = at;
+            shown = (first, count);
+            if (shownUsable != neverAllUsable)
+            {
+                // D158: greyed out in place; the tooltip still shows (it says why), the click does nothing.
+                shownUsable = neverAllUsable;
+                neverAll.interactable = neverAllUsable;
+                if (neverAllLabel) neverAllLabel.color = neverAllUsable ? label : faint;
+                if (neverAllCross) neverAllCross!.color = neverAllUsable ? Cross : faint;
+            }
+            if (text == shownTitle && section == shownSection) return;
+            shownTitle = text; shownSection = section;
+            var offered = ItemGrid.Buttons(section);
+            var right = Columns * Cell - Pad;
+            for (var i = buttons.Length - 1; i >= 0; i--)
+            {
+                var (kind, rect, width) = buttons[i];
+                var on = offered.Contains(kind);
+                if (rect.gameObject.activeSelf != on) rect.gameObject.SetActive(on);
+                if (!on) continue;
+                right -= width; rect.anchoredPosition = new Vector2(right, 0); right -= Gap;
+            }
+            // A long category name is cut with "…"; the buttons keep their place.
+            title.rectTransform.sizeDelta = new Vector2(Mathf.Max(1, right), Header);
+            title.text = JotunnWidgets.Fit(title, text, Mathf.Max(1, right), 1);
+        }
+
+        internal void Hide() { if (root.gameObject.activeSelf) root.gameObject.SetActive(false); shown = (0, 0); }
     }
 
     private sealed class CellView
@@ -140,7 +239,7 @@ internal sealed class ItemGridView
 
         internal CellView(ItemGridView owner, RectTransform parent)
         {
-            var go = new GameObject("Item", typeof(RectTransform), typeof(Image), typeof(Button), typeof(TipFill));
+            var go = new GameObject("Item", typeof(RectTransform), typeof(Image), typeof(Button), typeof(TipFill), typeof(RightClick));
             root = (RectTransform)go.transform;
             root.SetParent(parent, false);
             root.anchorMin = root.anchorMax = root.pivot = new Vector2(0, 1);
@@ -154,7 +253,9 @@ internal sealed class ItemGridView
                 ? InventoryGui.instance.m_playerGrid.m_elementPrefab.GetComponent<UITooltip>()?.m_tooltipPrefab : null;
             if (prefab) { tip = go.AddComponent<UITooltip>(); tip.m_tooltipPrefab = prefab; }
             fill.Fill = () => { if (entry != null && tip) { var (topic, text) = owner.tooltip(entry); tip!.Set(topic, text); } };
-            go.GetComponent<Button>().onClick.AddListener(() => { if (entry != null) owner.click(entry); });
+            go.GetComponent<Button>().onClick.AddListener(() => { if (entry != null) owner.click(entry, false); });
+            // The Button answers the left button only; the right one steps the mark the other way (X61, D143).
+            go.GetComponent<RightClick>().Click = () => { if (entry != null) owner.click(entry, true); };
             this.owner = owner;
             go.SetActive(false);
         }
@@ -180,7 +281,7 @@ internal sealed class ItemGridView
             image.sprite = sprite; image.enabled = sprite;
             // P4-00f (D056): taken by the rule, but AzuAutoStore's config keeps it out of this chest type.
             var kept = owner.keptOut(row);
-            image.color = row.Taken && !kept ? Color.white : Dimmed;
+            image.color = row.Taken && !kept && owner.cannotHold?.Invoke(row) != true ? Color.white : Dimmed;
             slot.color = kept ? KeptOutSlot : Slot;
             if (row.Mark == GridMark.None) mark.enabled = false;
             else
@@ -206,6 +307,17 @@ internal sealed class ItemGridView
 /// While hovered it also makes the tooltip ignore the mouse: the game places it at the pointer, and inside this panel's
 /// canvas it caught the pointer itself, so it flickered off and on and swallowed clicks (maintainer, 2026-10-23).
 /// </summary>
+/// <summary>A right-click on an icon cell (X61). Unity sends a click to every handler on the object, so this sits beside
+/// the cell's <see cref="Button"/>, which takes only the left button.</summary>
+internal sealed class RightClick : MonoBehaviour, IPointerClickHandler
+{
+    internal Action? Click;
+    public void OnPointerClick(PointerEventData eventData)
+    {
+        if (eventData.button == PointerEventData.InputButton.Right) Click?.Invoke();
+    }
+}
+
 internal sealed class TipFill : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
 {
     internal Action? Fill;

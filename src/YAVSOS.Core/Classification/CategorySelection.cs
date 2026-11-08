@@ -14,8 +14,13 @@ public sealed class CategoryTreeRow
     public CategorySelectionState State { get; }
     public bool HasChildren { get; }
     public bool Expanded { get; }
-    internal CategoryTreeRow(string id, string name, int depth, CategorySelectionState state, bool hasChildren, bool expanded)
-    { Id = id; Name = name; Depth = depth; State = state; HasChildren = hasChildren; Expanded = expanded; }
+    /// <summary>
+    /// D163: a folding heading over grouped categories (<see cref="CategoryGroup"/>), not a category: no tick, never
+    /// stored, <see cref="State"/> always Off. <see cref="Id"/> is the group's.
+    /// </summary>
+    public bool Heading { get; }
+    internal CategoryTreeRow(string id, string name, int depth, CategorySelectionState state, bool hasChildren, bool expanded, bool heading = false)
+    { Id = id; Name = name; Depth = depth; State = state; HasChildren = hasChildren; Expanded = expanded; Heading = heading; }
 }
 
 /// <summary>
@@ -84,10 +89,14 @@ public static class CategorySelection
     /// its descendants (D054); an umbrella's rows follow it only while it is expanded. Partial nodes expand by default.
     /// </summary>
     /// <param name="names">The names the player sees (S13); rows sort by them and show them.</param>
+    /// <param name="groups">D163: top-level categories folded under a heading row (the stores' categories, one heading per
+    /// mod). A heading sorts among the top-level rows by its text, shows how many of its categories are shown, folds like
+    /// an umbrella and opens by default while one of them is ticked; with none of them shown it is left out.</param>
     public static IReadOnlyList<CategoryTreeRow> Rows(CategoryNames names, IReadOnlyCollection<string> stored,
-        Func<string, bool> hasMembers, ICollection<string> expanded, ICollection<string> collapsed)
+        Func<string, bool> hasMembers, ICollection<string> expanded, ICollection<string> collapsed, CategoryGrouping? groups = null)
     {
         if (names == null || stored == null || hasMembers == null || expanded == null || collapsed == null) throw new ArgumentNullException(nameof(names));
+        groups ??= CategoryGrouping.None;
         var taxonomy = names.Taxonomy;
         var rows = new List<CategoryTreeRow>();
         bool Visible(string id) => hasMembers(id) || stored.Any(x => taxonomy.Categories.ContainsKey(x) && taxonomy.IsAncestorOrSelf(id, x));
@@ -95,15 +104,35 @@ public static class CategorySelection
         // by rank the tree read as random ("Fishing bait" near the top, "Fish" in the middle). Classification keeps it.
         IEnumerable<string> Ordered(IEnumerable<string> ids) => ids.Where(Visible).OrderBy(x => x == "misc" ? 1 : 0)
             .ThenBy(names.Shown, StringComparer.CurrentCultureIgnoreCase).ThenBy(x => x, StringComparer.Ordinal);
-        void Add(string id, int depth)
+        void Add(string id, int depth, string? name = null)
         {
             var state = StateOf(taxonomy, stored, id);
             var children = taxonomy.ChildrenOf(id).Where(Visible).ToArray();
             var open = children.Length > 0 && !collapsed.Contains(id) && (expanded.Contains(id) || state == CategorySelectionState.Partial);
-            rows.Add(new CategoryTreeRow(id, names.Shown(id), depth, state, children.Length > 0, open));
+            rows.Add(new CategoryTreeRow(id, name ?? names.Shown(id), depth, state, children.Length > 0, open));
             if (open) foreach (var child in Ordered(children)) Add(child, depth + 1);
         }
-        foreach (var root in Ordered(taxonomy.Categories.Keys.Where(x => taxonomy.ParentOf(x) == null))) Add(root, 0);
+        // Top-level entries: each ungrouped root, and one heading per group with a shown category.
+        var top = new List<(string Id, string Name, CategoryGroup? Group, string[] Members)>();
+        var grouped = new Dictionary<CategoryGroup, List<string>>();
+        foreach (var root in taxonomy.Categories.Keys.Where(x => taxonomy.ParentOf(x) == null && Visible(x)))
+        {
+            if (groups.Of(root) is not { } group) { top.Add((root, names.Shown(root), null, Array.Empty<string>())); continue; }
+            if (!grouped.TryGetValue(group, out var members)) grouped[group] = members = new List<string>();
+            members.Add(root);
+        }
+        foreach (var (group, members) in grouped)
+            top.Add((group.Id, names.Format(group.Heading(members.Count)), group, members.ToArray()));
+        foreach (var entry in top.OrderBy(x => x.Id == "misc" ? 1 : 0).ThenBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(x => x.Id, StringComparer.Ordinal))
+        {
+            if (entry.Group == null) { Add(entry.Id, 0, entry.Name); continue; }
+            var open = !collapsed.Contains(entry.Id) && (expanded.Contains(entry.Id) || entry.Members.Any(x => StateOf(taxonomy, stored, x) != CategorySelectionState.Off));
+            rows.Add(new CategoryTreeRow(entry.Id, entry.Name, 0, CategorySelectionState.Off, true, open, heading: true));
+            if (!open) continue;
+            foreach (var (id, name) in entry.Members.Select(x => (Id: x, Name: groups.UnderHeading(x, taxonomy.Categories[x].Name, names.Shown(x))))
+                         .OrderBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase).ThenBy(x => x.Id, StringComparer.Ordinal))
+                Add(id, 1, name);
+        }
         return rows;
     }
 

@@ -146,6 +146,48 @@ public sealed class PlacementExplainerTests
     private static CleanupChest Chest(string id, string payload, int width = 4, bool local = true, bool optOut = false, params TransferStack[] stacks) =>
         new(id, payload, Inventory(id, width, stacks), local, optOut);
 
+    // X71 (D159): while categories aren't ready, the stash's bracketed reason and both where-lines say what the Categories
+    // mark says: still loading, the server couldn't build them, or YAVSOS couldn't.
+    [Theory]
+    [InlineData(CategoryWaitState.Loading, RunReason.CategoriesPending, "categories are still loading; try again in a moment", "categories are still loading")]
+    [InlineData(CategoryWaitState.ServerFailed, RunReason.CategoriesServerFailed, "the server couldn't build the categories", "the server couldn't build the categories")]
+    [InlineData(CategoryWaitState.Failed, RunReason.CategoriesFailed, "YAVSOS couldn't build the categories", "YAVSOS couldn't build the categories")]
+    public void WaitingForCategories_ReasonAndWhereLineSayWhy(CategoryWaitState wait, RunReason reason, string bracketed, string where)
+    {
+        var loading = new Answers { CategoriesReady = false };
+        var stack = Stack("Copper");
+        var stash = new StashInput(Taxonomy, loading, Inventory("player", 8, new[] { stack }), new[] { Box("metal", Rule(new[] { "materials.metal" })) },
+            categoriesWait: wait);
+        var plan = StashPlanner.Plan(stash);
+        Assert.Equal(reason, Assert.Single(plan.Remainders).Reason);
+        var report = RunReport.ForStash(); report.Remain(plan.Remainders[0].Reason);
+        Assert.Equal("Nothing stashed: 1 stays in your inventory (" + bracketed + ").", EnglishText.Of(report.Summary()));
+        var explained = PlacementExplainer.Stash(stash, stack.Handle);
+        Assert.Equal((PlacementOutcome.NotReady, reason), (explained.Outcome, explained.Blocked));
+        Assert.Equal("Stash stack: stays in your inventory (" + where + ")", Where(explained, false));
+
+        var placed = Stack("Copper");
+        var cleanup = new CleanupInput(Taxonomy, loading, new[] { Chest("wood", Rule(new[] { "materials.wood" }), stacks: placed), Chest("metal", Rule(new[] { "materials.metal" })) },
+            categoriesWait: wait);
+        var stays = PlacementExplainer.Cleanup(cleanup, "wood", placed.Handle);
+        Assert.Equal((PlacementOutcome.NotReady, reason), (stays.Outcome, stays.Blocked));
+        Assert.Equal("Clean up: stays here (" + where + ")", Where(stays, true));
+        // Ready categories ignore the wait: nothing waits, so nothing says why.
+        var ready = new StashInput(Taxonomy, new Answers(), Inventory("player", 8, new[] { stack }), new[] { Box("metal", Rule(new[] { "materials.metal" })) },
+            categoriesWait: wait);
+        Assert.Equal(PlacementOutcome.Goes, PlacementExplainer.Stash(ready, stack.Handle).Outcome);
+        Assert.Empty(StashPlanner.Plan(ready).Remainders);
+    }
+
+    [Fact]
+    public void RunReasons_WaitingCoversEveryWaitState()
+    {
+        Assert.Equal(new[] { RunReason.CategoriesPending, RunReason.CategoriesServerFailed, RunReason.CategoriesFailed },
+            Enum.GetValues(typeof(CategoryWaitState)).Cast<CategoryWaitState>().Select(RunReasons.Waiting));
+        Assert.All(Enum.GetValues(typeof(RunReason)).Cast<RunReason>(), x =>
+            Assert.Equal(x is RunReason.CategoriesPending or RunReason.CategoriesServerFailed or RunReason.CategoriesFailed, RunReasons.IsWaiting(x)));
+    }
+
     [Fact]
     public void Cleanup_ExplainsMovesStaysAndGates()
     {

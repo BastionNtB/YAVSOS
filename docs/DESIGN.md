@@ -19,7 +19,7 @@ Four pillars guide every change:
 
 - **Efficiency.** Work happens when its inputs change, not every frame. Categories are built
   when items, recipes or the category settings change. Every scan and run has a bound: one
-  stash or cleanup looks at the nearest 256 chests at most.
+  stash or cleanup looks at the nearest 256 chests by default, 512 at most (section 7).
 - **Compatibility.** YAVSOS runs in large mod packs. It works with the mods players already
   use instead of replacing them (section 2), and it checks what it relies on instead of
   trusting version numbers (section 3).
@@ -68,6 +68,16 @@ instead of rebuilding around it. Two examples:
   `Stash` settings are shown read-only, with a note that AzuAutoStore controls them. Their
   values are kept for when AzuAutoStore is removed.
 
+**Keys and mouse actions don't collide with partners.** Before a new YAVSOS key or mouse
+action gets its default, check the defaults of the production pack's partner mods (D162). The
+stack key defaults to Shift + middle mouse because ZenSign's inventory search uses middle
+mouse. ZenSign's search ignores modifiers, so when ZenSign is installed and its search button
+is the stack key's main key, a stack-key click that YAVSOS stashes with is kept from ZenSign:
+YAVSOS resets that button in the game's input until the click is released. Plain middle click
+stays ZenSign's. The adapter finds ZenSign's button and key setting by their shape; if it
+can't, it turns itself off, logs once, and both actions run on that click again. A saved
+stack key equal to the old default (plain middle mouse) moves once to the new default.
+
 **Upstream bugs get small, removable patches.** Each workaround for another mod's bug is an
 isolated patch that records when it can be removed. Examples:
 
@@ -88,7 +98,7 @@ MultiUserChest copy is how it handles each player's item format (section 6). The
 MultiUserChest steps aside when the standalone mod or AzuAutoStore's copy is installed, and stays
 off with QuickStack, SimpleSort or QuickStore, which conflict with it.
 
-Decisions: D030, D042, D043, D047, D061, D070, D079, D090, D097.
+Decisions: D030, D042, D043, D047, D061, D070, D079, D090, D097, D162.
 
 ## 3. Capability checks, not version locks
 
@@ -133,14 +143,28 @@ optional piece disables only itself:
 - if a category build step fails (reading items and their sources first gets 3 retries,
   3 seconds apart), the Categories mark says so, and Always and Never items keep working.
   YAVSOS tries the step again after a minute, then less often, up to every 5 minutes, and at
-  once when items or settings change.
+  once when items or settings change. On a dedicated server the step runs on the server, so
+  the server shares its stage state with clients in a separate synced value: a client's
+  Categories mark and its stash and cleanup messages then say that the server couldn't build
+  the categories, that it tries again every few minutes and that the server's log says why.
+  The client's log names the failed stage and the server's reason. A server that sends no
+  state, or one the client can't read, leaves today's "still loading" text.
+- every place that says why categories aren't ready tells the same story as the Categories
+  mark: the messages, the reason in brackets after a count that stays ("2 stay in your
+  inventory (the server couldn't build the categories)") and the item tooltip's where-line say
+  still loading, the server couldn't build them, or (on a hosted world or in single player)
+  YAVSOS couldn't build them. This game's own failure comes first, as on the mark.
+- a failed rebuild keeps the last good categories. The Categories mark then turns amber with a
+  line saying the last update failed: on a hosted world or in single player it names this
+  game's log; on a client, when the server reports the failed rebuild, it names the server's
+  log. Both say the build is tried again every few minutes.
 
 The status marks at the top right of the panel use four states: a tick (working), amber
 ("This chest:" a caution about the open chest, or "Partly working:" one optional part is
 off), a cross ("Not working:") and a gray dash ("Off:" a setting turned it off). A mod that
 is not installed gets no mark.
 
-Decisions: D045, D046, D058, D068, D086, D087.
+Decisions: D045, D046, D058, D068, D086, D087, D144, D145, D159.
 
 ## 4. Categories are automatic
 
@@ -228,6 +252,51 @@ Equally ranked chests never trade items. Cleanup never moves items into chests w
 the stash does fill a chest without a rule that already holds the item. A chest can opt out
 with "Don't clean up this chest".
 
+**Which chests one cleanup works on.** A cleanup considers the nearest `Server/MaximumChests`
+chests (default 256, up to 512) and takes items out of at most `Server/MaximumSources` of them
+(default 64, up to 256). When more chests hold items than that, the chests with work that is
+cheap to find come first, nearest first: a stack its own rule rejects, or a stack in a chest
+without a rule, that some chest's rule accepts. The test is the rule check alone, cached per
+item. The slots left go to the nearest other chests, for re-sorts, which need the full
+ranking. Each press moves the misplaced items out, those chests drop off the list, and the
+next press reaches further. A chest whose accepting chests are full keeps its place, and the
+result says "no room". Re-sorts beyond the nearest chests wait until the player moves closer.
+
+**Containers with their own filter.** Some mods' containers accept only some items: each
+Storehouse store accepts only its own kind. YAVSOS reads every container type's filter the
+way the game would answer: once categories are ready, it asks the game's own "can this
+inventory take one unit?" on an empty inventory with each type's name and size, for every
+item, a little each frame. A type that refuses some item has a filter; one that accepts
+everything (a plain chest, Storehouse's Emergency Shelves, any store while Storehouse isn't
+fully loaded) has none. No mod types are used. The lists are read again when another mod's
+settings arrive from the server, when the item catalog changes, and each session; until they
+are read, stores act as before (a chest without a rule). Each game reads the lists itself:
+they are never sent, and the server's per-item answers (section 4) don't change.
+
+- Each filtering type is a category, such as "Storehouse Timber Crib", whose members are the
+  items its filter accepts. Any chest's rule can tick it. Item tooltips and the panel's
+  suggestions leave these categories out.
+- In the Categories tree these categories fold under one heading per mod, such as "Storehouse
+  stores (46)", folded by default and open while one of them is ticked. Under the heading each
+  shows by its piece's name ("Timber Crib"); elsewhere it keeps the full name. The heading is
+  not a category and has no tick: ticking every store at once would accept almost everything.
+  A search finds each store's category and opens its heading.
+- A store without a YAVSOS rule acts as if its own category were ticked, at
+  `Storehouse/DefaultPriority` (default 4), while `Storehouse/AutomaticRules` is on. Nothing is
+  saved on the chest; the panel shows the rule with an "Automatic rule" chip, and the first
+  change saves it as the chest's own. Every reader counts it: cleanup, YAVSOS's stash,
+  AzuAutoStore's hooks, its stash order and ground pickup, and the search's "accepts" light.
+- The filter wins. A container whose type has a filter accepts what its rule accepts and its
+  filter accepts: a rule can narrow the filter, never widen it. Rule parts outside the filter
+  stay saved but do nothing, and the panel grays them out with a tooltip, as it grays the
+  categories and items the container can't hold. Because the planner knows the filter in
+  advance, no plan sends a store an item it refuses, full or not.
+- A rule part naming a filter category waits while the lists are unread, as a category part
+  waits for categories, so nothing moves on its account. If the game's check stops working,
+  the categories and the automatic rules turn off together for the session; such parts keep
+  waiting. Once the lists are read, a filter category that no longer exists (the mod was
+  removed) is an ordinary unknown category.
+
 **Rules survive change.** A rule naming a category, filter or filter value this version
 doesn't know keeps that part unchanged. The unknown part matches nothing, so the rule can only
 accept less, never more, and it works fully again when the part returns. A rule stored in a
@@ -243,11 +312,26 @@ again, it redoes the change.
 **Who may edit.** Editing a rule uses the game's own access model, the same check as opening
 the chest: a private chest is its builder's alone, and inside an active ward only the ward's
 permitted players may edit. No separate builder or admin check is added. The write is made
-by the player whose game owns the chest's network object, and only if the rule is still the
-one the player opened. While another player has the chest open, editing is refused.
+by the game that owns the chest's network object, and only if the rule is still the one the
+player opened.
+
+**Editing a chest another game holds.** With MultiUserChest, a second player can open a chest
+whose network object belongs to the first player's game. The second player's game builds the
+new rule and sends it, in one checked request, to the game that holds the chest (another
+player's, or the server's when it has the chest loaded). That game checks that it still holds
+the chest, the chest's privacy for the requesting player, a limit of 20 requests a second per
+player, that the rule is still the one the requester saw, and that the new rule is a newer
+envelope; then it writes, reads back and answers. The requester checks the ward, as vanilla
+does when opening a chest. The panel shows "saving" and takes no clicks for up to 5 seconds;
+seeing the new rule arrive on the chest also counts as saved, until 40 seconds in all. Undo,
+redo and "Don't clean up this chest" go the same way. Considered and not chosen: taking over
+the chest's ownership (it would pull the chest away from the game moving items in and out of
+it) and sending the edit itself (both games would need the same categories to agree on the
+saved rule). Every game on a YAVSOS server runs 1.3 or later, so every owner can answer; on a
+server without YAVSOS, an owner without it never answers and the wait covers it.
 
 Decisions: D002, D048, D050, D051, D054, D057, D061, D064, D065, D069, D070, D072, D077, D086,
-D092.
+D092, D153, D154, D155, D156, D160.
 
 ## 6. Moving items safely
 
@@ -265,6 +349,14 @@ the stack must still match its planned identity exactly, including crafter, dura
 other mods' item data. Each move names its destination cell. Stackable items merge the way
 the game merges them (its own "same type" check), so a mod that changes that check is
 followed automatically.
+
+**Ask the chest itself.** Before a chest becomes a destination, the plan asks the game
+whether it takes one unit of the item, the same check the game makes before adding an item.
+Mods that filter chests answer through it: a Storehouse store refuses items of other kinds.
+A chest that refuses drops out of the plan, and the item goes to the next chest or stays.
+Only a chest with room is asked, so a full chest still counts as full. A container whose type
+has a filter (section 5) is known to refuse an item before any asking, full or not; the live
+question still covers filters a mod sets on one container rather than its type.
 
 **Check at the write, verify after.** Just before each write YAVSOS checks again: access,
 range, ownership, protected slots, identity, room and the rule. Afterwards it checks that
@@ -320,13 +412,13 @@ Decisions: D004 (as amended), D005, D041, D042, D043, D057, D061, D065, D083, D0
 ## 7. Server, hosted and client-only
 
 **Shared settings come from the server.** The `Server` settings and the categories file are
-synchronised from the server through ServerSync, bundled at a pinned version. While
+synchronized from the server through ServerSync, bundled at a pinned version. While
 `Server/LockSharedPolicy` is on, only server admins can change them. A client's change request
 is accepted only from the current connection and only for shared entries, then ServerSync's
 admin and lock rules decide. While a server's values are in force, a player's own settings file
 keeps the player's own values, so leaving the server restores them.
 
-**Configuration sync grants no chest authority.** Synchronised settings say what players may
+**Configuration sync grants no chest authority.** Synchronized settings say what players may
 do; they never let anyone write to a chest. Every move still needs the game's own access and
 ownership (section 6).
 
@@ -351,22 +443,43 @@ categories differ, their stashes may place an item differently; nothing is lost.
 other players' chests still go through MultiUserChest, which needs no server mod.
 
 **Limits are the server's.** `Server/MaximumRange` (default 50 m) caps the range players set
-for cleanup and for YAVSOS's own stash. `Server/MaximumChests` (default 256, 16 to 256) is how
+for cleanup and for YAVSOS's own stash. `Server/MaximumChests` (default 256, 16 to 512) is how
 many of the nearest chests one cleanup or YAVSOS stash handles; the result says when more
-were in range. Cleanup also takes items out of at most the 64 nearest chests that hold any.
-With AzuAutoStore installed, its stash key uses its own range and finds chests itself, so
-both settings then limit cleanup only. Raising the bound to 512 was considered and not
-chosen: more planning cost per press, with no need reported. `Server/AllowStashing` and
-`Server/AllowCleanup` turn the two actions off.
+were in range. `Server/MaximumSources` (default 64, 16 to 256) is how many of them one cleanup
+takes items out of, chests with misplaced items first (section 5). With AzuAutoStore
+installed, its stash key uses its own range and finds chests itself, so these settings then
+limit cleanup only. The bounds were 256 chests and a fixed 64 sources until bases near 256
+chests needed more (D156): admins may raise a limit and accept the planning cost.
+`Server/AllowStashing` and `Server/AllowCleanup` turn the two actions off. The `Storehouse`
+settings (section 5) are server settings too, so every player's game ranks the stores the
+same way.
 
-Decisions: D008, D009, D010, D011, D044, D074, D078 (B06), D086, D095.
+**Server templates are the server's.** A server keeps its rule templates in
+`BepInEx/config/com.bastionntb.yavsos.templates.xml` and sends the list to every player through
+ServerSync, as it sends the categories file. Players can apply a server template or keep a copy
+of it. In 1.3 only server admins share, update, rename or delete one (D157). ServerSync could
+carry an admin's push of the whole list, but YAVSOS refuses pushed values (shared entries only,
+above), and a push would skip the checks. So each change is one small request on the admin's
+own server connection: the server reads who sent it from that connection, checks the game's
+admin list, a rate limit and the revision the admin saw, saves the file and sends the new list.
+A change made against an older revision is refused, so two admins can't overwrite each other.
+Which buttons a player sees comes from the same server check: the panel asks the server, on the
+same connection, whether the player is an admin, and asks again a minute after each answer.
+Valheim's own client check stands in only until the first answer, because a joining player
+rarely receives the admin list. A hosted world's host is the server and changes the list directly. The answer is awaited for
+10 seconds; a late one is dropped. A server without YAVSOS sends no list, so its players see
+no Server templates section.
+
+Decisions: D008, D009, D010, D011, D044, D074, D078 (B06), D086, D095, D155, D156, D157.
 
 ## 8. Versions and data formats
 
 **Two kinds of version.** Game and mod versions never gate a feature (section 3). YAVSOS's
 own compatibility version protects YAVSOS's network format: a player older than the server's
-minimum is told to update when joining. The minimum is 1.0.0. It is raised only for a real
-format break, not for every release.
+minimum is told to update when joining. The minimum is 1.3.0, raised from 1.0.0 because
+edits on another player's chest need every game to answer them (D153, D154). A release raises
+it when it needs to; an update never loses data that can't be recreated (items, chest rules,
+the categories file).
 
 A difference in classifier version between client and server does not reject the server's
 answers; the versions stay in the log. The category settings and taxonomy must still match.
@@ -379,7 +492,21 @@ same. Everything YAVSOS stores or sends is named under that ID:
 - on a chest: its rule (`com.bastionntb.yavsos.container-policy`) and the cleanup opt-out
   (`com.bastionntb.yavsos.cleanup-optout`);
 - on a player: the MultiUserChest item format (`com.bastionntb.yavsos.muc-format`);
-- files: `com.bastionntb.yavsos.cfg` and `com.bastionntb.yavsos.categories.xml`.
+- network messages: the rule write to a chest's owner (`com.bastionntb.yavsos.rule-write`) and
+  its answer (`com.bastionntb.yavsos.rule-write-reply`); an admin's template change
+  (`com.bastionntb.yavsos.template-change`) and its answer
+  (`com.bastionntb.yavsos.template-change-reply`); the question whether a player is a server
+  admin (`com.bastionntb.yavsos.template-admin-query`) and its answer
+  (`com.bastionntb.yavsos.template-admin`); the synced template list (`rule-templates-v1`) and
+  the server's category stage state (`server-stage-state-v1`);
+- files, all in the config folder: `com.bastionntb.yavsos.cfg`, `com.bastionntb.yavsos.categories.xml`,
+  `com.bastionntb.yavsos.templates.xml` (on a server) and
+  `com.bastionntb.yavsos.personal-templates.xml` (personal rule templates, D166).
+
+**Two folders.** "The config folder" (the maintainer also says "the mod config folder") is
+`BepInEx/config` in the mod-manager profile, where every mod keeps its configuration; all of
+YAVSOS's files are there. "The save folder" is the game's own folder for characters and worlds
+(`~/.config/unity3d/IronGate/Valheim/` on Linux); YAVSOS keeps nothing there (D168).
 
 Names were settled before 1.0: `Server/CleanupMaximumRange` became `Server/MaximumRange` (the
 old key is read once), and the item-format marker moved under the YAVSOS ID.
@@ -390,12 +517,15 @@ server sends: keep what you don't recognize, and match nothing with it. A newer 
 an older YAVSOS therefore accepts less, never more, and nothing is lost when the chest is
 edited. A rule in a format this version can't read at all is kept untouched and accepts
 nothing. A
-release that must rename a category ID ships a mapping from the old ID.
+release that must rename a category ID ships a mapping from the old ID. Template lists (personal
+and the server's) are strict and versioned: a list this version can't read, a newer one or a
+damaged one, is kept exactly as stored and never written over; saving to it is refused until it
+can be read (D153).
 
 **A clean release.** Test fixtures build only in a separate test configuration and are absent
 from the release DLL.
 
-Decisions: D007, D050, D058, D077, D078, D081, D086.
+Decisions: D007, D050, D058, D077, D078, D081, D086, D153, D157.
 
 ## 9. Interface
 
@@ -406,35 +536,87 @@ only the panels turn off; rules, stashing and cleanup keep working.
 
 Under the title, a strip shows the chest label, or the message from the player's last
 action. Below it the panel is stacked in sections: **Rule** (what the chest accepts, with
-undo, Copy, Paste, Clear rule and rule suggestions), **Edit** (Categories, Items and Filters
-tabs), **This chest** (priority) and a last row with the cleanup opt-out and **Clean up
+undo, Copy, Paste, Clear rule and rule suggestions), **Edit** (Categories, Items, Filters and
+Templates tabs), **This chest** (priority) and a last row with the cleanup opt-out and **Clean up
 nearby**. The status marks sit at the top right (section 3). In the Items tab, a click on an
-item's icon cycles Always, Never and clear.
+item's icon cycles Always, Never and clear; a right-click cycles the other way. The items the
+rule accepts show in one section per ticked category, or in one section for the whole rule; a
+button beside the search box switches between the two, and the choice is kept on the player's
+own PC for every chest, like the fold. Each section has Never all and Clear, except the section
+of items marked outside the categories, which has Clear only. Never all marks at most 512 items
+per click: above that it is grayed out, and its tooltip says to search or untick a category.
+
+**A button hides the panel.** A "YAVSOS" button below the chest window shows and hides the panel
+on every chest. It is the `Controls/ShowRuleControls` setting: lit while the panel shows, dimmed
+while it is hidden. Hidden means only the panel is gone; the button stays, and the item
+tooltip's where-line, the stash and cleanup keys and the result panel keep working. Undo
+(Ctrl+Z) and the chest search need the panel. The button's place is a local setting: a preset
+(left, middle or right end of the window, left by default) plus offsets, since other mods put
+buttons there too. New installs start with the panel hidden; an existing settings file keeps
+its value.
+
+**Templates keep rules for later.** The Templates tab saves the open chest's rule under a name
+in one list that every character shares (a file in the config folder, D166), so it is there
+in every world and on every server, and lists the server's
+templates under it. A template holds what Copy takes: categories by ID, Always and Never items,
+filters and priority. Select one, then Apply: it replaces the chest's rule as Paste does, saves
+the same way (through the owner's game on another player's chest), and undo takes it back.
+Update from this chest, Rename and Delete change a template; Share (server admins) copies a
+personal one to the server; Keep a copy takes a server one into the personal list. Copies are
+snapshots. A template that names a category, item or filter this game doesn't have says so on
+its row and still applies; the missing parts stay stored, unused. Limits: 64 templates per
+list, 32 KiB each, 256 KiB for the server's list and 512 KiB for personal ones. The details
+area keeps its size, and a change with no undo (any change to a server template, deleting a
+personal one) asks first in place of the buttons. Applying a template to many chests at once
+is planned for 1.5 (#82).
 
 **Explanations go where the player looks.**
 
 - An item's tooltip adds its smallest categories and facts worth knowing, such as
   "Food ingredients, Animal feed · eaten by Boar, Hen".
 - For a stack in the inventory, the tooltip also says where stashing that one stack would put
-  it, from the same placement decision: "Stash stack [Middle mouse]: Chest 3 m away". It names
+  it, from the same placement decision: "Stash stack [Shift + Middle mouse]: Chest 3 m away". It names
   the stack key that applies, AzuAutoStore's when AzuAutoStore does the stashing.
 - A chest's hover text adds its chest label, the rule in short words, such as
   "Food › eaten by Boar · priority 2 (Urgent)". There is no "YAVSOS:" prefix.
 - After YAVSOS's own stash or cleanup, a result panel says what moved, where it went, what
   stayed and why. After AzuAutoStore's stash key, it says what moved and where.
+- **Chest names.** Wherever YAVSOS names a chest other than the open one (the where-line, the
+  result panel's place lines, the search status line's tooltip), it gives the game's name and
+  the distance across the ground, so every chest of a stack reads the same distance. A chest
+  standing in a stack also gets its place in it: "Reinforced chest 6 m away, 2 of 3 from the
+  bottom", "…, bottom of a stack of 3", "…, top of a stack of 3". A chest standing alone reads
+  "Reinforced chest 6 m away". A stack is the chests standing in one column, each within 0.35 m
+  across the ground of the chest below it, so a stack that leans a little stays one stack. It
+  splits where two are more than 2.5 m apart in height.
+  Every container counts, with or without a rule.
 
 **Search lights chests.** Searching in the Categories tab or the Items tab lights the nearby
 chests that hold the items found. With "Also show chests that accept it" on, chests whose rules
 could accept them light up too, in another color. A search has no real stack to judge, so
 filters on the stack (upgrade level, damaged, rarity, crafter) are set aside for that test;
 Always, Never, categories and item filters still decide. Chests stay lit while the search is
-active. After the chest closes they stay lit for `Controls/HighlightSecondsAfterClose` seconds
-(default 20, a local setting), so the player can walk to them.
+active. Once the player clears the search or closes the chest, they stay lit for
+`Controls/HighlightSecondsAfterClose` seconds (default 20, a local setting), so the player can
+walk to them; closing the chest after clearing the search starts that time over (D169). A new
+search that finds something replaces them, and opening another chest ends them.
+
+**Glowing chests show through walls.** The game's glow is hidden by walls and by the chests
+around a chest, so every chest YAVSOS lights (a search's, the chests a stash or cleanup put
+items into, and cleanup's stays mark) is also shown through them. With Zen.ModLib installed and
+its highlight in the shape YAVSOS checks for, the chest gets Zen.ModLib's blinking outline, the
+look ZenSign's search shows. Otherwise, or when Zen.ModLib's own setting turns outlines off, a
+marker over the chest on the screen shows it, with its place in its stack ("2 of 3"). The glow
+stays as well. `Controls/ShowThroughWalls` (on by default, a local setting) turns both off.
+Zen.ModLib keeps one highlight per chest for every mod that uses it, so YAVSOS never ends an
+outline another mod (ZenSign) has taken over: that chest gets the marker until no other mod
+highlights anything, then its outline again. YAVSOS removes the outline component it added
+when its outline ends.
 
 **The display never writes.** Search, highlight, labels and explanations never change a
 chest, an inventory or a rule. A view that fails turns off alone.
 
-Decisions: D062, D066, D069, D070, D071, D100.
+Decisions: D062, D066, D069, D070, D071, D100, D141, D143, D148, D149, D157, D158, D163.
 
 ## 10. Scope kept out
 

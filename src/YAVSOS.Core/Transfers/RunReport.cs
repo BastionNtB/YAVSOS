@@ -302,7 +302,8 @@ public sealed class RunReport
         return string.IsNullOrWhiteSpace(shown) ? item : shown!;
     }
     private static readonly RunReason[] Left = { RunReason.NoCapacity, RunReason.NoDestination, RunReason.AzuExcluded,
-        RunReason.Held, RunReason.Unsupported, RunReason.MucBusy, RunReason.Budget, RunReason.ChestLimit, RunReason.CategoriesPending, RunReason.OptedOut };
+        RunReason.Held, RunReason.Unsupported, RunReason.MucBusy, RunReason.Budget, RunReason.ChestLimit, RunReason.CategoriesPending,
+        RunReason.CategoriesServerFailed, RunReason.CategoriesFailed, RunReason.OptedOut };
     // F3: one line per MultiUserChest cause, counted in stacks; only the probe still checking says to try again.
     private static readonly RunReason[] Skipped = { RunReason.OtherOwnerNoMuc, RunReason.BothRemote, RunReason.OtherOwnerMucUnusable,
         RunReason.OtherOwnerMucSilent, RunReason.OtherOwnerMucChecking, RunReason.OtherOwnerFormatUnknown };
@@ -327,6 +328,12 @@ public sealed class RunReport
     /// Why a stack stays, as a phrase in brackets after "stays in place" or "stays in your inventory" (and, once the
     /// labels worker converts the item tooltip, after "stays here"). Two causes with the same words share a key.
     /// </summary>
+    /// <summary>
+    /// X67 (D156): the server's <c>MaximumSources</c>, which the chest-limit reason names; the cleanup runner sets it before
+    /// each plan (Unity game thread).
+    /// </summary>
+    public static int SourcesPerRun { get; set; } = CleanupPlanner.DefaultSources;
+
     public static Message Reason(RunReason reason) => reason switch
     {
         RunReason.NoCapacity => Message.Of("yavsos_reason_no_room"),
@@ -336,7 +343,7 @@ public sealed class RunReport
         RunReason.Unsupported => Message.Of("yavsos_reason_protected"),
         RunReason.MucBusy => Message.Of("yavsos_reason_muc_busy"),
         RunReason.Budget => Message.Of("yavsos_reason_budget"),
-        RunReason.ChestLimit => Message.Of("yavsos_reason_chest_limit").Count(CleanupPlanner.MaximumSources),
+        RunReason.ChestLimit => Message.Of("yavsos_reason_chest_limit").Count(SourcesPerRun),
         RunReason.OtherOwnerNoMuc => Message.Of("yavsos_reason_no_muc"),
         RunReason.BothRemote => Message.Of("yavsos_reason_both_remote"),
         RunReason.OtherOwnerMucUnusable => Message.Of("yavsos_reason_muc_unusable"),
@@ -344,6 +351,9 @@ public sealed class RunReport
         RunReason.OtherOwnerMucChecking => Message.Of("yavsos_reason_muc_checking"),
         RunReason.OtherOwnerFormatUnknown => Message.Of("yavsos_reason_muc_format"),
         RunReason.CategoriesPending => Message.Of("yavsos_reason_categories_loading"),
+        // X71 (D159): the same story as the Categories mark; the mark and the message above say where to look and when it retries.
+        RunReason.CategoriesServerFailed => Message.Of("yavsos_reason_categories_server_failed"),
+        RunReason.CategoriesFailed => Message.Of("yavsos_reason_categories_failed"),
         RunReason.OptedOut => Message.Of("yavsos_reason_opted_out").With("option", Message.Of("yavsos_cleanup_optout")),
         RunReason.ChestUnreadable => Message.Of("yavsos_reason_unreadable"),
         _ => Message.Of("yavsos_refusal_check_failed")

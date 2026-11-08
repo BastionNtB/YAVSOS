@@ -14,7 +14,7 @@
   </PropertyGroup>
   <!-- D077 B09: lab fixtures (reached by reflection from the GABS bridge) build only in the Lab configuration. -->
   <ItemGroup Condition="'$(Configuration)' != 'Lab'">
-    <Compile Remove="Transfers/RuleLab.cs;Transfers/FaultLab.cs;Cleanup/StashLab.cs;Cleanup/CleanupLab.cs;Interface/UiLab.cs" />
+    <Compile Remove="Transfers/RuleLab.cs;Transfers/FaultLab.cs;Transfers/StoreLab.cs;Cleanup/StashLab.cs;Cleanup/CleanupLab.cs;Interface/UiLab.cs;Interface/StackLab.cs;Interface/TemplateLab.cs;Interface/ThroughWalls/ThroughWallsLab.cs;Catalog/SliceLab.cs" />
   </ItemGroup>
   <!-- P10-04: the English text, embedded (not shipped loose) and loaded in Awake (Texts.cs). notes.json is for translators. -->
   <ItemGroup>

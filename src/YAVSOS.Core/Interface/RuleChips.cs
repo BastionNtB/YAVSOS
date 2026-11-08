@@ -46,8 +46,13 @@ public static class RuleChips
     /// <param name="filters">The filters in short words (<see cref="RuleText.Short"/>), or null without filters.</param>
     /// <param name="ignored">Categories the rule names that this game does not have (D050).</param>
     /// <param name="stasher">What stashes in this game, for the tooltip of the caution on a rule of only Never items.</param>
+    /// <param name="outside">
+    /// X60 (D160): the category and Always names this container can't hold (its type's filter refuses them). Their chips
+    /// are greyed out (<see cref="ChipKind.Note"/>), with a tooltip saying why; they stay stored.
+    /// </param>
+    /// <param name="container">The container's shown name, for that tooltip (rich-text safe).</param>
     public static IReadOnlyList<RuleChip> Build(IEnumerable<string> categories, MessageList? filters, IEnumerable<string> always, IEnumerable<string> never, int ignored = 0,
-        Stasher stasher = Stasher.Yavsos)
+        Stasher stasher = Stasher.Yavsos, ISet<string>? outside = null, string container = "")
     {
         if (categories == null || always == null || never == null) throw new ArgumentNullException(nameof(categories));
         // Look-alike copies (the game's NPC capes) share a name: one chip each (P6-24, 2026-10-23).
@@ -57,17 +62,27 @@ public static class RuleChips
         // A must-say note comes first, so the two-row limit can never fold it into "+N more" (D101: no warning only in a tooltip).
         var note = Note(categoryNames.Count, alwaysNames.Count, neverNames.Count, filters != null, ignored, stasher);
         if (note != null) chips.Add(note);
-        chips.AddRange(categoryNames.Select(x => new RuleChip(Cut(x), ChipKind.Category, Tooltip.Named(x, Message.Of("yavsos_chip_category_tip")))));
+        RuleChip? Outside(string name) => outside != null && outside.Contains(name)
+            ? new RuleChip(Cut(name), ChipKind.Note, Tooltip.Named(name, Message.Of("yavsos_chip_outside_tip").With("container", container))) : null;
+        chips.AddRange(categoryNames.Select(x => Outside(x) ?? new RuleChip(Cut(x), ChipKind.Category, Tooltip.Named(x, Message.Of("yavsos_chip_category_tip")))));
         // The panel cuts this chip's formatted text with Cut, as Core cut it before P10-04.
         if (filters != null)
             chips.Add(new RuleChip(Message.Of("yavsos_chip_filters").With("filters", filters), ChipKind.Filter,
                 Tooltip.Of(Message.Of("yavsos_chip_filters_heading").With("filters", filters), Message.Of("yavsos_chip_filters_tip"))));
-        chips.AddRange(alwaysNames.Select(x => new RuleChip(Cut(x), ChipKind.Always, Tooltip.Of(Always(x), Message.Of("yavsos_chip_always_tip")))));
+        chips.AddRange(alwaysNames.Select(x => Outside(x) ?? new RuleChip(Cut(x), ChipKind.Always, Tooltip.Of(Always(x), Message.Of("yavsos_chip_always_tip")))));
         chips.AddRange(neverNames.Select(x => new RuleChip(Cut(x), ChipKind.Never, Tooltip.Of(Never(x), Message.Of("yavsos_chip_never_tip")))));
         if (ignored > 0)
             chips.Add(new RuleChip(Message.Of("yavsos_chip_ignored").Count(ignored), ChipKind.Note, Tooltip.Of(Message.Of("yavsos_chip_ignored_tip").With("section", Message.Of("yavsos_tab_heading")))));
         return chips.AsReadOnly();
     }
+
+    /// <summary>
+    /// X60 (D155): the first chip of a store that has no YAVSOS rule: it acts by its own filter, at the server's default
+    /// level (<paramref name="level"/>, named <paramref name="levelName"/>), until a change saves the rule as its own.
+    /// </summary>
+    public static RuleChip Automatic(string container, int level, Message levelName) =>
+        new(Message.Of("yavsos_chip_automatic"), ChipKind.Note,
+            Tooltip.Of(Message.Of("yavsos_chip_automatic"), Message.Of("yavsos_chip_automatic_tip").With("container", container).With("level", level).With("name", levelName)));
 
     /// <summary>The chip for a chest without a rule (D101), drawn where the rule's chips would be.</summary>
     public static RuleChip NoRule(NoRuleStash stash) => stash switch

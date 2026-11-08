@@ -53,7 +53,8 @@ internal static class ItemTooltips
     private static string Line(Plugin plugin, ItemDrop.ItemData item)
     {
         var prefab = item.m_dropPrefab ? item.m_dropPrefab.name : null;
-        var answers = plugin.CategoryAnswers;
+        // X60: without the container filters' categories; an armor piece would list every armor store.
+        var answers = plugin.BaseCategoryAnswers;
         if (prefab == null || answers == null || !answers.CategoriesReady) return "";
         var rules = plugin.RuleTaxonomy;
         var portals = !RuleControls.TeleportAll();

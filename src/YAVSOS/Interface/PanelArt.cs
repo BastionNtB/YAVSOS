@@ -20,6 +20,12 @@ internal static class PanelArt
     private static Sprite? tag;
     /// <summary>A rule tag (D122): a label shape pointing right with a hole, the search's "also chests that would take it" button.</summary>
     internal static Sprite Tag => tag ??= Lines((4, 7, 18, 7), (18, 7, 28, 16), (28, 16, 18, 25), (18, 25, 4, 25), (4, 25, 4, 7), (10, 16, 10, 16));
+    private static Sprite? sections, rows;
+    /// <summary>#62 (D158): two stacked boxes, the Items tab's section view button while sections are per ticked category.</summary>
+    internal static Sprite Sections => sections ??= Lines((4, 18, 28, 18), (28, 18, 28, 27), (28, 27, 4, 27), (4, 27, 4, 18),
+        (4, 5, 28, 5), (28, 5, 28, 14), (28, 14, 4, 14), (4, 14, 4, 5));
+    /// <summary>#62 (D158): four lines, the section view button while one section holds the whole rule.</summary>
+    internal static Sprite Rows => rows ??= Lines((4, 6, 28, 6), (4, 12.5f, 28, 12.5f), (4, 19.5f, 28, 19.5f), (4, 26, 28, 26));
     private static Sprite? down;
     /// <summary>A filled triangle pointing down: the panel's fold button (X2), turned to point right while folded.</summary>
     internal static Sprite Down => down ??= Draw(Size, false, (x, y) =>

@@ -38,23 +38,38 @@ internal sealed class RulePanel
     private float unfoldedHeight;
     private Canvas? canvas; // The parent's canvas, found once: Place runs every frame.
     private readonly JotunnWidgets.ScaleWatch scale = new();
+    // X58 (D148): the YAVSOS button below the chest window, outside the panel's root so it stays while the panel is hidden.
+    private const float ToggleWidth = 90;
+    private readonly RectTransform toggle;
+    private readonly Text toggleText;
+    private readonly Image toggleBack;
+    private readonly Color lit, dim;
 
     internal RulePanel(JotunnWidgets ui, RectTransform parent, RuleControls rule)
     {
         this.rule = rule; this.parent = parent;
         root = ui.Panel(parent, Width);
         root.gameObject.SetActive(false);
+        var button = ui.Button(parent, PanelToggle.Label, rule.TogglePanel, ToggleWidth);
+        toggle = (RectTransform)button.transform;
+        toggle.name = "YAVSOS panel button";
+        toggle.anchorMin = toggle.anchorMax = new Vector2(0.5f, 0.5f); toggle.pivot = new Vector2(0, 1); // As the panel root.
+        toggleText = button.GetComponentInChildren<Text>(true);
+        toggleBack = button.targetGraphic as Image ?? button.GetComponent<Image>();
+        lit = ui.Orange; dim = ui.Faint;
+        GameTooltip.Attach(button.gameObject, () => Texts.Get(PanelToggle.Tip(rule.PanelShown)));
+        toggle.gameObject.SetActive(false);
         // Display order, layout A (D071): header with status marks, the strip (P10-25: messages, banners, chest label), Rule,
         // Edit (tabs, then the open tab's picker or filters, in one body of fixed height, D101), This chest, Clean up nearby.
         // Search (P6-06) lives in the Categories tab; run results have their own panel (P6-04); "Where would it go?" is in
         // the item tooltip (P6-23). Folded (X2), only the header and the strip show.
         var header = new HeaderSection(); var picker = new PickerSection();
-        sections = new PanelSection[] { header, new StripSection(), new RuleSection(), picker, new FilterSection(), new ChestSection(), new CleanupSection() };
+        sections = new PanelSection[] { header, new StripSection(), new RuleSection(), picker, new FilterSection(), new TemplateSection(), new ChestSection(), new CleanupSection() };
         try
         {
             foreach (var section in sections)
             {
-                section.Root = ui.Column(section is FilterSection ? picker.Body : root, section.Name);
+                section.Root = ui.Column(section is FilterSection or TemplateSection ? picker.Body : root, section.Name);
                 section.Build(ui, rule);
             }
             var handle = header.Title.gameObject.AddComponent<PanelDrag>();
@@ -63,7 +78,31 @@ internal sealed class RulePanel
         catch { Object.Destroy(root.gameObject); throw; } // A half-built panel must not stay on screen.
     }
 
-    internal bool Alive => root; // Destroyed with the inventory screen on logout.
+    internal bool Alive => root && toggle; // Destroyed with the inventory screen on logout.
+
+    /// <summary>
+    /// X58 (D148): the YAVSOS button below the chest window, lit while the panel shows and dimmed while it is hidden, at
+    /// the player's preset and offsets. Placed every frame like the panel, so it follows the window.
+    /// </summary>
+    internal void ShowToggle(bool shown, ToggleButtonPlace place, float offsetX, float offsetY)
+    {
+        var gui = InventoryGui.instance;
+        if (!gui || !gui.m_container) { HideToggle(); return; }
+        if (!toggle.gameObject.activeSelf) { toggle.gameObject.SetActive(true); toggle.SetAsLastSibling(); }
+        if (toggleText) toggleText.color = shown ? lit : dim;
+        if (toggleBack) toggleBack.color = new Color(1, 1, 1, shown ? 1f : 0.55f);
+        var (left, top) = PanelToggle.Place(Bounds(gui.m_container), toggle.rect.width, place, offsetX, offsetY);
+        toggle.localPosition = new Vector3(left, top, 0);
+    }
+
+    internal void HideToggle() { if (toggle && toggle.gameObject.activeSelf) toggle.gameObject.SetActive(false); }
+
+    /// <summary>The panel goes; the YAVSOS button stays (X58: hidden means only the panel is gone).</summary>
+    internal void HidePanel()
+    {
+        if (root && root.gameObject.activeSelf) root.gameObject.SetActive(false);
+        drag = Vector2.zero;
+    }
 
     internal void Show()
     {
@@ -93,13 +132,9 @@ internal sealed class RulePanel
         Place();
     }
 
-    internal void Hide()
-    {
-        if (Alive && root.gameObject.activeSelf) root.gameObject.SetActive(false);
-        drag = Vector2.zero;
-    }
+    internal void Hide() { HidePanel(); HideToggle(); }
 
-    internal void Destroy() { if (Alive) Object.Destroy(root.gameObject); }
+    internal void Destroy() { if (root) Object.Destroy(root.gameObject); if (toggle) Object.Destroy(toggle.gameObject); }
 
     // Follows the chest window every frame: its corners, not its anchors, so other mods' scaling and rotation count.
     private void Place()
@@ -468,7 +503,8 @@ internal sealed class RuleSection : PanelSection
         var clearing = edit || mode == RulePanelMode.Unreadable && rule.Owner();
         Show(Root, viewing || clearing);
         if (!viewing && !clearing) return;
-        var on = clearing && (!edit || rule.Stored); // No rule: nothing to clear (runtime 2026-10-23, D086 B3.4).
+        // No rule: nothing to clear (runtime 2026-10-23, D086 B3.4). X60: nor is a store's automatic rule (nothing is saved).
+        var on = clearing && (!edit || rule.Stored && !rule.Automatic);
         if (clearShown.interactable != on) { clearShown.alpha = on ? 1 : 0; clearShown.interactable = clearShown.blocksRaycasts = on; }
         // X26: shown wherever Copy or Clear rule is; clickable with a record while this game may write the rule.
         var record = rule.UndoRecord;
@@ -609,7 +645,7 @@ internal sealed class RuleSection : PanelSection
     }
 }
 
-// P4-00c (D051/D054): the category tree, exact items, and D050's ignored unknown categories. D101: the three tabs share
+// P4-00c (D051/D054): the category tree, exact items, and D050's ignored unknown categories. D101: the tabs (X23: four) share
 // one body of fixed height, with one status line under it (the search result). P10-25: an edit's refusal shows in the
 // strip, and the body keeps an amber outline until the next action.
 internal sealed class PickerSection : PanelSection
@@ -618,7 +654,7 @@ internal sealed class PickerSection : PanelSection
     /// <summary>The tab body's height: a search box above the tallest content, the Items grid (D101).</summary>
     internal const float BodyHeight = Search + Spacing + Grid;
     private JotunnWidgets ui = null!;
-    private Button categories = null!, items = null!, filters = null!;
+    private Button categories = null!, items = null!, filters = null!, templates = null!;
     private RectTransform unknown = null!, tree = null!, categoryPart = null!, itemPart = null!;
     private Text status = null!, gridEmpty = null!;
     private GameObject bodyFlag = null!;
@@ -647,6 +683,10 @@ internal sealed class PickerSection : PanelSection
         var filtersTab = Message.Of("yavsos_tab_filters");
         filters = ui.Button(tabs, Texts.Get(filtersTab), rule.ShowFilters);
         Tip(filters, Tooltip.Of(filtersTab, Message.Of("yavsos_tab_filters_tip")));
+        // X23 (D157): the fourth tab, saved rules to put on this chest.
+        var templatesTab = Message.Of("yavsos_tab_templates");
+        templates = ui.Button(tabs, Texts.Get(templatesTab), rule.ShowTemplates);
+        Tip(templates, Tooltip.Of(templatesTab, Message.Of("yavsos_tab_templates_tip")));
         unknown = ui.Column(Root, "Ignored categories", 2);
         Body = ui.Column(Root, "Body", Spacing);
         var size = Body.gameObject.AddComponent<LayoutElement>(); size.minHeight = size.preferredHeight = BodyHeight;
@@ -663,7 +703,8 @@ internal sealed class PickerSection : PanelSection
         itemSearch = ui.Search(itemRow, Texts.Get("yavsos_search_items_hint"), rule.SearchItems);
         Tip(itemSearch.Field, Tooltip.Of(Message.Of("yavsos_search_heading"), Message.Of("yavsos_search_items_tip")));
         Takers(ui, rule, itemRow);
-        grid = new ItemGridView(ui, itemPart, Grid, rule.CycleMark, rule.GridIcon, rule.GridTooltip, rule.KeptOut);
+        SectionView(ui, rule, itemRow);
+        grid = new ItemGridView(ui, itemPart, Grid, rule.CycleMark, rule.GridIcon, rule.GridTooltip, rule.KeptOut, rule.MarkSection, rule.SectionTip, rule.CannotHold);
         // Drawn inside the grid, so the empty grid keeps its size.
         gridEmpty = ui.Label(grid.Frame, Texts.Get("yavsos_grid_empty"), JotunnWidgets.SmallSize, ui.Faint);
         gridEmpty.GetComponent<LayoutElement>().ignoreLayout = true; gridEmpty.alignment = TextAnchor.MiddleCenter;
@@ -688,11 +729,28 @@ internal sealed class PickerSection : PanelSection
         takers.Add((image, button.GetComponent<TipFill>()));
     }
 
+    // #62 (D158): beside the tag button, always shown: one section per ticked category (lit) or one for the whole rule.
+    private void SectionView(JotunnWidgets ui, RuleControls rule, Transform row)
+    {
+        var button = ui.Button(row, "", rule.ToggleSectionView, JotunnWidgets.RowHeight + 4);
+        var go = new GameObject("Section view", typeof(RectTransform), typeof(Image));
+        var rect = (RectTransform)go.transform;
+        rect.SetParent(button.transform, false);
+        rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f); rect.sizeDelta = new Vector2(16, 16);
+        viewIcon = go.GetComponent<Image>(); viewIcon.raycastTarget = false;
+        Tip(button, () => (Tooltip?)ItemGrid.ViewTip(rule.SectionsPerCategory));
+        viewTip = button.GetComponent<TipFill>();
+        viewShown = null;
+    }
+    private Image? viewIcon;
+    private TipFill? viewTip;
+    private bool? viewShown;
+
     protected override void Refresh(RuleControls rule, RulePanelMode mode, bool structural)
     {
         Show(Root, mode == RulePanelMode.Edit);
         if (mode != RulePanelMode.Edit) return;
-        Tab(categories, rule.PickingCategories); Tab(items, rule.PickingItems); Tab(filters, rule.PickingFilters);
+        Tab(categories, rule.PickingCategories); Tab(items, rule.PickingItems); Tab(filters, rule.PickingFilters); Tab(templates, rule.PickingTemplates);
         var key = string.Join("\n", rule.Unknown) + "|" + string.Join("\n", rule.UnknownFilters) + "|" +
             string.Join("\n", rule.UnknownFilterValues.Select(x => x.Dimension + "=" + x.Value)) + "|" + rule.HiddenParts;
         if (key != unknownKey) { unknownKey = key; Unknown(rule); }
@@ -704,6 +762,13 @@ internal sealed class PickerSection : PanelSection
             takersShown = takersNow;
             foreach (var (tag, tip) in takers) { tag.color = rule.ShowsTakers ? ChestHighlight.ColorOf(ChestHighlight.Kind.Takes) : ui.Faint; tip?.Refresh(); }
         }
+        if (viewIcon && viewShown != rule.SectionsPerCategory)
+        {
+            viewShown = rule.SectionsPerCategory;
+            viewIcon!.sprite = rule.SectionsPerCategory ? PanelArt.Sections : PanelArt.Rows;
+            viewIcon.color = rule.SectionsPerCategory ? ui.Orange : ui.Faint;
+            viewTip?.Refresh();
+        }
         var plugin = Plugin.Instance!;
         Message? line = null;
         if (rule.PickingCategories)
@@ -713,7 +778,8 @@ internal sealed class PickerSection : PanelSection
             var taxonomy = plugin.RuleTaxonomy;
             key = rule.Revision + "|" + rule.SearchRevision + "|" + plugin.ClassificationEvidenceReady + "|" + RuntimeHelpers.GetHashCode(taxonomy);
             if (key != treeKey) { treeKey = key; Tree(rule, taxonomy); }
-            line = rule.Search.Active && rule.Search.Hits.Count == 0 ? Message.Of("yavsos_search_none") : rule.HighlightStatus();
+            // D169: chests a cleared search lit stay lit for a while; the empty box shows no status for them.
+            line = !rule.Search.Active ? null : rule.Search.Hits.Count == 0 ? Message.Of("yavsos_search_none") : rule.HighlightStatus();
         }
         else treeKey = "\0";
         if (rule.PickingItems)
@@ -787,11 +853,26 @@ internal sealed class PickerSection : PanelSection
             var id = row.Id; var open = row.Expanded;
             if (row.HasChildren) ui.Button(line, open ? "−" : "+", () => rule.Fold(id, open), 24);
             else ui.Space(line, 24);
+            if (row.Heading)
+            {
+                // D163: a heading over the stores' categories, not a category: no tick (all of them would accept almost
+                // everything); each store under it is ticked on its own.
+                var heading = ui.Label(line, row.Name, JotunnWidgets.TextSize, ui.Orange);
+                Tip(heading, Tooltip.Named(row.Name, CategoryGroup.Tip));
+                continue;
+            }
             var (state, inherited) = CategoryCheckbox.Of(row.State);
             var hit = found.Hits.Contains(id);
             var check = ui.Check(line, row.Name, () => rule.ToggleCategory(taxonomy, id));
             check.Set(state, inherited, hit);
-            if (!found.Active) continue;
+            // X60 (D160): a category this container's filter takes none of is greyed out; ticking it takes nothing here.
+            var cannot = rule.CannotHold(id);
+            if (cannot && check.Label is { } faint) faint.color = ui.Faint;
+            if (!found.Active)
+            {
+                if (cannot) Tip(check.Root.GetComponent<Toggle>(), Tooltip.Named(row.Name, Message.Of("yavsos_tree_cannot_hold").With("container", rule.ContainerName())));
+                continue;
+            }
             var names = found.Names(id);
             if (names.Count != 0 && check.Label is { } label)
             {
@@ -808,7 +889,7 @@ internal sealed class PickerSection : PanelSection
                 if (note != null) label.text = Texts.Get(note);
             }
             // The row's tooltip: what the search found in it, or why it shows, then what ticking does.
-            var tip = Message.Of("yavsos_tree_tip");
+            var tip = cannot ? Message.Of("yavsos_tree_cannot_hold").With("container", rule.ContainerName()) : Message.Of("yavsos_tree_tip");
             Tip(check.Root.GetComponent<Toggle>(), Tooltip.Named(row.Name, names.Count != 0
                 ? Message.Of("yavsos_tree_tip_has").With("names", MessageList.Of(ListKind.And, names)).With("tip", tip)
                 : hit ? tip : Message.Of("yavsos_tree_tip_shown").With("tip", tip)));

@@ -34,10 +34,17 @@ internal sealed class LoadedSourceHost : IDisposable
     internal ClassificationSourceSnapshot? Current => cache.Current?.Snapshot;
     internal LoadedSourceReceipt? Receipt => cache.Current;
     internal long Revision => cache.Revision;
+#if YAVSOS_LAB
+    internal LoadedSourceState LabState => cache.State; // SliceLab's frame phases only.
+#endif
     internal LoadedSourceHost(ManualLogSource log)
     {
         this.log = log;
+#if YAVSOS_LAB
+        var limits = YAVSOS.Catalog.SliceLab.Sources ?? new LoadedSourceLimits(); // X63 (D145): the Lab build's slice (SliceLab).
+#else
         var limits = new LoadedSourceLimits();
+#endif
         cache = new LoadedSourceCache(limits, (loaded, facts, token) => System.Threading.Tasks.Task.Run(
             () => LoadedSourceReceipt.Build(loaded, facts, limits, token), token), retries: 3);
         open = OpenOrdinaryCapture;
@@ -60,6 +67,8 @@ internal sealed class LoadedSourceHost : IDisposable
     internal OptionalCapabilityState EpicLootState => optional?.EpicLoot.State ?? OptionalCapabilityState.Absent;
     /// <summary>Loaded sources failed their quick retries (D086 B5.36) and wait for a slow one (D144): the reason, else null.</summary>
     internal string? GaveUp => active && cache.State == LoadedSourceState.Failed ? cache.Diagnostic : null;
+    /// <summary>X62: seconds until the sources try again; negative when nothing is scheduled.</summary>
+    internal double RetryInSeconds => cache.RetryInSeconds;
     // P6-07b filters: empty means plain (EpicLoot absent, or verifiably no magic item); a reader that is not ready or
     // cannot read this instance gives an Unreadable row, so a "plain" rule never takes an item it could not check.
     internal IReadOnlyList<FacetEvidence> FilterEquipmentRarity(ClassificationResult item, ItemDrop.ItemData data)

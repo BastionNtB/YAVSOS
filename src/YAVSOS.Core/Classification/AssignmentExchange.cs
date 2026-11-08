@@ -36,6 +36,8 @@ public sealed class AssignmentExchange : IDisposable
     private readonly StageRetry retry = new StageRetry(0, 0, 1);
     /// <summary>Failed attempts since the input last changed.</summary>
     public int Retries => retry.Attempts;
+    /// <summary>X62: seconds until the next retry; negative when none is scheduled.</summary>
+    public double RetryInSeconds => retry.SecondsUntil(clock());
     public AssignmentPublication? Current { get; private set; }
     public string Diagnostic { get; private set; } = "Authoritative assignments pending.";
     /// <summary>The latest input was rejected or exceeded its deadline; cleared by the next input or a successful retry.</summary>

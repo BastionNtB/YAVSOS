@@ -72,6 +72,16 @@ internal sealed class ChestArrivals
     /// <summary>The glow is colouring this chest now; the search highlight leaves it alone until the glow ends.</summary>
     internal bool Owns(GameObject target) => targets.Count != 0 && targets.ContainsValue(target);
 
+    /// <summary>X66 (D163): adds the chests glowing now, each with its kind (Stays for a stays mark), for the through-walls view.</summary>
+    internal void AddLit(List<(Container Chest, ChestHighlight.Kind Kind)> into)
+    {
+        if (glowOff || glow.Count == 0) return;
+        var now = Time.unscaledTime;
+        foreach (var chest in glow.Lit)
+            if (chest && targets.TryGetValue(chest, out var target) && target && glow.Light(chest, now) != null)
+                into.Add((chest, kept.ContainsKey(chest) ? ChestHighlight.Kind.Stays : ChestHighlight.Kind.Holds));
+    }
+
     /// <summary>
     /// X51 B2-02: runs in the plugin's core update, before the cleanup and stash keys; a fault turns off only the glow
     /// and stays mark (D058), never the keys or the settings publish.

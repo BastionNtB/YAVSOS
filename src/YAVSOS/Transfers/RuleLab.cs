@@ -250,7 +250,30 @@ internal static class RuleLab
         var chest = Target(); var plugin = Plugin.Instance;
         if (!chest || plugin == null) return "no target";
         var result = plugin.ChestRules.TryEdit(chest!, expected ?? "", edit);
-        return result.Reason + ": " + Said(result);
+        return result.Sent ? "sent to owner " + ChestRuleStore.View(chest!)!.GetZDO().GetOwner() : result.Reason + ": " + Said(result);
+    }
+
+    /// <summary>
+    /// X32 (D154): the target chest's owner (its session ID, this game's, and whether the dedicated server holds it), this
+    /// game's waiting remote writes, how many requests it answered as an owner, and the last outcomes, newest last.
+    /// </summary>
+    public static string Remote()
+    {
+        var plugin = Plugin.Instance; var chest = Target();
+        var zdo = chest ? ChestRuleStore.View(chest!)?.GetZDO() : null;
+        var writes = plugin?.RuleWrites;
+        return $"owner={zdo?.GetOwner() ?? 0} self={ZDOMan.GetSessionID()} serverOwns={(zdo != null && Networking.RuleWriteChannel.ServerOwns(zdo))} " +
+            $"available={writes?.Available == true} waiting={writes?.LabWaiting ?? 0} answered={writes?.LabAnswered ?? 0} " +
+            $"blocking={(zdo != null && writes?.Blocking(zdo.m_uid) == true)} last=[{string.Join(" | ", writes?.LabOutcomes ?? new Queue<string>())}]";
+    }
+
+    /// <summary>X32: undo or redo on the target chest, as the panel's ↶ does (local or sent to the owner's game).</summary>
+    public static string Restore(string expectedPayload, string previousPayload, bool redo)
+    {
+        var chest = Target(); var plugin = Plugin.Instance;
+        if (!chest || plugin == null) return "no target";
+        var result = plugin.ChestRules.TryRestore(chest!, expectedPayload ?? "", previousPayload ?? "", redo);
+        return result.Sent ? "sent to owner " + ChestRuleStore.View(chest!)!.GetZDO().GetOwner() : result.Reason + ": " + Said(result);
     }
 
     /// <summary>A rule result for the Lab bridge: its message in English, or "ok" when it succeeded (successes say nothing, D101).</summary>

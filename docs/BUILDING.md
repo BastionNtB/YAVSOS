@@ -56,7 +56,7 @@ No command here installs a DLL, changes Gale or deploys to a server, and none pu
 
 ## Future CI and packaging
 
-The core tests run without proprietary game references. Plugin CI must get those references from a controlled runner instead of committing them. NuGet lock files with versions and content hashes are checked in beside the plugin and tests; CI can restore with `--locked-mode`. `scripts/verify-build.py` checks the build: only the allowed DLLs and licence files, ServerSync and MultiUserChest internalized, matching identity and versions, the ServerSync checksum and the ServerSync members YAVSOS couples to, and a core library with no game, Unity, BepInEx, Harmony or ServerSync reference. It doesn't open the packages; `scripts/package.py` checks those.
+The core tests run without proprietary game references. Plugin CI must get those references from a controlled runner instead of committing them. NuGet lock files with versions and content hashes are checked in beside the plugin and tests; CI can restore with `--locked-mode`. `scripts/verify-build.py` checks the build: only the allowed DLLs and license files, ServerSync and MultiUserChest internalized, matching identity and versions, the ServerSync checksum and the ServerSync members YAVSOS couples to, and a core library with no game, Unity, BepInEx, Harmony or ServerSync reference. It doesn't open the packages; `scripts/package.py` checks those.
 
 ## Packages and releases
 

@@ -114,14 +114,137 @@ public sealed class CleanupPlannerTests
         var parts = new List<(string Step, double Ms)>();
         var azuCalls = 0;
         bool Azu(string chest, TransferItemIdentity item) { azuCalls++; return true; }
-        var timed = CleanupPlanner.Plan(new CleanupInput(Taxonomy, new Answers(), world.Snapshot(), azuAllows: Azu, timed: (step, ms) => parts.Add((step, ms))));
+        var takesCalls = 0;
+        bool Takes(string chest, TransferStack stack) { takesCalls++; return true; }
+        var timed = CleanupPlanner.Plan(new CleanupInput(Taxonomy, new Answers(), world.Snapshot(), azuAllows: Azu, timed: (step, ms) => parts.Add((step, ms)), takes: Takes));
         var plain = CleanupPlanner.Plan(new CleanupInput(Taxonomy, new Answers(), world.Snapshot(), azuAllows: Azu));
         Assert.Equal(Describe(plain), Describe(timed));
         Assert.NotEmpty(timed.Moves);
         Assert.True(azuCalls > 0);
-        Assert.Equal(new[] { "facets", "evaluate", "rank", "azu", "other", "total" }, parts.Select(x => x.Step));
+        Assert.True(takesCalls > 0);
+        Assert.Equal(new[] { "facets", "evaluate", "rank", "azu", "takes", "sources", "other", "total" }, parts.Select(x => x.Step));
         Assert.All(parts, x => Assert.True(x.Ms >= 0, x.Step));
         Assert.True(parts.Single(x => x.Step == "total").Ms >= parts.Where(x => x.Step != "total" && x.Step != "other").Sum(x => x.Ms));
+    }
+
+    private static CleanupPlan PlanTaking(World world, Func<string, TransferStack, bool> takes, bool muc = false) =>
+        CleanupPlanner.Plan(new CleanupInput(Taxonomy, new Answers(), world.Snapshot(), mucAvailable: muc, takes: takes));
+
+    // F14 (D129): a chest whose own check refuses the item (a Storehouse store's filter) drops out of the plan; the stack goes
+    // whole to the next ranked chest, with its identity and metadata untouched.
+    [Fact]
+    public void Takes_RefusingChest_IsSkipped_TheStackGoesToTheNextRankedChest_Unchanged()
+    {
+        var world = new World();
+        var wood = world.Add("a-wood", Rule(new[] { "materials.wood" }));
+        var copper = Put(wood, "Copper", 7);
+        copper.Identity = new TransferItemIdentity("Copper", "catalog", 1, 0, 2, 100, 5, "Crafter", true, false,
+            new Dictionary<string, string> { ["other.mod"] = "kept" }, "vanilla-v1", new byte[] { 1, 2, 3 });
+        world.Add("b-metal", Rule(new[] { "materials.metal" }));
+        world.Add("c-materials", Rule(new[] { "materials" }));
+        Assert.Equal("b-metal", Assert.Single(Plan(world).Moves).DestinationId);
+        var asked = new List<string>();
+        var plan = PlanTaking(world, (chest, stack) => { asked.Add(chest + ":" + stack.Identity.Prefab); return chest != "b-metal"; });
+        var move = Assert.Single(plan.Moves);
+        Assert.Equal(("a-wood", "c-materials", 7, copper.Handle), (move.SourceId, move.DestinationId, move.Units, move.Handle));
+        Assert.Same(copper.Identity, move.Identity);
+        Assert.Equal(copper.Identity.Fingerprint, move.Identity.Fingerprint);
+        Assert.Empty(plan.Remainders);
+        Assert.Equal(new[] { "b-metal:Copper", "c-materials:Copper" }, asked);
+        var totals = world.Totals(); world.Apply(plan); Assert.Equal(totals, world.Totals());
+    }
+
+    // F14: with the only accepting chest refusing, the stack stays; a rejected stack is reported as one no chest takes, not
+    // as "no room", and an unruled container's stack stays silently, as with no accepting chest at all.
+    [Fact]
+    public void Takes_OnlyAcceptingChestRefuses_TheStacksStay_ReportedAsNoChestNotNoRoom()
+    {
+        var world = new World();
+        Put(world.Add("a-wood", Rule(new[] { "materials.wood" })), "Copper", 7);
+        Put(world.Add("b-box", ""), "Copper", 3);
+        world.Add("c-metal", Rule(new[] { "materials.metal" }));
+        Assert.Equal(2, Plan(world).Moves.Count);
+        var plan = PlanTaking(world, (chest, _) => chest != "c-metal");
+        Assert.Empty(plan.Moves);
+        var rest = Assert.Single(plan.Remainders);
+        Assert.Equal(("a-wood", 7, RunReason.NoDestination), (rest.SourceId, rest.Units, rest.Reason));
+    }
+
+    // F14: a chest with no room for one unit isn't asked (the game's "no" would only mean "full"), so the plan and its
+    // "no room" are as without the check.
+    [Fact]
+    public void Takes_FullChest_IsNotAsked_AndStaysAMatterOfRoom()
+    {
+        var world = new World();
+        Put(world.Add("a-wood", Rule(new[] { "materials.wood" })), "Copper", 7);
+        Put(world.Add("b-metal", Rule(new[] { "materials.metal" }), width: 1), "Copper", 50);
+        var asked = 0;
+        var plan = PlanTaking(world, (_, _) => { asked++; return false; });
+        Assert.Equal(0, asked);
+        Assert.Equal(Describe(Plan(world)), Describe(plan));
+        Assert.Equal(RunReason.NoCapacity, Assert.Single(plan.Remainders).Reason);
+    }
+
+    // F14 cost: one question per chest and kind of stack (merge key), however many stacks of it a plan looks at.
+    [Fact]
+    public void Takes_AskedOncePerChestAndKindOfStack()
+    {
+        var world = new World();
+        var wood = world.Add("a-wood", Rule(new[] { "materials.wood" }));
+        Put(wood, "Copper", 7); Put(wood, "Copper", 5); Put(wood, "SwordBronze", 1, maximum: 1); Put(wood, "SwordBronze", 1, maximum: 1);
+        world.Add("b-store", Rule(new[] { "materials" }, always: new[] { "SwordBronze" }));
+        var asked = new List<string>();
+        var plan = PlanTaking(world, (chest, stack) => { asked.Add(chest + ":" + stack.Identity.Prefab); return true; });
+        Assert.Equal(Describe(Plan(world)), Describe(plan));
+        Assert.Equal(4, plan.Moves.Count);
+        Assert.Equal(new[] { "b-store:Copper", "b-store:SwordBronze" }, asked);
+    }
+
+    // F14: the explanation names the refusing chest and picks the plan's own next chest.
+    [Fact]
+    public void Takes_Explanation_NamesTheRefusingChest_AndTheNextChest()
+    {
+        var world = new World();
+        var copper = Put(world.Add("a-wood", Rule(new[] { "materials.wood" })), "Copper", 7);
+        world.Add("b-metal", Rule(new[] { "materials.metal" }));
+        world.Add("c-materials", Rule(new[] { "materials" }));
+        var input = new CleanupInput(Taxonomy, new Answers(), world.Snapshot(), takes: (chest, _) => chest != "b-metal");
+        var explanation = PlacementExplainer.Cleanup(input, "a-wood", copper.Handle);
+        Assert.Equal((PlacementOutcome.Goes, "c-materials"), (explanation.Outcome, explanation.ChosenId));
+        Assert.Equal(ChestVerdict.Refused, explanation.Chests.Single(x => x.ChestId == "b-metal").Verdict);
+        Assert.Equal(ChestVerdict.Chosen, explanation.Chests.Single(x => x.ChestId == "c-materials").Verdict);
+        var none = PlacementExplainer.Cleanup(new CleanupInput(Taxonomy, new Answers(), world.Snapshot(), takes: (_, _) => false), "a-wood", copper.Handle);
+        Assert.Equal(PlacementOutcome.NoChest, none.Outcome);
+    }
+
+    // F14 conservation over random worlds: a check that takes everything changes nothing; with refusals, no stack goes to a
+    // chest that refuses it while that chest has room for it, no stack moves more units than it has, and items are conserved.
+    [Fact]
+    public void Property_Takes_OnlyRemovesDestinations_AndConservesItems()
+    {
+        var refusals = 0;
+        for (var seed = 0; seed < 200; seed++)
+        {
+            var random = new Random(seed);
+            var world = RandomWorld(random);
+            Assert.Equal(Describe(Plan(world)), Describe(PlanTaking(world, (_, _) => true)));
+            var refused = new HashSet<string>(world.Chests.SelectMany(c => Prefabs.Where(_ => random.Next(3) == 0).Select(p => c.Id + "|" + p)));
+            var snapshot = world.Snapshot().ToDictionary(x => x.Id);
+            var stacks = snapshot.Values.SelectMany(x => x.Inventory.Stacks).ToDictionary(x => x.Handle);
+            var plan = PlanTaking(world, (chest, stack) => !refused.Contains(chest + "|" + stack.Identity.Prefab));
+            foreach (var move in plan.Moves)
+            {
+                var stack = stacks[move.Handle];
+                if (!refused.Contains(move.DestinationId + "|" + move.Identity.Prefab)) continue;
+                refusals++;
+                Assert.False(new TransferGrid(snapshot[move.DestinationId].Inventory).TryFind(stack.MergeKey, stack.MaximumStack, out _, out _, out _, out _),
+                    $"seed {seed}: {move.Identity.Prefab} planned into {move.DestinationId}, which refuses it and had room");
+            }
+            foreach (var group in plan.Moves.GroupBy(x => x.Handle)) Assert.True(group.Sum(x => x.Units) <= stacks[group.Key].Quantity);
+            var totals = world.Totals(); world.Apply(plan); Assert.Equal(totals, world.Totals());
+        }
+        // A refused chest received only when the plan itself freed its room (a full chest isn't asked); rare by design.
+        Assert.True(refusals < 50, refusals.ToString());
     }
 
     // F8 (D086 D16(a) for chests, B1.23): a stack the adapter couldn't capture stays where it is and holds its slot; the rest
@@ -153,7 +276,7 @@ public sealed class CleanupPlannerTests
     {
         // Runtime 2026-10-21: 65 chests in range, most empty; the 65th by id was skipped on every run.
         var world = new World();
-        for (var i = 0; i < CleanupPlanner.MaximumSources + 10; i++) world.Add("a" + i.ToString("D3"), Rule(new[] { "materials.metal" }));
+        for (var i = 0; i < CleanupPlanner.DefaultSources + 10; i++) world.Add("a" + i.ToString("D3"), Rule(new[] { "materials.metal" }));
         Put(world.Add("z-wood", Rule(new[] { "materials.wood" })), "Copper", 5);
         var plan = Plan(world);
         Assert.Equal(0, plan.SkippedChests);
@@ -161,7 +284,7 @@ public sealed class CleanupPlannerTests
         // Over the limit with items in every chest: the rest are reported, not hidden, and the reason says so.
         foreach (var chest in world.Chests.Where(x => x.Id != "z-wood")) Put(chest, "Copper", 1);
         Assert.Equal(11, Plan(world).SkippedChests);
-        Assert.DoesNotContain("try again", EnglishText.Of(RunReport.Reason(RunReason.ChestLimit))); // It names where to stand instead (D086 D9).
+        Assert.DoesNotContain("try again", EnglishText.Of(RunReport.Reason(RunReason.ChestLimit))); // X67 (D156): "clean up again", since the next press reaches further.
     }
 
     // D086 D9: the nearest sources give up items; the farthest are left and reported, and the report counts chests in range.
@@ -170,7 +293,7 @@ public sealed class CleanupPlannerTests
     {
         var world = new World();
         world.Add("metal", Rule(new[] { "materials.metal" }), width: 4).Distance = 1;
-        for (var i = 0; i < CleanupPlanner.MaximumSources + 2; i++)
+        for (var i = 0; i < CleanupPlanner.DefaultSources + 2; i++)
         {
             var chest = world.Add("w" + i.ToString("D3"), Rule(new[] { "materials.wood" }));
             chest.Distance = 100 - i; // Higher IDs are nearer.
@@ -179,7 +302,7 @@ public sealed class CleanupPlannerTests
         var plan = Plan(world);
         Assert.Equal(2, plan.SkippedChests);
         Assert.DoesNotContain(plan.Moves, x => x.SourceId is "w000" or "w001"); // The two farthest.
-        Assert.Equal("in a chest beyond the nearest " + CleanupPlanner.MaximumSources + " with items; clean up again closer to it",
+        Assert.Equal("in a chest this run didn't reach (cleanup works on " + CleanupPlanner.DefaultSources + " chests per press); clean up again",
             EnglishText.Of(RunReport.Reason(RunReason.ChestLimit)));
         var report = RunReport.ForCleanup(); report.Range(300, 256);
         Assert.Equal("Nothing moved: YAVSOS read only the nearest 256 of 300 chests in range.", EnglishText.Of(report.Summary()));

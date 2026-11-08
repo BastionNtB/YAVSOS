@@ -144,17 +144,23 @@ public static class CategorySearch
 
     /// <summary>
     /// The picker's rows while a search is active: the marked categories, their ancestors (opened to reveal them) and
-    /// what lies under a marked category. Without a search, the usual rows.
+    /// what lies under a marked category. A marked category under a heading (D163, <paramref name="groups"/>) opens and
+    /// shows that heading the same way. Without a search, the usual rows.
     /// </summary>
     public static IReadOnlyList<CategoryTreeRow> Rows(CategoryNames names, IReadOnlyCollection<string> stored, Func<string, bool> hasMembers,
-        ICollection<string> expanded, ICollection<string> collapsed, CategorySearchResult search)
+        ICollection<string> expanded, ICollection<string> collapsed, CategorySearchResult search, CategoryGrouping? groups = null)
     {
         if (search == null || names == null) throw new ArgumentNullException(nameof(search));
-        if (!search.Active) return CategorySelection.Rows(names, stored, hasMembers, expanded, collapsed);
+        groups ??= CategoryGrouping.None;
+        if (!search.Active) return CategorySelection.Rows(names, stored, hasMembers, expanded, collapsed, groups);
         var taxonomy = names.Taxonomy;
         var path = new HashSet<string>(StringComparer.Ordinal);
         foreach (var hit in search.Hits)
-            for (var at = taxonomy.ParentOf(hit); at != null; at = taxonomy.ParentOf(at)) path.Add(at);
+        {
+            var root = hit;
+            for (var at = taxonomy.ParentOf(hit); at != null; at = taxonomy.ParentOf(at)) { path.Add(at); root = at; }
+            if (taxonomy.Categories.ContainsKey(root) && groups.Of(root) is { } group) path.Add(group.Id);
+        }
         var open = new HashSet<string>(expanded.Concat(path), StringComparer.Ordinal);
         var closed = new HashSet<string>(collapsed.Where(x => !path.Contains(x)), StringComparer.Ordinal);
         bool Shown(string id)
@@ -163,7 +169,7 @@ public static class CategorySearch
             for (string? at = id; at != null; at = taxonomy.ParentOf(at)) if (search.Hits.Contains(at)) return true;
             return false;
         }
-        return CategorySelection.Rows(names, stored, x => hasMembers(x) || path.Contains(x) || search.Hits.Contains(x), open, closed)
+        return CategorySelection.Rows(names, stored, x => hasMembers(x) || path.Contains(x) || search.Hits.Contains(x), open, closed, groups)
             .Where(x => Shown(x.Id)).ToArray();
     }
 }

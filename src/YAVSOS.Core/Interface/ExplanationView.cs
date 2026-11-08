@@ -7,26 +7,37 @@ namespace YAVSOS.Core.Interface;
 
 /// <summary>
 /// The chest an answer names (inventory case 3): the open chest, or another one by its name and distance, since many
-/// chests share a name. Typed, so the answer never compares English words. Immutable.
+/// chests share a name. X65 (D163): the distance is flat (horizontal), and a chest in a stack also says its place in
+/// the stack ("Reinforced chest 6 m away, 2 of 3 from the bottom"). Typed, so the answer never compares English words.
+/// Immutable.
 /// </summary>
 public sealed class ChestName : IEquatable<ChestName>
 {
-    private ChestName(bool open, string name, long meters) { IsOpen = open; Name = name; Meters = meters; }
+    private ChestName(bool open, string name, long meters, StackPlace stack) { IsOpen = open; Name = name; Meters = meters; Stack = stack; }
     /// <summary>The chest that is open now.</summary>
-    public static ChestName Open { get; } = new(true, "", 0);
-    /// <summary>Another chest: its name, already in the player's language, and how far away it is, in whole meters.</summary>
-    public static ChestName Away(string name, long meters) => new(false, name ?? "", meters);
+    public static ChestName Open { get; } = new(true, "", 0, default);
+    /// <summary>
+    /// Another chest: its name, already in the player's language, how far away it is across the ground, in whole
+    /// meters, and its place in its stack (<c>default</c>, or a stack of one: it stands alone).
+    /// </summary>
+    public static ChestName Away(string name, long meters, StackPlace stack = default) => new(false, name ?? "", meters, stack);
     public bool IsOpen { get; }
     public string Name { get; }
     public long Meters { get; }
-    /// <summary>"this chest", "Reinforced chest 5 m away", or "a chest nearby" for a chest without a name.</summary>
+    /// <summary>X65: its place in its stack; not <see cref="StackPlace.Stacked"/> for a chest standing alone or the open chest.</summary>
+    public StackPlace Stack { get; }
+    /// <summary>The same chest under another name (the result panel's escaped or drawer name), keeping its distance and place.</summary>
+    public ChestName Named(string name) => IsOpen ? this : new(false, name ?? "", Meters, Stack);
+    /// <summary>"this chest", "Reinforced chest 5 m away", "Reinforced chest 6 m away, 2 of 3 from the bottom", or "a chest nearby" for a chest without a name.</summary>
     public Message Said => IsOpen ? Message.Of("yavsos_where_chest_this")
         : string.IsNullOrWhiteSpace(Name) ? Message.Of("yavsos_where_chest_nearby")
-        : Message.Of("yavsos_where_chest_away").With("chest", Name).With("meters", Meters);
-    public bool Equals(ChestName? other) => other is not null && other.IsOpen == IsOpen && other.Name == Name && other.Meters == Meters;
+        : ChestPlaceText.Stack(Stack) is { } place
+            ? Message.Of("yavsos_where_chest_away_at").With("chest", Name).With("meters", Meters).With("place", place)
+            : Message.Of("yavsos_where_chest_away").With("chest", Name).With("meters", Meters);
+    public bool Equals(ChestName? other) => other is not null && other.IsOpen == IsOpen && other.Name == Name && other.Meters == Meters && other.Stack.Equals(Stack);
     public override bool Equals(object? obj) => obj is ChestName other && Equals(other);
-    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Name) ^ Meters.GetHashCode() ^ (IsOpen ? 1 : 0);
-    public override string ToString() => IsOpen ? "(open)" : Name + " " + Meters + " m";
+    public override int GetHashCode() => StringComparer.Ordinal.GetHashCode(Name) ^ Meters.GetHashCode() ^ (IsOpen ? 1 : 0) ^ Stack.GetHashCode();
+    public override string ToString() => IsOpen ? "(open)" : Name + " " + Meters + " m" + (Stack.Stacked ? " " + Stack.Place + "/" + Stack.Size : "");
 }
 
 /// <summary>
@@ -141,7 +152,9 @@ public static class ExplanationView
             PlacementOutcome.NoChest => Message.Of("yavsos_where_reason_no_chest"),
             PlacementOutcome.Blocked when explanation.Blocked != null => RunReport.Reason(explanation.Blocked.Value),
             PlacementOutcome.Kept => keptReason ?? Message.Of("yavsos_where_reason_kept"),
-            PlacementOutcome.NotReady => Message.Of("yavsos_where_reason_loading"),
+            // X71 (D159): a failure says what failed, in the bracketed reason's words; loading keeps its own shorter phrase.
+            PlacementOutcome.NotReady => explanation.Blocked is RunReason.CategoriesServerFailed or RunReason.CategoriesFailed
+                ? RunReport.Reason(explanation.Blocked.Value) : Message.Of("yavsos_where_reason_loading"),
             PlacementOutcome.OptedOut => Message.Of("yavsos_where_reason_opted_out").With("option", Message.Of("yavsos_cleanup_optout")),
             PlacementOutcome.Skipped => RunReport.Reason(RunReason.ChestLimit),
             _ => null

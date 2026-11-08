@@ -17,7 +17,7 @@ public enum MarkState { Working, Broken, Off, Caution, Limited }
 public enum MarkKind { AzuAutoStore, Stashing, Cleanup, Display, Categories, Server, MultiUserChest, EpicLoot, Drawers }
 
 /// <summary>SF4 (D087): the display-only parts that can turn themselves off after an error, for the Display mark.</summary>
-public enum DisplayPart { Where, Search, Categories, Labels, Glow, Results }
+public enum DisplayPart { Where, Search, Categories, Labels, Glow, Results, ThroughWalls }
 
 /// <summary>One part of an integration and whether it works; <see cref="MarkState.Off"/> means a setting turned it off.</summary>
 public sealed class MarkLine
@@ -168,6 +168,7 @@ public static class PanelMarks
         DisplayPart.Categories => "yavsos_mark_display_part_categories",
         DisplayPart.Labels => "yavsos_mark_display_part_labels",
         DisplayPart.Glow => "yavsos_mark_display_part_glow",
+        DisplayPart.ThroughWalls => "yavsos_mark_display_part_throughwalls",
         _ => "yavsos_mark_display_part_results"
     });
 
@@ -179,7 +180,13 @@ public static class PanelMarks
     /// <param name="gaveUp">D086 B5.36, D087: a stage gave up after its retries; the mark says so instead of "loading". While the
     /// previous answers are kept (D086 D7), it adds an amber line (B4.26).</param>
     /// <param name="serverRejected">B4.9: the server's category settings were rejected, so categories can't load.</param>
-    public static IntegrationMark Categories(bool ready, int items, bool fromServer, bool gaveUp = false, bool serverRejected = false)
+    /// <param name="serverFailed">X62 (D145): on a client, the server says its categories failed and wait for a slow retry
+    /// (<see cref="CategoryWait.ServerFailed"/>); shown in place of "loading". This game's own failure comes first.</param>
+    /// <param name="serverStale">X71 (D159): on a client whose categories are ready, the server says its latest rebuild failed
+    /// (<see cref="CategoryWait.ServerRebuildFailed"/>); like a host's own failed rebuild, it adds an amber line naming the
+    /// server's log. Only the color and the tooltip change.</param>
+    public static IntegrationMark Categories(bool ready, int items, bool fromServer, bool gaveUp = false, bool serverRejected = false, bool serverFailed = false,
+        bool serverStale = false)
     {
         var name = Message.Of("yavsos_mark_categories_name");
         if (!ready && serverRejected)
@@ -187,13 +194,16 @@ public static class PanelMarks
         if (!ready)
             return new IntegrationMark(MarkKind.Categories, name, new[]
             {
-                !gaveUp ? Line("yavsos_mark_categories_loading", MarkState.Limited) : Line("yavsos_mark_categories_gave_up", MarkState.Broken)
+                gaveUp ? Line("yavsos_mark_categories_gave_up", MarkState.Broken)
+                : serverFailed ? Line("yavsos_mark_categories_server_failed", MarkState.Broken)
+                : Line("yavsos_mark_categories_loading", MarkState.Limited)
             });
         return new IntegrationMark(MarkKind.Categories, name, new[]
         {
             new MarkLine(Message.Of("yavsos_mark_categories_ready").Count(items), MarkState.Working),
             Line(fromServer ? "yavsos_mark_categories_from_server" : "yavsos_mark_categories_from_game", MarkState.Working)
-        }.Concat(!gaveUp ? Array.Empty<MarkLine>() : new[] { Line("yavsos_mark_categories_stale", MarkState.Limited) }));
+        }.Concat(!gaveUp ? Array.Empty<MarkLine>() : new[] { Line("yavsos_mark_categories_stale", MarkState.Limited) })
+         .Concat(!serverStale ? Array.Empty<MarkLine>() : new[] { Line("yavsos_mark_categories_server_stale", MarkState.Limited) }));
     }
 
     /// <summary>A server without YAVSOS (D044, D074 Q4): shown only then, since every other mode is the expected one.</summary>

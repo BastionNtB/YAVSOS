@@ -5,8 +5,11 @@ namespace YAVSOS.Core.Interface;
 /// <summary>What the strip under the panel's header shows (P10-25, D132), most important first in <see cref="PanelStrip.Of"/>.</summary>
 public enum StripKind { Refusal, Summary, Banner, Label, NoRule }
 
-/// <summary>The panel's state that puts a banner in the strip: another player is using the chest, or its rule is from another version.</summary>
-public enum StripBanner { None, InUse, Unreadable }
+/// <summary>
+/// The panel's state that puts a banner in the strip: another player is using the chest, its rule is from another
+/// version, or a change waits for the game that owns the chest (X32: another player's, or the server).
+/// </summary>
+public enum StripBanner { None, InUse, Unreadable, Saving, SavingOnServer }
 
 /// <summary>
 /// One state of the strip: its kind, its text (a message, or the chest label as written), how many lines it is high
@@ -55,6 +58,8 @@ public static class PanelStrip
     public static Message? Banner(StripBanner banner, Stasher stasher) => banner switch
     {
         StripBanner.InUse => Message.Of("yavsos_panel_banner_in_use"),
+        StripBanner.Saving => Message.Of("yavsos_panel_banner_saving"),
+        StripBanner.SavingOnServer => Message.Of("yavsos_panel_banner_saving_server"),
         StripBanner.Unreadable => Message.Of(stasher == Stasher.AzuAutoStore ? "yavsos_panel_banner_unreadable_azu" : "yavsos_panel_banner_unreadable"),
         _ => null
     };

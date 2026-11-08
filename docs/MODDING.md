@@ -49,6 +49,8 @@ Nothing is half-applied.
   match): `materials.metal.boss` sits under `materials.metal`, which the example renames
   Bars. The built-in IDs are in
   [`DefaultClassificationTaxonomy.cs`](../src/YAVSOS.Core/Classification/DefaultClassificationTaxonomy.cs).
+  IDs that start with `store.` belong to the categories YAVSOS 1.3 makes from other mods'
+  stores, such as Storehouse's; don't use them for your own.
 - **`<assignment>`** chooses items by prefab name (the name the game's `spawn` command uses),
   either one item (`match="exact"`) or a pattern with `*` and `?` (`match="glob"`). Names are
   case-sensitive. Its `<member>` lines **replace** the automatic categories of those items;

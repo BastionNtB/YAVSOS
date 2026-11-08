@@ -25,7 +25,7 @@ SOURCE = ROOT / "src/YAVSOS/Configuration/PluginSettings.cs"
 ENGLISH = ROOT / "src/YAVSOS/Translations/English/yavsos.json"
 CORE = ROOT / "src/YAVSOS.Core"
 TARGET = ROOT / "docs/SETTINGS.md"
-SECTIONS = ["Server", "Cleanup", "Stash", "Controls"]
+SECTIONS = ["Server", "Storehouse", "Cleanup", "Stash", "Controls"]
 KEYS = {"Period": ".", "Comma": ",", "LeftControl": "Ctrl", "RightControl": "Ctrl", "LeftShift": "Shift",
         "RightShift": "Shift", "LeftAlt": "Alt", "RightAlt": "Alt", "Mouse2": "Middle mouse",
         "Mouse3": "Mouse 4", "Mouse4": "Mouse 5"}
@@ -33,7 +33,7 @@ KEYS = {"Period": ".", "Comma": ",", "LeftControl": "Ctrl", "RightControl": "Ctr
 # so a new one gets a readable name instead of a code identifier.
 ENUM_NAMES = {"None": "None", "SmallItemPuff": "small-item puff", "SmelterPuff": "smelter puff",
               "FermenterPuff": "fermenter puff", "LootSparkle": "loot sparkle", "PickSparkle": "pick sparkle",
-              "AutoPickupShimmer": "auto-pickup shimmer"}
+              "AutoPickupShimmer": "auto-pickup shimmer", "Left": "Left", "Middle": "Middle", "Right": "Right"}
 COLOR_NAMES = {"FFC740": "gold", "80B8FF": "cool blue", "FF6B33": "red-orange"}
 
 INTRO = """# YAVSOS settings
@@ -46,9 +46,9 @@ Every setting YAVSOS has, as the Configuration Manager shows it in English. Chan
 game with a Configuration Manager (F1 with BepInEx ConfigurationManager), or in
 `BepInEx/config/com.bastionntb.yavsos.cfg`.
 
-**Who sets what.** On a server with YAVSOS, the server decides everything under **Server**,
-and its categories file applies to everyone. While `LockSharedPolicy` is on, only admins can
-change those. Everything under **Cleanup**, **Stash** and **Controls** is each player's own.
+**Who sets what.** On a server with YAVSOS, the server decides everything under **Server**
+and **Storehouse**, and its categories file applies to everyone. While `LockSharedPolicy` is
+on, only admins can change those. Everything under **Cleanup**, **Stash** and **Controls** is each player's own.
 Single-player and client-only games use your own file for all of them.
 
 **With AzuAutoStore.** AzuAutoStore does the stashing with its own keys, range and hotbar
@@ -263,6 +263,8 @@ def read_settings():
         if match.group(1) == "Bind" and args[:2] == ["file", "sync"]:
             section, key, default, said, shared = args[2:7]
             rest = args[7:]
+        elif match.group(1) == "file.Bind" and args[0] == '"Internal"':
+            continue  # X68: YAVSOS's hidden record of one-time setting moves, not a setting
         elif match.group(1) == "file.Bind" and args[0].startswith('"'):
             section, key, default, said = args[:4]
             shared, rest = "true", []  # the locking entry, bound for ServerSync's AddLockingConfigEntry

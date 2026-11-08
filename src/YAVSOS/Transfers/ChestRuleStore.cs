@@ -18,10 +18,15 @@ internal sealed class ChestRuleResult
     internal TransferRefusal Reason { get; }
     internal Message? Message { get; }
     internal ContainerPolicyRead? Policy { get; }
-    internal bool Succeeded => Reason == TransferRefusal.None;
-    private ChestRuleResult(TransferRefusal reason, Message? message, ContainerPolicyRead? policy)
-    { Reason = reason; Message = message; Policy = policy; }
+    internal bool Succeeded => Reason == TransferRefusal.None && !Sent;
+    /// <summary>X32 (D154): another game owns the chest, so the write went to it; <see cref="Value"/> is what it should save. Not yet saved.</summary>
+    internal bool Sent { get; }
+    internal string Value { get; } = "";
+    private ChestRuleResult(TransferRefusal reason, Message? message, ContainerPolicyRead? policy, bool sent = false, string value = "")
+    { Reason = reason; Message = message; Policy = policy; Sent = sent; Value = value; }
     internal static ChestRuleResult Done(ContainerPolicyRead? policy = null) => new(TransferRefusal.None, null, policy);
+    internal static ChestRuleResult Sending(string value) => new(TransferRefusal.None, null, null, true, value);
+    internal static ChestRuleResult Refused(TransferRefusal reason, Message message) => new(reason, message, null);
     internal static ChestRuleResult Refused(TransferRefusal reason, string key, ContainerPolicyRead? policy = null) =>
         new(reason, YAVSOS.Core.Messages.Message.Of(key), policy);
 }
@@ -71,6 +76,8 @@ internal sealed class ChestRuleStore
     internal static ZNetView? View(Container container) => container && Bound ? ViewField!(container) : null;
     private readonly Func<ClassificationTaxonomy> taxonomy;
     private readonly Func<bool> policyReady;
+    /// <summary>X32 (D154): where writes to a chest another game owns go; null or unavailable keeps them refused, as before 1.3.</summary>
+    internal Networking.RuleWriteChannel? Remote { get; set; }
 
     internal ChestRuleStore(Func<ClassificationTaxonomy> taxonomy, Func<bool> policyReady)
     {
@@ -121,10 +128,14 @@ internal sealed class ChestRuleStore
     internal const string CleanupOptOutKey = "com.bastionntb.yavsos.cleanup-optout";
     internal static bool CleanupOptOut(Container container) => View(container)?.GetZDO()?.GetBool(CleanupOptOutKey, false) == true;
 
+    /// <summary>X32 §3.2 step 4: the chest's privacy for <paramref name="playerId"/>, as vanilla's open request checks it (the owner's side; wards are the requester's, D154 Q17).</summary>
+    internal static bool PrivacyAccess(Container container, long playerId) => Bound && CheckAccess!(container, playerId);
+
     internal static bool HasAccess(Container container, Player player) => Bound && CheckAccess!(container, player.GetPlayerID()) &&
         (!container.m_checkGuardStone || PrivateArea.CheckAccess(container.transform.position, 0f, false, false));
 
-    internal ChestRuleResult TrySetCleanupOptOut(Container container, bool optOut)
+    /// <param name="control">The panel control the change came from, carried back with a remote write's outcome (X32).</param>
+    internal ChestRuleResult TrySetCleanupOptOut(Container container, bool optOut, int control = 0)
     {
         var eligibility = Eligibility(container);
         if (eligibility != RuleEligibility.Eligible) return Ineligible();
@@ -134,17 +145,20 @@ internal sealed class ChestRuleStore
 #if YAVSOS_LAB
         if (FaultLab.RefuseEdits) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use"); // Lab fault "edits".
 #endif
-        if (!view.IsOwner()) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use");
         if (!HasAccess(container, player)) return ChestRuleResult.Refused(TransferRefusal.AccessDenied, "yavsos_edit_no_access");
+        // X32 (D154 Q16): the opt-out goes to the owner's game too.
+        if (!view.IsOwner()) return SendRemote(container, RuleWriteKind.OptOut, "", "", optOut, control);
         view.GetZDO().Set(CleanupOptOutKey, optOut);
+        Remote?.Forget(view.GetZDO().m_uid);
         return CleanupOptOut(container) == optOut ? ChestRuleResult.Done() : ChestRuleResult.Refused(TransferRefusal.Unconfirmed, "yavsos_edit_unconfirmed");
     }
 
     /// <param name="edit">Categories and exact items (D048); null clears the rule. An edit that leaves nothing clears it too.</param>
-    internal ChestRuleResult TryEdit(Container container, string expectedPayload, ChestRuleEdit? edit)
+    /// <param name="control">The panel control the change came from, carried back with a remote write's outcome (X32).</param>
+    internal ChestRuleResult TryEdit(Container container, string expectedPayload, ChestRuleEdit? edit, int control = 0)
     {
         if (expectedPayload == null) throw new ArgumentNullException(nameof(expectedPayload));
-        if (Writable(container) is { } refused) return refused;
+        if (Writable(container, out var local) is { } refused) return refused;
         var view = View(container)!; var zdo = view.GetZDO();
         var current = zdo.GetString(ContainerPolicyEnvelope.ZdoKey, "");
         var currentTaxonomy = taxonomy();
@@ -161,7 +175,8 @@ internal sealed class ChestRuleStore
                 ChestRuleEditProblem.Invalid => "yavsos_edit_invalid",
                 _ => "yavsos_edit_other_version"
             }, ContainerPolicyEnvelope.Read(current, currentTaxonomy));
-        return Commit(view, updated!, currentTaxonomy);
+        // X32: another game owns the chest; it gets the finished payload and only checks and writes it (§3.1).
+        return local ? Commit(view, updated!, currentTaxonomy) : SendRemote(container, RuleWriteKind.Edit, current, updated!, false, control);
     }
 
     /// <summary>
@@ -169,23 +184,37 @@ internal sealed class ChestRuleStore
     /// owner-only compare-and-set as an edit: refused when the chest no longer holds <paramref name="expectedPayload"/>
     /// (<paramref name="redo"/> picks the words), while another player is using the chest, or without access.
     /// </summary>
-    internal ChestRuleResult TryRestore(Container container, string expectedPayload, string previousPayload, bool redo)
+    internal ChestRuleResult TryRestore(Container container, string expectedPayload, string previousPayload, bool redo, int control = 0)
     {
         if (expectedPayload == null) throw new ArgumentNullException(nameof(expectedPayload));
         if (previousPayload == null) throw new ArgumentNullException(nameof(previousPayload));
-        if (Writable(container) is { } refused) return refused;
+        if (Writable(container, out var local) is { } refused) return refused;
         var view = View(container)!;
         var current = view.GetZDO().GetString(ContainerPolicyEnvelope.ZdoKey, "");
         var currentTaxonomy = taxonomy();
         if (ContainerPolicyEnvelope.TryRestore(current, expectedPayload, previousPayload, out var updated) != TransferRefusal.None)
             return ChestRuleResult.Refused(TransferRefusal.PolicyChanged, redo ? "yavsos_edit_redo_changed" : "yavsos_edit_undo_changed",
                 ContainerPolicyEnvelope.Read(current, currentTaxonomy));
-        return Commit(view, updated!, currentTaxonomy);
+        return local ? Commit(view, updated!, currentTaxonomy) : SendRemote(container, redo ? RuleWriteKind.Redo : RuleWriteKind.Undo, current, updated!, false, control);
     }
 
-    // The checks every rule write makes before comparing payloads; null: this player may write the chest's rule now.
-    private ChestRuleResult? Writable(Container container)
+    // X32 (D154): the write goes to the game that owns the chest; refused as before 1.3 when the channel is off.
+    private ChestRuleResult SendRemote(Container container, RuleWriteKind kind, string before, string value, bool optOut, int control)
     {
+        if (Remote is not { Available: true } remote) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use");
+        return remote.Send(container, kind, before, value, optOut, control) is { } refusal
+            ? ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, refusal)
+            : ChestRuleResult.Sending(value);
+    }
+
+    /// <summary>X32: rule writes to this chest can go to the game that owns it (the channel is registered for this world).</summary>
+    internal bool RemoteAvailable => Remote is { Available: true };
+
+    // The checks every rule write makes before comparing payloads; null: this player may write the chest's rule now.
+    // local: this game owns the chest and writes it; otherwise the write goes to the owner's game (X32).
+    private ChestRuleResult? Writable(Container container, out bool local)
+    {
+        local = false;
         var eligibility = Eligibility(container);
         if (eligibility != RuleEligibility.Eligible) return Ineligible();
         if (!policyReady()) return ChestRuleResult.Refused(TransferRefusal.UnsupportedCapability, "yavsos_edit_loading");
@@ -195,18 +224,22 @@ internal sealed class ChestRuleStore
 #if YAVSOS_LAB
         if (FaultLab.RefuseEdits) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use"); // Lab fault "edits".
 #endif
-        // With MultiUserChest, other viewers see the chest without owning it. Only the owner writes.
-        if (!view.IsOwner()) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use");
+        // With MultiUserChest, other viewers see the chest without owning it. Only the owner writes: a viewer's change
+        // goes to the owner's game (X32), which checks the chest's privacy again; the ward is this game's check, as in
+        // vanilla (D154 Q17).
         if (!CheckAccess!(container, player.GetPlayerID()) ||
             container.m_checkGuardStone && !PrivateArea.CheckAccess(container.transform.position, 0f, true, false))
             return ChestRuleResult.Refused(TransferRefusal.AccessDenied, "yavsos_edit_no_access");
+        local = view.IsOwner();
+        if (!local && !RemoteAvailable) return ChestRuleResult.Refused(TransferRefusal.UnsupportedAuthority, "yavsos_edit_chest_in_use");
         return null;
     }
 
     // Writes the payload and confirms it by reading it back while still the owner.
-    private static ChestRuleResult Commit(ZNetView view, string updated, ClassificationTaxonomy currentTaxonomy)
+    private ChestRuleResult Commit(ZNetView view, string updated, ClassificationTaxonomy currentTaxonomy)
     {
         var zdo = view.GetZDO();
+        Remote?.Forget(zdo.m_uid);
         zdo.Set(ContainerPolicyEnvelope.ZdoKey, updated);
         var written = zdo.GetString(ContainerPolicyEnvelope.ZdoKey, "");
         if (!view.IsOwner() || !StringComparer.Ordinal.Equals(written, updated))

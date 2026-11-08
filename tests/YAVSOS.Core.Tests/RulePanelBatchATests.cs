@@ -181,6 +181,11 @@ public sealed class RulePanelBatchATests
         Assert.Equal((StripKind.Banner, PanelStrip.UnreadableLines), (other.Kind, other.Lines));
         Assert.Equal(Message.Of("yavsos_panel_banner_unreadable_azu"), other.Text);
         Assert.Equal(Message.Of("yavsos_panel_banner_unreadable"), PanelStrip.Of(messages, StripBanner.Unreadable, Stasher.Yavsos, null, false).Text);
+        // X32 (D154): a change waiting for the game that holds the chest, another player's or the server.
+        var saving = PanelStrip.Of(messages, StripBanner.Saving, Stasher.Yavsos, "Ores", false);
+        Assert.Equal((StripKind.Banner, PanelStrip.Lines), (saving.Kind, saving.Lines));
+        Assert.Equal("Another player's game is saving your change…", EnglishText.Of(saving.Text!));
+        Assert.Equal("The server is saving your change…", EnglishText.Of(PanelStrip.Of(messages, StripBanner.SavingOnServer, Stasher.Yavsos, null, false).Text!));
 
         // A refusal comes first, even over a banner, and keeps the mode's height.
         messages.Say(PanelControl.Clear, Message.Of("yavsos_edit_chest_in_use"));

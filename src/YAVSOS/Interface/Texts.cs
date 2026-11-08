@@ -103,6 +103,8 @@ internal static class Texts
 
     /// <summary>A list on its own (a key chord, say) in the player's language, with tinted items in markup.</summary>
     internal static string Get(MessageList list) => MessageFormat.Format(list, Lookup, tint: Tint);
+    /// <summary>A list on its own as plain text, for a widget that shows tags as written (X23: a template's summary and details).</summary>
+    internal static string Plain(MessageList list) => MessageFormat.Format(list, Lookup);
     /// <summary>A list on its own in English, for log lines.</summary>
     internal static string English(MessageList list) => MessageFormat.Format(list, key => english.TryGetValue(key, out var text) ? text : null);
     /// <summary>A tooltip's heading and body in English, for Lab output.</summary>

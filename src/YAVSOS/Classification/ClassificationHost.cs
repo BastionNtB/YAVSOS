@@ -24,6 +24,8 @@ internal sealed class ClassificationHost : IDisposable
     internal long Revision => cache.Revision;
     /// <summary>The classification build failed (D087) and waits for its next retry (D144): the reason, else null.</summary>
     internal string? GaveUp => cache.State == ClassificationState.Failed ? cache.Diagnostic : null;
+    /// <summary>X62: seconds until the build tries again; negative when nothing is scheduled.</summary>
+    internal double RetryInSeconds => cache.RetryInSeconds;
     internal ClassificationHost(Action<string> info, Action<string> warning, PolicyLifecycle policy, Func<CatalogSnapshot?> getCatalog, ClassificationCache? cache = null,
         Func<ClassificationSourceSnapshot?>? getSources = null, bool requireSources = false)
     { this.requireSources = requireSources; this.info = info; this.warning = warning; this.policy = policy; this.getCatalog = getCatalog; this.getSources = getSources; this.cache = cache ?? new ClassificationCache(); }

@@ -164,6 +164,16 @@ public static class ContainerPolicyEnvelope
         { return new ContainerPolicyRead(ContainerPolicyReadState.Unsupported, payload); }
     }
 
+    /// <summary>
+    /// X32 (D154): the revision of a schema-1 envelope, read from the envelope alone (the rules text isn't parsed, so a
+    /// rule from another YAVSOS version reads too); false for anything else, "" included.
+    /// </summary>
+    public static bool TryRevision(string payload, out ulong revision)
+    {
+        if (payload == null) throw new ArgumentNullException(nameof(payload));
+        return TryShell(payload, out revision, out _);
+    }
+
     // The envelope alone (schema, revision, rules format and the rules XML text), without reading the rules.
     private static bool TryShell(string payload, out ulong revision, out string rulesXml)
     {

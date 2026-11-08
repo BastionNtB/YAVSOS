@@ -24,9 +24,15 @@ public sealed class CleanupChest
     public double Distance { get; }
     /// <summary>For another player's chest: whether a MultiUserChest request can reach its owner, as for stash (F3, D117).</summary>
     public OwnerMucState OwnerMuc { get; }
+    /// <summary>
+    /// X60 (D160): the container type's built-in filter, known in advance; null for a type that takes everything. The chest
+    /// accepts what its rule accepts and the filter takes (narrow only), so the plan never sends it an item it refuses.
+    /// </summary>
+    public ContainerFilter? Filter { get; }
     public CleanupChest(string id, string rulePayload, TransferInventorySnapshot inventory, bool locallyOwned, bool optOut = false,
-        double distance = 0, OwnerMucState ownerMuc = OwnerMucState.Usable)
+        double distance = 0, OwnerMucState ownerMuc = OwnerMucState.Usable, ContainerFilter? filter = null)
     {
+        Filter = filter;
         Id = TransferCanonical.Text(id, 256, false);
         RulePayload = rulePayload ?? throw new ArgumentNullException(nameof(rulePayload));
         Inventory = inventory ?? throw new ArgumentNullException(nameof(inventory));
@@ -58,16 +64,35 @@ public sealed class CleanupInput
     public Func<TransferStack, IReadOnlyList<FacetEvidence>>? InstanceFacets { get; }
     /// <summary>
     /// A2-01 part 2: Lab cost check. When set, <see cref="CleanupPlanner.Plan"/> reports once per run how long its parts
-    /// took in total (milliseconds): the instance-facets read, rule evaluation, ranking, AzuAutoStore's exclusions and
-    /// the whole plan. Null (the release build): nothing is timed.
+    /// took in total (milliseconds): the instance-facets read, rule evaluation, ranking, AzuAutoStore's exclusions, the
+    /// game's own check (<see cref="Takes"/>, F14) and the whole plan. Null (the release build): nothing is timed.
     /// </summary>
     public Action<string, double>? Timed { get; }
+    /// <summary>
+    /// F14 (D129): the game's own answer whether a destination chest, by id, takes one unit of a stack
+    /// (<c>Inventory.CanAddItem(item, 1)</c>); a mod's filter, such as a Storehouse store's, can say no. Asked only when the
+    /// chest's snapshot has room for one unit, and only for a chest that would otherwise receive. Null: not asked.
+    /// </summary>
+    public Func<string, TransferStack, bool>? Takes { get; }
+    internal ChestTakes TakesCheck { get; }
+    /// <summary>X71 (D159): why categories aren't ready, for the item tooltip's where-line. Ignored while they are ready.</summary>
+    public CategoryWaitState CategoriesWait { get; }
+    /// <summary>X67 (D156): the run's chest limit (the server's <c>MaximumChests</c>), at most <see cref="CleanupPlanner.MaximumChests"/>.</summary>
+    public int MaximumChests { get; }
+    /// <summary>X67 (D156): how many chests one run takes items out of (the server's <c>MaximumSources</c>), at most <see cref="CleanupPlanner.MaximumSources"/>.</summary>
+    public int MaximumSources { get; }
     public CleanupInput(ClassificationTaxonomy taxonomy, ICategoryAnswers answers, IEnumerable<CleanupChest> chests,
         Func<string, int>? categorySize = null, bool mucAvailable = false, Func<string, TransferItemIdentity, bool>? azuAllows = null,
         IEnumerable<Guid>? held = null, Func<TransferStack, IReadOnlyList<FacetEvidence>>? instanceFacets = null,
-        Action<string, double>? timed = null)
+        Action<string, double>? timed = null, Func<string, TransferStack, bool>? takes = null,
+        CategoryWaitState categoriesWait = CategoryWaitState.Loading,
+        int maximumChests = CleanupPlanner.MaximumChests, int maximumSources = CleanupPlanner.DefaultSources)
     {
-        InstanceFacets = instanceFacets; Timed = timed;
+        if (maximumChests < 1) throw new ArgumentOutOfRangeException(nameof(maximumChests));
+        if (maximumSources < 1) throw new ArgumentOutOfRangeException(nameof(maximumSources));
+        MaximumChests = Math.Min(maximumChests, CleanupPlanner.MaximumChests);
+        MaximumSources = Math.Min(maximumSources, CleanupPlanner.MaximumSources);
+        InstanceFacets = instanceFacets; Timed = timed; Takes = takes; TakesCheck = new ChestTakes(takes); CategoriesWait = categoriesWait;
         Taxonomy = taxonomy ?? throw new ArgumentNullException(nameof(taxonomy));
         Answers = answers ?? throw new ArgumentNullException(nameof(answers));
         Chests = Array.AsReadOnly((chests ?? throw new ArgumentNullException(nameof(chests))).ToArray());
@@ -139,7 +164,7 @@ public sealed class CleanupPlan
     public bool CategoriesPending { get; }
     public IReadOnlyList<CleanupMove> Moves { get; }
     public IReadOnlyList<CleanupRemainder> Remainders { get; }
-    /// <summary>Chests beyond <see cref="CleanupPlanner.MaximumChests"/> that were left out of this run.</summary>
+    /// <summary>Chests left out of this run: beyond the chest limit, or holding items beyond the source limit.</summary>
     public int SkippedChests { get; }
     internal CleanupPlan(string stamp, bool pending, IReadOnlyList<CleanupMove> moves, IReadOnlyList<CleanupRemainder> remainders, int skipped)
     { PolicyStamp = stamp; CategoriesPending = pending; Moves = moves; Remainders = remainders; SkippedChests = skipped; }
@@ -157,8 +182,12 @@ public sealed class CleanupPlan
 /// </summary>
 public static class CleanupPlanner
 {
-    public const int MaximumChests = 256;
-    public const int MaximumSources = 64;
+    /// <summary>X67 (D156, amending D095): the planner's own bound; the server's <c>MaximumChests</c> (default 256) can't exceed it.</summary>
+    public const int MaximumChests = 512;
+    /// <summary>X67 (D156): the planner's bound on sources; the server's <c>MaximumSources</c> can't exceed it.</summary>
+    public const int MaximumSources = 256;
+    /// <summary>The server's <c>MaximumSources</c> default: the fixed limit before X67.</summary>
+    public const int DefaultSources = 64;
     public const int MaximumMoves = 512;
 
     public static CleanupPlan Plan(CleanupInput input, ChestRuleEvaluator? evaluator = null)
@@ -174,14 +203,15 @@ public static class CleanupPlanner
     /// <summary>A2-01 part 2: one run's planning time by part, summed over every stack and destination.</summary>
     internal sealed class PlanClock
     {
-        internal long Facets, Evaluate, Rank, Azu;
+        internal long Facets, Evaluate, Rank, Azu, Takes, Sources;
         /// <summary>Adds the time since <paramref name="since"/> to <paramref name="bucket"/>; returns now.</summary>
         internal static long Lap(ref long bucket, long since) { var now = Stopwatch.GetTimestamp(); bucket += now - since; return now; }
         internal void Report(Action<string, double> timed, long total)
         {
             static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
             timed("facets", Ms(Facets)); timed("evaluate", Ms(Evaluate)); timed("rank", Ms(Rank)); timed("azu", Ms(Azu));
-            timed("other", Ms(total - Facets - Evaluate - Rank - Azu)); timed("total", Ms(total));
+            timed("takes", Ms(Takes)); timed("sources", Ms(Sources));
+            timed("other", Ms(total - Facets - Evaluate - Rank - Azu - Takes - Sources)); timed("total", Ms(total));
         }
     }
 
@@ -224,12 +254,14 @@ public static class CleanupPlanner
         if (!answers.CategoriesReady)
             return new CleanupPlan(stamp, true, moves.AsReadOnly(), remainders.AsReadOnly(), 0);
 
-        var ordered = Considered(input.Chests);
+        var ordered = Considered(input.Chests, input.MaximumChests);
         var skipped = input.Chests.Count - ordered.Count;
-        var allowed = Sources(ordered);
         // A later stack may top up a stack this run created, so one press settles (D070).
         var grids = ordered.ToDictionary(x => x.Id, x => new TransferGrid(x.Inventory, mergePlanned: true), StringComparer.Ordinal);
         var ruled = Receivers(ordered, evaluator, taxonomy);
+        var picked = clock == null ? 0 : Stopwatch.GetTimestamp();
+        var allowed = Sources(ordered, input, evaluator, ruled);
+        if (clock != null) PlanClock.Lap(ref clock.Sources, picked);
         var mucUsed = new HashSet<string>(StringComparer.Ordinal);
         foreach (var source in ordered)
         {
@@ -363,20 +395,74 @@ public static class CleanupPlanner
 
     /// <summary>
     /// Why one stack would move and where to, in plan order: every other ruled chest that ranks it, with the gate that
-    /// keeps it out (not better than the current placement, rule mismatch, Azu exclusion, ownership) or its route.
+    /// keeps it out (not better than the current placement, rule mismatch, Azu exclusion, ownership, the chest's own
+    /// refusal) or its route.
     /// </summary>
     /// <summary>
-    /// D086 D9: the nearest <see cref="MaximumChests"/> chests (then by ID), in ID order for a deterministic plan. Chests
+    /// D086 D9: the nearest <paramref name="limit"/> chests (then by ID), in ID order for a deterministic plan. Chests
     /// beyond them are not considered; the runner reports how many were in range.
     /// </summary>
-    internal static List<CleanupChest> Considered(IEnumerable<CleanupChest> chests) =>
-        chests.OrderBy(x => x.Distance).ThenBy(x => x.Id, StringComparer.Ordinal).Take(MaximumChests)
+    internal static List<CleanupChest> Considered(IEnumerable<CleanupChest> chests, int limit = MaximumChests) =>
+        chests.OrderBy(x => x.Distance).ThenBy(x => x.Id, StringComparer.Ordinal).Take(Math.Min(limit, MaximumChests))
             .OrderBy(x => x.Id, StringComparer.Ordinal).ToList();
 
-    /// <summary>D086 D9: the nearest <see cref="MaximumSources"/> chests that hold items and aren't opted out give up items.</summary>
-    internal static HashSet<string> Sources(IEnumerable<CleanupChest> considered) =>
-        new(considered.Where(x => !x.OptOut && x.Inventory.Stacks.Count != 0).OrderBy(x => x.Distance).ThenBy(x => x.Id, StringComparer.Ordinal)
-            .Take(MaximumSources).Select(x => x.Id), StringComparer.Ordinal);
+    /// <summary>
+    /// The chests that give up items this run: at most <see cref="CleanupInput.MaximumSources"/> of the considered chests
+    /// that hold items and aren't opted out. When they all fit, all of them, as before X67. Otherwise (X67, D156, work
+    /// first) the chests with work that is cheap to find come first, nearest first: a stack its own rule rejects, or a
+    /// stack in a container without a rule, that some chest's rule accepts. The check is the rule check, cached per
+    /// item, not the ranking. The slots left go to the nearest other chests, whose only work is re-sorts (which need the
+    /// ranking). Each press moves the misplaced items out, those chests drop off the list, and the next press reaches
+    /// further. A chest whose accepting chests are all full keeps its place; the report says "no room".
+    /// </summary>
+    internal static HashSet<string> Sources(IEnumerable<CleanupChest> considered, CleanupInput input, ChestRuleEvaluator evaluator,
+        List<(CleanupChest Chest, DestinationCandidate Candidate)> ruled)
+    {
+        var holders = considered.Where(x => !x.OptOut && x.Inventory.Stacks.Count != 0).OrderBy(x => x.Distance).ThenBy(x => x.Id, StringComparer.Ordinal).ToList();
+        var limit = input.MaximumSources;
+        if (holders.Count <= limit) return new HashSet<string>(holders.Select(x => x.Id), StringComparer.Ordinal);
+        var taxonomy = input.Taxonomy; var answers = input.Answers;
+        // Per item: does some ruled chest's rule (narrowed by its filter) accept it? Instance filters see Unknown here, so
+        // this only orders the pick; the plan itself decides every stack exactly.
+        var wanted = new Dictionary<string, bool>(StringComparer.Ordinal);
+        bool Wanted(string prefab)
+        {
+            if (wanted.TryGetValue(prefab, out var known)) return known;
+            known = false;
+            foreach (var (chest, _) in ruled)
+                if (ContainerFilter.Narrow(evaluator.Evaluate(chest.RulePayload, prefab, taxonomy, answers), chest.Filter, prefab) == ChestRuleDecision.Accept)
+                { known = true; break; }
+            wanted.Add(prefab, known);
+            return known;
+        }
+        bool Work(CleanupChest chest)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var stack in chest.Inventory.Stacks)
+            {
+                var prefab = stack.Identity.Prefab;
+                if (!seen.Add(prefab)) continue;
+                var decision = ContainerFilter.Narrow(evaluator.Evaluate(chest.RulePayload, prefab, taxonomy, answers), chest.Filter, prefab);
+                if (decision is ChestRuleDecision.Reject or ChestRuleDecision.NoRule && Wanted(prefab)) return true;
+            }
+            return false;
+        }
+        var chosen = new HashSet<string>(StringComparer.Ordinal);
+        var rest = new List<CleanupChest>();
+        foreach (var chest in holders)
+        {
+            if (chosen.Count == limit) break;
+            if (Work(chest)) chosen.Add(chest.Id); else rest.Add(chest);
+        }
+        // The scan stops once the slots are full of work chests; otherwise every holder was looked at and the nearest of the
+        // others fill the slots left.
+        foreach (var chest in rest)
+        {
+            if (chosen.Count == limit) break;
+            chosen.Add(chest.Id);
+        }
+        return chosen;
+    }
 
     internal static Assessment Assess(CleanupInput input, ChestRuleEvaluator evaluator,
         List<(CleanupChest Chest, DestinationCandidate Candidate)> ruled, CleanupChest source, TransferStack stack, PlanClock? clock = null,
@@ -386,7 +472,8 @@ public static class CleanupPlanner
         var t = clock == null ? 0 : Stopwatch.GetTimestamp();
         var facets = input.InstanceFacets?.Invoke(stack);
         if (clock != null) t = PlanClock.Lap(ref clock.Facets, t);
-        var result = new Assessment { Decision = evaluator.Evaluate(source.RulePayload, prefab, taxonomy, answers, facets) };
+        // X60 (D160): narrow only; what the chest's own filter refuses is rejected whatever its rule says.
+        var result = new Assessment { Decision = ContainerFilter.Narrow(evaluator.Evaluate(source.RulePayload, prefab, taxonomy, answers, facets), source.Filter, prefab) };
         if (clock != null) PlanClock.Lap(ref clock.Evaluate, t);
         result.Kind = result.Decision switch
         {
@@ -460,17 +547,30 @@ public static class CleanupPlanner
             var accepts = evaluator.Evaluate(chest.RulePayload, prefab, taxonomy, answers, facets) == ChestRuleDecision.Accept;
             if (clock != null) since = PlanClock.Lap(ref clock.Evaluate, since);
             if (!accepts) { result.Destinations.Add(Gate(CleanupGate.RuleMismatch)); return; }
+            // X60 (D160): known in advance, so a full store that refuses the item is no destination either (#76 Q1).
+            if (ContainerFilter.Refuses(chest.Filter, prefab)) { result.Destinations.Add(Gate(CleanupGate.Refused)); return; }
             var azuAllows = input.AzuAllows == null || input.AzuAllows(chest.Id, stack.Identity);
             if (clock != null && input.AzuAllows != null) PlanClock.Lap(ref clock.Azu, since);
             if (!azuAllows) { result.Destinations.Add(Gate(CleanupGate.Blocked, RunReason.AzuExcluded)); return; }
-            if (source.LocallyOwned && chest.LocallyOwned) result.Destinations.Add(Gate(CleanupGate.Usable));
+            if (source.LocallyOwned && chest.LocallyOwned) Usable(MoveRoute.Direct);
             else if (!source.LocallyOwned && !chest.LocallyOwned) result.Destinations.Add(Gate(CleanupGate.Blocked, RunReason.BothRemote));
             else if (!input.MucAvailable) result.Destinations.Add(Gate(CleanupGate.Blocked, RunReason.OtherOwnerNoMuc));
             // Known at plan time, as in stash, so the plan and the explanation skip a chest the write would skip (B4.33 §3).
             else if ((source.LocallyOwned ? chest : source).OwnerMuc.Skip() is { } skip) result.Destinations.Add(Gate(CleanupGate.Blocked, skip));
-            else result.Destinations.Add(Gate(CleanupGate.Usable, via: source.LocallyOwned ? MoveRoute.MucAdd : MoveRoute.MucRemove));
+            else Usable(source.LocallyOwned ? MoveRoute.MucAdd : MoveRoute.MucRemove);
+
+            // F14: last, so the game is asked only about a chest that would receive. A chest that refuses drops out like a
+            // rule mismatch, and the stack goes to the next ranked chest or stays.
+            void Usable(MoveRoute via)
+            {
+                var asked = clock == null ? 0 : Stopwatch.GetTimestamp();
+                var refused = input.TakesCheck.Refuses(chest.Id, chest.Inventory, stack);
+                if (clock != null && input.Takes != null) PlanClock.Lap(ref clock.Takes, asked);
+                result.Destinations.Add(refused ? Gate(CleanupGate.Refused) : Gate(CleanupGate.Usable, via: via));
+            }
         }
     }
 }
 
-internal enum CleanupGate { Usable, NotBetter, RuleMismatch, Blocked }
+/// <summary>Refused: the chest itself refuses the item although it has room (F14, <see cref="CleanupInput.Takes"/>).</summary>
+internal enum CleanupGate { Usable, NotBetter, RuleMismatch, Blocked, Refused }

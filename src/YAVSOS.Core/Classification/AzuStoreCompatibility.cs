@@ -210,9 +210,9 @@ public static class AzuStoreCompatibility
 }
 
 /// <summary>
-/// D047: a RossItemDrawers drawer assigned to an item wants that item even while empty. Exact ordinal prefab
-/// identity, as Ross stores it. Removal condition: Azu treats Ross reservations as wanting their item, or Ross
-/// exposes a reservation that passes Azu's existing-item check.
+/// D047, workaround for AzuAutoStore and RossItemDrawers: a drawer assigned to an item wants it even while empty.
+/// Exact ordinal prefab identity, as Ross stores it. Removal condition: Azu treats Ross reservations as wanting their
+/// item, or Ross exposes a reservation that passes Azu's existing-item check.
 /// </summary>
 public static class ReservedDrawer
 {

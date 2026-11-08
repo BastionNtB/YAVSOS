@@ -30,6 +30,18 @@ public sealed class RuleCopy
         Priority = state.Priority; Label = label;
     }
 
+    /// <summary>
+    /// X23 (D157): a template's rule, so Apply saves exactly as Paste does. Its categories go in <see cref="Categories"/>;
+    /// <see cref="RuleEditState.Paste"/> keeps the ones this category set lacks as unknown (D050).
+    /// </summary>
+    internal RuleCopy(Templates.RuleTemplate template)
+    {
+        Categories = template.Categories.ToArray(); Unknown = Array.Empty<string>();
+        Includes = template.Includes.ToArray(); Excludes = template.Excludes.ToArray();
+        Filters = template.Filters.ToDictionary(x => x.Key, x => (IReadOnlyList<string>)x.Value.ToArray(), StringComparer.Ordinal);
+        Priority = template.Priority; Label = "";
+    }
+
     /// <summary>Whether Copy has something to take: a stored rule with a part the editor shows.</summary>
     public static bool CanCopy(RuleEditState state) =>
         state != null && state.Stored && state.Categories.Count + state.Unknown.Count + state.Includes.Count + state.Excludes.Count + state.Filters.Count != 0;

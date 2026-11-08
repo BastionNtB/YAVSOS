@@ -14,6 +14,8 @@ public sealed class AssignmentEnvelopeReceiver
     public string Diagnostic { get; private set; } = "Authoritative assignment delivery pending.";
     /// <summary>The last envelope was malformed and withdrew the categories (B4.8); the host logs <see cref="Diagnostic"/>.</summary>
     public bool Rejected { get; private set; }
+    /// <summary>X62: the server session this receiver bound to with its first valid envelope; null before one.</summary>
+    public string? Session => session;
     public void Reset() { session = null; sequence = 0; Payload = ""; Rejected = false; Diagnostic = "Authoritative assignment delivery pending."; }
     public bool Receive(string envelope)
     {

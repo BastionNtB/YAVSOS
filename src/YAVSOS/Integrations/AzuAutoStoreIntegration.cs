@@ -272,9 +272,10 @@ internal static class AzuAutoStoreIntegration
     private static ChestRuleDecision DecideUnguarded(Container? chest, ItemDrop.ItemData? item)
     {
         if (!chest || item == null) return ChestRuleDecision.NoRule;
-        var payload = ChestRuleStore.Payload(chest!);
-        if (payload.Length == 0) return ChestRuleDecision.NoRule;
         var plugin = Plugin.Instance;
+        // X60: a store's automatic rule counts as its rule here too, and its type's filter narrows it (D155, D160).
+        var (payload, filter) = plugin != null ? plugin.RuleOf(chest!) : (ChestRuleStore.Payload(chest!), (ContainerFilter?)null);
+        if (payload.Length == 0) return ChestRuleDecision.NoRule;
         var prefab = item.m_dropPrefab ? item.m_dropPrefab.name : null;
         if (plugin == null || prefab == null) return ChestRuleDecision.RejectUnreadable;
 #if YAVSOS_LAB
@@ -283,7 +284,8 @@ internal static class AzuAutoStoreIntegration
         var answers = plugin.CategoryAnswers ?? NoAnswers.Instance;
 #endif
         // P6-07b: the item's own rarity and condition, read only when this chest's rule has an instance filter.
-        return plugin.RuleEvaluator.Evaluate(payload, prefab, plugin.RuleTaxonomy, answers, plugin.InstanceFacetsFor(payload, prefab, item, answers));
+        return ContainerFilter.Narrow(plugin.RuleEvaluator.Evaluate(payload, prefab, plugin.RuleTaxonomy, answers, plugin.InstanceFacetsFor(payload, prefab, item, answers)),
+            filter, prefab);
     }
 
     private static void Warm()
@@ -313,7 +315,7 @@ internal static class AzuAutoStoreIntegration
         // D048: one short, rate-limited notice rather than one per item.
         if (Time.unscaledTime - lastPendingNotice < 30f || !Player.m_localPlayer) return;
         lastPendingNotice = Time.unscaledTime;
-        GameText.Say(Message.Of("yavsos_azu_categories_pending"));
+        GameText.Say(YAVSOS.Core.Interface.CategoryWait.AzuPending(Plugin.Instance?.CategoriesWait ?? CategoryWaitState.Loading)); // X62, X71
     }
 
     // ---- patches ----

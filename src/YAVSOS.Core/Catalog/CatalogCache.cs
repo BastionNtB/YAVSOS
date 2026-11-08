@@ -29,6 +29,8 @@ public sealed class CatalogCache : IDisposable
     private readonly StageRetry retry;
     /// <summary>Failed attempts since the inputs last changed; the last one is in <see cref="Diagnostic"/>.</summary>
     public int Retries => retry.Attempts;
+    /// <summary>X62: seconds until the next retry; negative when none is scheduled.</summary>
+    public double RetryInSeconds => retry.SecondsUntil(clock());
     /// <summary>The quick retries for the current inputs failed (shown, D087). A slow retry is due later (D144).</summary>
     public bool GaveUp => State == CatalogState.Failed;
     private int bytes, items, recipes;

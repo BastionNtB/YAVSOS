@@ -25,7 +25,7 @@ public sealed class SettingTextTests
     public void EverySettingDescription_UsesTheKeyDerivedFromItsSectionAndName()
     {
         var found = Setting.Matches(Source).Cast<Match>().ToList();
-        Assert.Equal(27, found.Count);
+        Assert.Equal(36, found.Count); // X58 added ButtonPlace, ButtonOffsetX and ButtonOffsetY; #62 SectionsPerCategory; X68 the hidden Internal.SettingMoves; X67 MaximumSources, X60 the two Storehouse settings; X66 ShowThroughWalls.
         Assert.All(found, match => Assert.Equal(("yavsos_setting_" + match.Groups[1].Value + "_" + match.Groups[2].Value).ToLowerInvariant(), match.Groups[3].Value));
     }
 

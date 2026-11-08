@@ -49,6 +49,8 @@ public sealed class LoadedSourceCache : IDisposable
     }
     /// <summary>Failed attempts since the inputs last changed; the last one is in <see cref="Diagnostic"/>.</summary>
     public int Retries => retry.Attempts;
+    /// <summary>X62: seconds until the next retry; negative when none is scheduled.</summary>
+    public double RetryInSeconds => retry.SecondsUntil(clock());
     public LoadedSourceCache(LoadedSourceLimits? limits = null,
         Func<CatalogSnapshot, IReadOnlyList<LoadedSourceFact>, CancellationToken, Task<LoadedSourceReceipt>>? build = null,
         Func<double>? milliseconds = null, int retries = 0, double retrySeconds = 3)

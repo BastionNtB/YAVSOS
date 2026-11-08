@@ -19,14 +19,16 @@ public sealed class StoreOrder
     private readonly Func<string, int>? categorySize;
     private readonly ChestRuleEvaluator evaluator;
     private readonly List<(DestinationCandidate Candidate, string Payload)> ruled = new();
+    private readonly Func<string, ContainerFilter?>? filters;
 
     /// <param name="chests">Chest id and stored rule payload; chests without a configured, readable rule are left out.</param>
+    /// <param name="filters">X60 (D160): each chest's type filter by id (null: none); a chest never takes what its filter refuses.</param>
     public StoreOrder(ClassificationTaxonomy taxonomy, ICategoryAnswers answers, IEnumerable<KeyValuePair<string, string>> chests,
-        Func<string, int>? categorySize = null, ChestRuleEvaluator? evaluator = null)
+        Func<string, int>? categorySize = null, ChestRuleEvaluator? evaluator = null, Func<string, ContainerFilter?>? filters = null)
     {
         this.taxonomy = taxonomy ?? throw new ArgumentNullException(nameof(taxonomy));
         this.answers = answers ?? throw new ArgumentNullException(nameof(answers));
-        this.categorySize = categorySize; this.evaluator = evaluator ?? new ChestRuleEvaluator();
+        this.categorySize = categorySize; this.evaluator = evaluator ?? new ChestRuleEvaluator(); this.filters = filters;
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var chest in ClassificationValidation.Bounded(chests ?? throw new ArgumentNullException(nameof(chests)), DestinationRouting.MaximumCandidates))
         {
@@ -47,6 +49,7 @@ public sealed class StoreOrder
         if (item == null) return Array.Empty<string>();
         var payloads = ruled.ToDictionary(x => x.Candidate, x => x.Payload);
         return Accepting(item, prefab, ruled.Select(x => x.Candidate), x => payloads[x], facets, taxonomy, answers, categorySize, evaluator)
+            .Where(x => filters == null || !ContainerFilter.Refuses(filters(x.Candidate.Id), prefab))
             .Select(x => x.Candidate.Id).ToArray();
     }
 

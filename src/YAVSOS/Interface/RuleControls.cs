@@ -28,7 +28,7 @@ internal enum RulePanelMode { Ineligible, Unreadable, ReadOnly, Edit }
 /// This class holds the rule being edited and applies changes; <see cref="RulePanel"/> draws it with Jotunn widgets.
 /// Unity game thread only.
 /// </summary>
-internal sealed class RuleControls
+internal sealed partial class RuleControls
 {
     private static readonly AccessTools.FieldRef<InventoryGui, Container>? CurrentContainer = Field();
     private readonly ConfigEntry<bool> enabled;
@@ -39,6 +39,15 @@ internal sealed class RuleControls
     private readonly ManualLogSource log;
     internal Container? Chest { get; private set; }
     internal string Observed { get; private set; } = "";
+    /// <summary>
+    /// X60 (D155): the rule the chest acts by, which the panel shows: <see cref="Observed"/>, or for a filtering store with
+    /// no YAVSOS rule its automatic rule. Edits compare against <see cref="Observed"/>, so the first one saves a normal rule.
+    /// </summary>
+    internal string ShownPayload { get; private set; } = "";
+    /// <summary>X60: the panel shows the store's automatic rule; nothing is saved on the chest yet.</summary>
+    internal bool Automatic { get; private set; }
+    /// <summary>X60 (D160): the open container's type filter; the panel greys out what it can't hold. Null: none.</summary>
+    internal ContainerFilter? Filter { get; private set; }
     /// <summary>S1 (audit D01): the rule as edited; the members below show it to the panel's sections.</summary>
     private readonly RuleEditState edit = new RuleEditState();
     internal SortedSet<string> Categories => edit.Categories;
@@ -129,14 +138,17 @@ internal sealed class RuleControls
             catch (Exception error) when (OptionalFailure.Recoverable(error)) { SearchFailed(error); }
         var shown = plugin != null && CurrentContainer != null && gui && InventoryGui.IsVisible() ? CurrentContainer(gui) : null;
         if (shown) Notice();
-        var open = enabled.Value && styled ? shown : null;
+        // X58 (D148): ShowRuleControls hides only the panel; the chest is still read, for the YAVSOS button below the chest
+        // window and for the tooltips' where-line.
+        var open = styled ? shown : null;
         if (!open)
         {
             var closed = Chest != null; Chest = null; pending = null; panel?.Hide();
             // P8-18 (D100): what the chest's search lit stays lit for the player's setting, then goes.
             if (closed) Highlight.Release(plugin != null ? plugin.Settings.HighlightSecondsAfterClose.Value : 0);
-            // D086 D12 (M23): with only the inventory open, a stack's tooltip still says where the stash key would send it.
-            if (closed || explainOff || !enabled.Value || !styled || plugin == null || !gui || !InventoryGui.IsVisible()) Forget();
+            // D086 D12 (M23): with only the inventory open, a stack's tooltip still says where the stash key would send it,
+            // with the panel shown or hidden (X58, D148).
+            if (closed || explainOff || !styled || plugin == null || !gui || !InventoryGui.IsVisible()) Forget();
             else
                 try
                 {
@@ -152,15 +164,21 @@ internal sealed class RuleControls
                 }
             return;
         }
-        var action = pending; pending = null; action?.Invoke();
+        Subscribe();
+        var action = pending; pending = null;
+        // X32 (D154): while a change to this chest waits for the owner's game, its controls take no clicks.
+        if (!ReferenceEquals(open, Chest) || !Blocked()) action?.Invoke();
         if (!ReferenceEquals(open, Chest)) Load(open!);
-        else if (!StringComparer.Ordinal.Equals(ChestRuleStore.Payload(Chest!), Observed))
-            Load(Chest!); // Someone else's change, or ours confirmed: show the stored rule.
+        else if (!StringComparer.Ordinal.Equals(ChestRuleStore.Payload(Chest!), Observed) || !StringComparer.Ordinal.Equals(plugin!.RuleOf(Chest!).Payload, ShownPayload))
+            Load(Chest!); // Someone else's change, or ours confirmed: show the stored rule. X60: or the automatic rule changed.
         else if (!ReferenceEquals(loadedTaxonomy, plugin!.RuleTaxonomy)) Load(Chest!);
         // Tombstones, drawers, creature packs and the like take no rule: no panel at all (runtime 2026-10-21).
         if (!eligible) { panel?.Hide(); return; }
         if (!Styled(gui!)) return;
-        if (UndoKey()) Undo(); // X26 (D130): queued like a click, so it runs at the next frame's start.
+        // X58 (D148): while the panel is hidden, undo and the chest search are off (their controls are on the panel); the
+        // where-line, the stash and cleanup keys and the result panel keep working.
+        var hidden = !enabled.Value;
+        if (!hidden && UndoKey()) Undo(); // X26 (D130): queued like a click, so it runs at the next frame's start.
         if (!explainOff)
             try
             {
@@ -174,7 +192,7 @@ internal sealed class RuleControls
                 explainOff = true; Forget(); DisplayFaults.Add(DisplayFaults.Where);
                 log.LogWarning($"Item explanations turned off after {error.GetType().Name}: {error.Message}; the rule panel keeps working.");
             }
-        if (!searchOff)
+        if (!searchOff && !hidden)
             try
             {
 #if YAVSOS_LAB
@@ -188,10 +206,18 @@ internal sealed class RuleControls
 #if YAVSOS_LAB
             FaultLab.Raise("panel"); // D088: lab-only drawing fault (SF1).
 #endif
-            panel!.Show();
+            if (hidden) panel!.HidePanel(); else panel!.Show();
+            var settings = plugin!.Settings;
+            panel.ShowToggle(!hidden, settings.ToggleButtonPlace.Value, settings.ToggleButtonOffsetX.Value, settings.ToggleButtonOffsetY.Value);
         }
         catch (Exception error) when (OptionalFailure.Recoverable(error)) { TurnOff("drawing failed: " + error.GetType().Name + ": " + error.Message + Where(error)); }
     }
+
+    /// <summary>X58 (D148): the panel shows on chests (the ShowRuleControls setting, which the YAVSOS button writes).</summary>
+    internal bool PanelShown => enabled.Value;
+
+    /// <summary>X58 (D148): a click on the YAVSOS button flips the setting, so every chest opens the same way, across sessions.</summary>
+    internal void TogglePanel() => enabled.Value = !enabled.Value;
 
     // SF1, SF2 (D087): with the panel off, or no chest readable, the status marks can't show either, so the first chest
     // opened says so once per session; the log has the cause.
@@ -320,20 +346,30 @@ internal sealed class RuleControls
             opened++; // P8-18: a newly opened chest decides the highlight afresh.
         }
         Chest = container; Observed = ChestRuleStore.Payload(container); Unreadable = false;
+        var plugin = Plugin.Instance!;
+        (ShownPayload, Filter) = plugin.RuleOf(container); Automatic = false;
         eligible = ChestRuleStore.Eligibility(container) == RuleEligibility.Eligible;
-        loadedTaxonomy = Plugin.Instance!.RuleTaxonomy; Revision++; ruleRevision++;
+        loadedTaxonomy = plugin.RuleTaxonomy; Revision++; ruleRevision++;
         // D071: one tab is always open; a chest with a rule opens on its items, one without on the categories to pick.
-        if (fresh) { PickingItems = Readable(container); PickingCategories = !PickingItems; PickingFilters = false; }
+        if (fresh) { PickingItems = Readable(container); PickingCategories = !PickingItems; PickingFilters = PickingTemplates = false; TemplateChestChanged(); }
         edit.Clear();
         var read = Plugin.Instance!.ChestRules.Read(container).Policy;
         if (read == null) return;
         if (read.State == ContainerPolicyReadState.Unsupported) { Unreadable = true; return; }
-        if (!read.HasRule) return;
+        if (!read.HasRule)
+        {
+            // X60 (D155): a store without a YAVSOS rule shows the rule it acts by; the first edit saves it as its own.
+            if (!StringComparer.Ordinal.Equals(ShownPayload, Observed) && plugin.RuleEvaluator.Read(ShownPayload, plugin.RuleTaxonomy).Rules is { State: ChestRuleState.Configured } automatic)
+            { edit.Load(automatic); Automatic = true; }
+            return;
+        }
         // P6-07b: the editor shows one alternative with its filters and saves the filter set it replaces.
         edit.Load(read.Rules!);
     }
 
-    private static bool Readable(Container container) => Plugin.Instance!.ChestRules.Read(container).Policy is { HasRule: true };
+    private static bool Readable(Container container) =>
+        Plugin.Instance!.ChestRules.Read(container).Policy is { HasRule: true } ||
+        !StringComparer.Ordinal.Equals(Plugin.Instance.RuleOf(container).Payload, ChestRuleStore.Payload(container)); // X60: an automatic rule.
 
     internal RulePanelMode Mode
     {
@@ -341,7 +377,8 @@ internal sealed class RuleControls
         {
             if (ChestRuleStore.Eligibility(Chest) != RuleEligibility.Eligible) return RulePanelMode.Ineligible;
             if (Unreadable) return RulePanelMode.Unreadable;
-            return Owner() ? RulePanelMode.Edit : RulePanelMode.ReadOnly;
+            // X32 (D154): a chest another game owns is edited through that game, when this world has the channel.
+            return Owner() || Plugin.Instance?.ChestRules.RemoteAvailable == true ? RulePanelMode.Edit : RulePanelMode.ReadOnly;
         }
     }
 
@@ -349,9 +386,9 @@ internal sealed class RuleControls
 
     // ---- Actions; each runs from the queue on the next LateUpdate.
     // D071: the tabs choose which one is open; clicking the open tab keeps it open.
-    internal void ShowCategories() => Queue(() => { PickingCategories = true; PickingItems = PickingFilters = false; Revision++; });
-    internal void ShowItems() => Queue(() => { PickingItems = true; PickingCategories = PickingFilters = false; Revision++; });
-    internal void ShowFilters() => Queue(() => { PickingFilters = true; PickingCategories = PickingItems = false; Revision++; });
+    internal void ShowCategories() => Queue(() => { PickingCategories = true; PickingItems = PickingFilters = PickingTemplates = false; Revision++; });
+    internal void ShowItems() => Queue(() => { PickingItems = true; PickingCategories = PickingFilters = PickingTemplates = false; Revision++; });
+    internal void ShowFilters() => Queue(() => { PickingFilters = true; PickingCategories = PickingItems = PickingTemplates = false; Revision++; });
     internal void ToggleFilter(string dimension, string value) => Apply(() => edit.ToggleFilter(dimension, value));
     internal void ClearRule() => Queue(() => Save(null, PanelControl.Clear));
 
@@ -423,8 +460,8 @@ internal sealed class RuleControls
         var target = Chest!; var value = !ChestRuleStore.CleanupOptOut(target);
         Queue(() =>
         {
-            var result = Plugin.Instance!.ChestRules.TrySetCleanupOptOut(target, value);
-            if (!result.Succeeded) Messages.Say(PanelControl.OptOut, result.Message);
+            var result = Plugin.Instance!.ChestRules.TrySetCleanupOptOut(target, value, (int)PanelControl.OptOut);
+            if (!result.Succeeded && !result.Sent) Messages.Say(PanelControl.OptOut, result.Message);
             Revision++; ruleRevision++;
         });
     }
@@ -447,14 +484,53 @@ internal sealed class RuleControls
 
     // D101: a saved edit says nothing (the chips and ticks change at the click); a refusal stays in the strip until the
     // next action, its control outlined (D132). X26: every saved change becomes this chest's undo record.
-    private void Save(ChestRuleEdit? edit, PanelControl control)
+    private bool Save(ChestRuleEdit? edit, PanelControl control)
     {
         var before = Observed;
-        var result = Plugin.Instance!.ChestRules.TryEdit(Chest!, before, edit);
+        var result = Plugin.Instance!.ChestRules.TryEdit(Chest!, before, edit, (int)control);
+        // X32: sent to the owner's game. The panel keeps showing the change until it is saved (Load then shows the stored
+        // rule) or refused (Remote reloads); the undo record is made once it is saved.
+        if (result.Sent) { Revision++; return true; }
         Load(Chest!);
         if (result.Succeeded && ChestKey() is { } key) history.Changed(key, before, Observed);
         if (!result.Succeeded) Messages.Say(control, result.Message);
+        return result.Succeeded;
     }
+
+    /// <summary>
+    /// X59 (D149): a section button of the Items tab, for the icons the section showed at the click. One rule edit, so
+    /// undo puts the whole section back; the strip names how many icons changed, or that none needed it (nothing saved).
+    /// </summary>
+    internal void MarkSection(IReadOnlyList<GridEntry> section, GridButton button) => Queue(() =>
+    {
+        // D158: the button is greyed out above the limit; a click that still arrives (the section changed) says why.
+        var toMark = ItemGrid.ToMark(section, button);
+        if (!ItemGrid.Usable(button, toMark))
+        {
+            Messages.Say(PanelControl.Edit, Message.Of("yavsos_grid_never_all_limit").With("never", ItemGrid.Never)
+                .With("limit", (long)ItemGrid.MaximumNeverAll).Count(toMark), MessageKind.Summary);
+            return;
+        }
+        var changed = ItemGrid.MarkSection(section, button, Includes, Excludes);
+        // B4.41: a change sent to the owner's game isn't saved yet: the strip shows "saving", not the count.
+        if (changed == 0 || Save(edit.Edit(), PanelControl.Edit) && !Blocked())
+            Messages.Say(PanelControl.Edit, ItemGrid.ButtonDone(button, changed), MessageKind.Summary);
+    });
+
+    /// <summary>X59: a section button's tooltip, with the count the section shows now.</summary>
+    internal (string Topic, string Text)? SectionTip(IReadOnlyList<GridEntry> section, GridButton button) =>
+        Texts.Get(ItemGrid.ButtonTip(button, section.Count, gridQuery.Trim().Length != 0, ItemGrid.ToMark(section, button)));
+
+    /// <summary>
+    /// #62 (D158): the Items tab shows one section per ticked category (the default, D149) or one "Accepted by this rule"
+    /// section. Remembered for every chest on this PC, like the fold; not synced.
+    /// </summary>
+    internal bool SectionsPerCategory => Plugin.Instance?.Settings.SectionsPerCategory.Value != false;
+    internal void ToggleSectionView() => Queue(() =>
+    {
+        if (Plugin.Instance?.Settings is { } settings) settings.SectionsPerCategory.Value = !settings.SectionsPerCategory.Value;
+        Revision++;
+    });
 
     // ---- X26 (P10-07, D130): undo the last rule change on this chest, then redo it. Local to this game, per chest, until
     // the world ends. The write is the owner's compare-and-set: refused when the rule changed since (A2-09: the stored
@@ -476,7 +552,8 @@ internal sealed class RuleControls
     internal void Undo() => Queue(() =>
     {
         if (Chest == null || ChestKey() is not { } key || history.For(key) is not { } record) return;
-        var result = Plugin.Instance!.ChestRules.TryRestore(Chest, record.After, record.Before, record.Redo);
+        var result = Plugin.Instance!.ChestRules.TryRestore(Chest, record.After, record.Before, record.Redo, (int)PanelControl.Undo);
+        if (result.Sent) { Revision++; return; } // X32: the record changes once the owner's game saved it (Remote).
         Load(Chest);
         if (result.Succeeded) { history.Restored(key, Observed); Revision++; return; }
         // The rule changed since: this record can't be undone any more (the wireframe drops it).
@@ -500,9 +577,42 @@ internal sealed class RuleControls
 
     private void LeftWorld()
     {
-        Copied = null;
+        Copied = null; TemplatesLeftWorld();
         if (history.Count != 0) history.Clear();
         if (dismissed.Count != 0) dismissed.Clear();
+    }
+
+    // ---- X32 (D154): changes saved by the game that owns the chest.
+    private bool subscribed;
+    private void Subscribe()
+    {
+        if (subscribed || Plugin.Instance?.RuleWrites is not { } writes) return;
+        writes.Settled += Remote; subscribed = true;
+        if (Plugin.Instance.Templates is { } templates) templates.Answered += TemplateAnswered;
+    }
+
+    /// <summary>A change to the open chest waits for the owner's game's answer: its controls take no clicks.</summary>
+    internal bool Blocked() => ChestKey() is { } key && Plugin.Instance?.RuleWrites is { } writes && writes.Blocking(key);
+
+    private StripBanner SavingBanner() =>
+        Chest != null && ChestRuleStore.View(Chest)?.GetZDO() is { } zdo && Networking.RuleWriteChannel.ServerOwns(zdo) ? StripBanner.SavingOnServer : StripBanner.Saving;
+
+    // The outcome of a change another game saved, or refused. The undo record follows what was saved, whether or not the
+    // chest is still open; the strip says the rest only on that chest (RuleWriteEffect decides both).
+    private void Remote(RuleWriteSettled<ZDOID> settled)
+    {
+        var write = settled.Write;
+        var effect = RuleWriteEffect.Of(settled);
+        if (effect.Record)
+        {
+            if (write.Kind == RuleWriteKind.Edit) history.Changed(write.Chest, write.Before, write.Value);
+            else history.Restored(write.Chest, write.Value);
+        }
+        if (effect.DropRecord) history.Drop(write.Chest);
+        if (ChestKey() is not { } key || key != write.Chest) return;
+        if (effect.ClearMessage) Messages.Action();
+        Load(Chest!); Revision++; ruleRevision++;
+        if (effect.MessageKey != null) Messages.Say((PanelControl)write.Control, Message.Of(effect.MessageKey));
     }
 
     // ---- P10-25 (D132, variant B): the strip under the header.
@@ -510,7 +620,8 @@ internal sealed class RuleControls
     internal StripLine Strip(RulePanelMode mode)
     {
         var label = Label();
-        return PanelStrip.Of(Messages, mode switch { RulePanelMode.ReadOnly => StripBanner.InUse, RulePanelMode.Unreadable => StripBanner.Unreadable, _ => StripBanner.None },
+        var banner = Blocked() ? SavingBanner() : mode switch { RulePanelMode.ReadOnly => StripBanner.InUse, RulePanelMode.Unreadable => StripBanner.Unreadable, _ => StripBanner.None };
+        return PanelStrip.Of(Messages, banner,
             Stasher, label == null ? null : Texts.Escape(label), Folded.Value);
     }
 
@@ -526,7 +637,7 @@ internal sealed class RuleControls
         var plugin = Plugin.Instance!; var answers = plugin.CategoryAnswers; var taxonomy = plugin.RuleTaxonomy;
         if (Chest == null || Mode != RulePanelMode.Edit || answers == null || !answers.CategoriesReady) return RuleSuggestions.None;
         var inventory = Chest.GetInventory();
-        var key = Observed + "|" + TooltipContext.Contents(inventory) + "|" + answers.Generation + "|" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(taxonomy);
+        var key = ShownPayload + "|" + TooltipContext.Contents(inventory) + "|" + answers.Generation + "|" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(taxonomy);
         if (key != suggestedKey)
         {
             suggestedKey = key;
@@ -549,8 +660,10 @@ internal sealed class RuleControls
             var prefab = item?.m_dropPrefab ? item!.m_dropPrefab.name : null;
             if (prefab == null) continue;
             if (!accepts.TryGetValue(prefab, out var accepted))
-                accepts[prefab] = accepted = Stored && plugin.RuleEvaluator.Evaluate(Observed, prefab, taxonomy, answers) == ChestRuleDecision.Accept;
-            stacks.Add(new SuggestionStack(prefab, answers.Resolve(prefab)?.Memberships.Select(x => x.Category), accepted, Excludes.Contains(prefab)));
+                accepts[prefab] = accepted = Stored &&
+                    ContainerFilter.Narrow(plugin.RuleEvaluator.Evaluate(ShownPayload, prefab, taxonomy, answers), Filter, prefab) == ChestRuleDecision.Accept;
+            // X60: suggestions name the built-in categories only (a plain chest of wood isn't offered "Storehouse Timber Crib").
+            stacks.Add(new SuggestionStack(prefab, (plugin.BaseCategoryAnswers ?? answers).Resolve(prefab)?.Memberships.Select(x => x.Category), accepted, Excludes.Contains(prefab)));
         }
         return stacks;
     }
@@ -747,13 +860,44 @@ internal sealed class RuleControls
         subject = hovered = null; Answer = null; Explanation = null; ExplanationContext = null; ExplanationRevision++;
     }
 
+    // ---- X60 (D160): what the open container's type filter lets it hold, for greying the panel's parts.
+    private string heldKey = "\0";
+    private HashSet<string> held = new(StringComparer.Ordinal);
+
+    /// <summary>The open container's name as the player sees it ("Timber Crib"), escaped for rich text.</summary>
+    internal string ContainerName() => Chest ? Texts.Escape(GameText.Localize(Chest!.m_name)) : "";
+
+    /// <summary>
+    /// The container's filter takes none of <paramref name="category"/>'s items (it or any category under it), so ticking
+    /// it takes nothing here. False without a filter, or before categories are ready.
+    /// </summary>
+    internal bool CannotHold(string category)
+    {
+        if (Filter == null) return false;
+        var plugin = Plugin.Instance!; var answers = plugin.CategoryAnswers; var taxonomy = plugin.RuleTaxonomy;
+        if (answers == null || !answers.CategoriesReady) return false;
+        var key = Filter.Category + "|" + answers.Generation + "|" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(taxonomy);
+        if (key != heldKey)
+        {
+            heldKey = key; held = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var item in Filter.Members)
+                foreach (var membership in answers.Resolve(item)?.Memberships ?? (IReadOnlyList<MembershipEvidence>)Array.Empty<MembershipEvidence>())
+                    for (string? at = membership.Category; at != null && held.Add(at); at = taxonomy.ParentOf(at)) { }
+        }
+        return !held.Contains(category);
+    }
+
+    /// <summary>X60 (D160): the container's filter refuses every copy this grid icon stands for.</summary>
+    internal bool CannotHold(GridEntry entry) => Filter != null && entry.Copies.All(x => !Filter.Takes(x));
+
     // ---- Read-only views for the panel's sections.
     internal IReadOnlyList<CategoryTreeRow> CategoryRows(ClassificationTaxonomy taxonomy)
     {
         var plugin = Plugin.Instance!;
         // Before the server's answers arrive, member counts are unknown, so every category is listed.
         Func<string, bool> hasMembers = plugin.ClassificationEvidenceReady ? id => plugin.CategoryMemberCount(id) > 0 : _ => true;
-        return CategorySearch.Rows(CategoryText.For(taxonomy), Categories, hasMembers, expanded, collapsed, Search);
+        // D163: the stores' categories fold under one heading per mod.
+        return CategorySearch.Rows(CategoryText.For(taxonomy), Categories, hasMembers, expanded, collapsed, Search, plugin.StoreFilters?.Current.Grouping);
     }
 
     // ---- P6-06: search in the category picker, and the nearby chests that hold (D122; with the toggle, take) what was found. Read only.
@@ -794,7 +938,7 @@ internal sealed class RuleControls
     // else the first match. Items: every item the grid shows for its search (Q13), or the one icon under the pointer;
     // the Filters tab has no search. Typing and pointing settle for SearchDelay first, so a rescan does not start on each
     // keystroke, row or icon passed over.
-    private int litRuleRevision, opened;
+    private int litRuleRevision, opened, litOpened;
     private string litKey = "\0", gridLit = "", gridHover = "", hoverLit = "", rowHover = "", rowLit = "";
     private float gridTypedAt, gridHoverAt, rowHoverAt;
     /// <summary>What the highlight asked about, named for the status line's tooltip (X54: the items, not "these items"); null: nothing named.</summary>
@@ -835,6 +979,7 @@ internal sealed class RuleControls
     {
         var rescan = litRuleRevision != ruleRevision;
         litRuleRevision = ruleRevision;
+        var fresh = litOpened != opened; litOpened = opened;
         var taxonomy = Plugin.Instance!.RuleTaxonomy;
         if (edit && PickingCategories && Search.Active)
         {
@@ -847,7 +992,7 @@ internal sealed class RuleControls
                 Highlight.Request(items[0].Category, new[] { items[0].Prefab }, rescan, takes: ShowsTakers, about: name);
             }
             else if (categories.Count != 0) LightCategory(taxonomy, categories[0], rescan);
-            else Highlight.Clear();
+            else Unlight(fresh);
         }
         else if (edit && PickingItems && gridLit.Trim().Length != 0)
         {
@@ -857,7 +1002,16 @@ internal sealed class RuleControls
             LitSubject = HighlightText.Names(names);
             Highlight.Request("", wanted, rescan, takes: ShowsTakers, named: names.Distinct(StringComparer.Ordinal).Count());
         }
-        else Highlight.Clear();
+        else Unlight(fresh);
+    }
+
+    // D169 (#119): nothing to light now. A newly opened chest ends what an earlier search lit, as before (the player has
+    // reached a chest); in the same chest, a cleared search (or a tab left) keeps its chests lit for the player's
+    // setting, and closing the chest starts that time over.
+    private void Unlight(bool fresh)
+    {
+        if (fresh) Highlight.Clear();
+        else Highlight.LetGo(Plugin.Instance != null ? Plugin.Instance.Settings.HighlightSecondsAfterClose.Value : 0);
     }
 
     // D101 (Q16, bible B3.20): a category lights the chests whose full rule could take its items (Never and filters count),
@@ -972,9 +1126,19 @@ internal sealed class RuleControls
         if (ReferenceEquals(chest, Chest)) return Message.Of("yavsos_search_tip_this_chest");
         // The panel is open only with a player in the world, which the highlight also needs (it goes dark without one).
         var player = Player.m_localPlayer;
-        var meters = player ? Math.Round(Vector3.Distance(player.transform.position, chest.transform.position), MidpointRounding.AwayFromZero) : 0;
-        return Message.Of("yavsos_search_tip_chest").With("chest", Texts.Escape(GameText.Localize(chest.m_name))).With("meters", (long)meters);
+        var meters = player ? ChestStackPlaces.Across(player.transform.position, chest.transform.position) : 0;
+        // X65 (D163): the found chests' stacks, grouped once per change of what was found (the highlight's revision).
+        if (litStacks == null || litStacksRevision != Highlight.Revision)
+        {
+            litStacks = ChestStackPlaces.Of(Highlight.Found.Select(x => x.Chest));
+            litStacksRevision = Highlight.Revision;
+        }
+        litStacks.TryGetValue(chest, out var place);
+        return HighlightText.TipChest(Texts.Escape(GameText.Localize(chest.m_name)), meters, place);
     }
+
+    private Dictionary<Container, StackPlace>? litStacks;
+    private int litStacksRevision;
 
     /// <summary>D122: the search also lights the chests whose rules accept a match ("Also show chests that accept it"; remembered).</summary>
     internal bool ShowsTakers => Plugin.Instance?.Settings.SearchShowsTakers.Value == true;
@@ -996,10 +1160,13 @@ internal sealed class RuleControls
     internal string GridQuery => gridQuery;
     internal void SearchItems(string text) { gridQuery = text ?? ""; gridTypedAt = Time.unscaledTime; }
 
-    /// <summary>Click on an icon: none → Always → Never → none (maintainer, 2026-10-23), for every look-alike copy it stands for.</summary>
-    internal void CycleMark(GridEntry entry)
+    /// <summary>
+    /// Click on an icon: none → Always → Never → none (maintainer, 2026-10-23); a right-click goes the other way (X61,
+    /// D143). For every look-alike copy the icon stands for.
+    /// </summary>
+    internal void CycleMark(GridEntry entry, bool backwards = false)
     {
-        var next = ItemGrid.Next(entry.Mark);
+        var next = ItemGrid.Step(entry.Mark, backwards);
         Apply(() =>
         {
             foreach (var prefab in entry.Copies)
@@ -1016,13 +1183,15 @@ internal sealed class RuleControls
         var plugin = Plugin.Instance!; var answers = plugin.CategoryAnswers; var catalog = plugin.LoadedCatalog;
         var here = Here();
         KeptOutUpdate();
-        var key = Revision + "|" + keptOutKey + "|" + gridQuery + "|" + (catalog?.Fingerprint ?? "") + "|" + (answers?.Generation ?? long.MinValue) + "|" + string.Join(",", here);
+        var key = Revision + "|" + keptOutKey + "|" + gridQuery + "|" + (catalog?.Fingerprint ?? "") + "|" + (answers?.Generation ?? long.MinValue) + "|" + string.Join(",", here) +
+            "|" + SectionsPerCategory + "|" + (Filter?.Category ?? "");
         if (key == gridKey) return gridEntries;
         gridKey = key;
         var timed = UiCost.Start();
         var rarity = plugin.EpicLootRarityOffered;
         gridEntries = ItemGrid.Build(GridSources(plugin, answers), Categories, GridFilters(), Includes, Excludes, here, gridQuery,
-            (item, dimension) => InstanceApplies(item.Prefab, dimension, rarity && item.InstanceRarity));
+            (item, dimension) => InstanceApplies(item.Prefab, dimension, rarity && item.InstanceRarity),
+            ItemGrid.Groups(SectionsPerCategory, GridGroups(plugin.RuleTaxonomy))); // #62: the player's section view.
         UiCost.Stop("item grid", timed);
         GridRevision++;
         return gridEntries;
@@ -1031,8 +1200,20 @@ internal sealed class RuleControls
     private Dictionary<string, IReadOnlyList<string>> GridFilters() =>
         Filters.ToDictionary(x => x.Key, x => (IReadOnlyList<string>)x.Value.ToList(), StringComparer.Ordinal);
 
+    /// <summary>
+    /// X59 (D149): the ticked categories, one grid section each, in the order the Rule section's chips name them: a
+    /// category covered by a ticked parent is the parent's section.
+    /// </summary>
+    private List<string> GridGroups(ClassificationTaxonomy taxonomy)
+    {
+        var names = CategoryText.For(taxonomy);
+        return CategorySelection.Normalize(taxonomy, Categories.Where(taxonomy.Categories.ContainsKey))
+            .OrderBy(x => taxonomy.Categories[x].DisplayRank).ThenBy(names.Shown, StringComparer.CurrentCulture).ToList();
+    }
+
     /// <summary>A grid section's title in the player's language (the panel is rebuilt on a language change).</summary>
-    internal static string GridTitle(GridSection section, int count) => Texts.Get(ItemGrid.Title(section, count));
+    internal static string GridTitle(GridEntry first, int count) => Texts.Get(ItemGrid.Title(first.Section,
+        first.Group is { } group && Plugin.Instance?.RuleTaxonomy is { } taxonomy && taxonomy.Categories.ContainsKey(group) ? CategoryText.For(taxonomy).Shown(group) : null, count));
 
     internal Sprite? GridIcon(string prefab)
     {
@@ -1052,10 +1233,11 @@ internal sealed class RuleControls
         var byCategory = plugin.CategoryAnswers?.Resolve(entry.Prefab) is { } item &&
             ItemGrid.Takes(item, Categories, GridFilters(), (row, dimension) => InstanceApplies(row.Prefab, dimension, rarity && row.InstanceRarity));
         // P10-04: the notes are messages, one per line, each in its tone; no markup in the text.
-        var lines = new List<object> { Tinted.Of(ItemGrid.MarkText(entry.Mark, byCategory), Tone.Warning), Tinted.Of(ItemGrid.ClickHint, Tone.Warning) };
+        var lines = new List<object> { Tinted.Of(ItemGrid.MarkText(entry.Mark, byCategory), Tone.Warning), Tinted.Of(ItemGrid.ClickHint, Tone.Warning), Tinted.Of(ItemGrid.RightClickHint, Tone.Warning) };
         if (entry.Copies.Count >= 2)
             lines.Add(Tinted.Of(Message.Of("yavsos_grid_copies").With("prefabs", MessageList.Of(ListKind.Comma, entry.Copies.Select(Texts.Escape))).Count(entry.Copies.Count), Tone.Faint));
         if (KeptOut(entry)) lines.Add(Tinted.Of(Message.Of("yavsos_grid_kept_out"), Tone.Caution));
+        if (CannotHold(entry)) lines.Add(Tinted.Of(Message.Of("yavsos_grid_cannot_hold").With("container", ContainerName()), Tone.Caution));
         var note = Texts.Get(MessageList.Of(ListKind.Lines, lines));
         if (!drop) return (entry.Name, Texts.Get("yavsos_grid_missing") + "\n\n" + note);
         try { return (drop!.m_itemData.m_shared.m_name, drop.m_itemData.GetTooltip() + "\n\n" + note); }
@@ -1121,7 +1303,7 @@ internal sealed class RuleControls
             PanelMarks.Cleanup(settings.AllowCleanup.Value, reader, azu != null && AzuExclusions.State == AzuExclusionState.Unavailable, ChestRuleStore.Bound),
             PanelMarks.Server(plugin.ServerWithoutYavsos),
             PanelMarks.Categories(plugin.ClassificationEvidenceReady, plugin.LoadedCatalog?.Items.Count ?? 0, plugin.PolicyFromServer, plugin.CategoriesGaveUp != null,
-                plugin.ServerPolicyRejected),
+                plugin.ServerPolicyRejected, plugin.CategoriesServerFailed, plugin.CategoriesServerRebuildFailed),
             PanelMarks.MultiUserChest(copy, muc),
             PanelMarks.EpicLoot(epic != OptionalCapabilityState.Absent, epic == OptionalCapabilityState.Supported),
             PanelMarks.Drawers(Chainloader.PluginInfos.ContainsKey(RossItemDrawersIntegration.RossGuid), AzuAutoStoreIntegration.ReservedDrawerWants != null,
@@ -1145,19 +1327,25 @@ internal sealed class RuleControls
     internal IReadOnlyList<RuleChip> Chips(ClassificationTaxonomy taxonomy)
     {
         var none = NoRule();
-        var key = Revision + "|" + none + "|" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(taxonomy);
+        var key = Revision + "|" + none + "|" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(taxonomy) + "|" + Automatic + "|" + (Filter?.Category ?? "");
         if (key == chipsKey) return chips;
         chipsKey = key;
         if (!Stored) return chips = new[] { RuleChips.NoRule(none) };
         var names = CategoryText.For(taxonomy);
-        var categories = CategorySelection.Normalize(taxonomy, Categories.Where(taxonomy.Categories.ContainsKey))
-            .OrderBy(x => taxonomy.Categories[x].DisplayRank).ThenBy(names.Shown, StringComparer.CurrentCulture)
-            .Select(names.Shown);
+        var ticked = CategorySelection.Normalize(taxonomy, Categories.Where(taxonomy.Categories.ContainsKey))
+            .OrderBy(x => taxonomy.Categories[x].DisplayRank).ThenBy(names.Shown, StringComparer.CurrentCulture).ToList();
         // Unknown filters and values are listed as ignored, not as what the rule takes (D077 B01, D086 D6).
         var filters = RuleText.Short(Filters.Where(x => ClassificationFilters.IsKnown(x.Key))
             .ToDictionary(x => x.Key, x => (IReadOnlyList<string>)x.Value.Where(v => ClassificationFilters.IsKnownRuleValue(x.Key, v)).ToList(), StringComparer.Ordinal), OpenValueName);
-        return chips = RuleChips.Build(categories, filters, Includes.Select(ItemName).OrderBy(x => x, StringComparer.CurrentCulture),
-            Excludes.Select(ItemName).OrderBy(x => x, StringComparer.CurrentCulture), Unknown.Count, Stasher);
+        // X60 (D160): rule parts this container can't hold stay stored but are greyed out.
+        var outside = Filter == null ? null : new HashSet<string>(ticked.Where(CannotHold).Select(names.Shown)
+            .Concat(Includes.Where(x => !Filter.Takes(x)).Select(ItemName)), StringComparer.CurrentCulture);
+        var built = RuleChips.Build(ticked.Select(names.Shown), filters, Includes.Select(ItemName).OrderBy(x => x, StringComparer.CurrentCulture),
+            Excludes.Select(ItemName).OrderBy(x => x, StringComparer.CurrentCulture), Unknown.Count, Stasher, outside, ContainerName());
+        if (!Automatic) return chips = built;
+        // X60 (D155): this store has no YAVSOS rule; it acts by its own filter until a change saves one.
+        var level = ChestPriority.Level(Priority);
+        return chips = new[] { RuleChips.Automatic(ContainerName(), level, ChestPriority.Name(level)) }.Concat(built).ToList();
     }
 
     /// <summary>
@@ -1187,10 +1375,10 @@ internal sealed class RuleControls
         var answers = plugin.CategoryAnswers; var catalog = plugin.LoadedCatalog;
         if (!Stored || Chest == null || answers == null || catalog == null || Categories.Count != 0 && !answers.CategoriesReady || !AzuExclusions.HasExclusions(Chest))
         { keptOutKey = ""; keptOutLine = null; if (keptOut.Count != 0) keptOut = new HashSet<string>(StringComparer.Ordinal); return; }
-        var key = Observed + "|" + answers.Generation + "|" + catalog.Fingerprint + "|" + AzuExclusions.ChestType(Chest);
+        var key = ShownPayload + "|" + answers.Generation + "|" + catalog.Fingerprint + "|" + AzuExclusions.ChestType(Chest);
         if (StringComparer.Ordinal.Equals(key, keptOutKey)) return;
         keptOutKey = key;
-        var container = Chest; var observed = Observed; var taxonomy = plugin.RuleTaxonomy;
+        var container = Chest; var observed = ShownPayload; var taxonomy = plugin.RuleTaxonomy;
         // F10: only the items the grid lists (with an icon), so creature attacks ("Lox bite") aren't counted or named.
         var found = StasherExclusionConflicts.Find(catalog.Items.Keys.Where(prefab => GridIcon(prefab) != null),
             prefab => plugin.RuleEvaluator.Evaluate(observed, prefab, taxonomy, answers) == ChestRuleDecision.Accept,

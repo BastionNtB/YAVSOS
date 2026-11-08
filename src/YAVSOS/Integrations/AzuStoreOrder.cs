@@ -21,8 +21,8 @@ namespace YAVSOS.Integrations;
 /// routing, skips (equipped, hotbar, quick slots, favourites) and messages. Then Azu's own loop runs for the rest, with
 /// ruled chests taking nothing more. Ground pickup is not a loop YAVSOS runs: there a chest is refused while a better
 /// ruled chest in reach has room, and the remainder waits on the ground for Azu's next pass.
-/// Each part checks Azu's code shape at startup and turns off alone, leaving Azu's order, when it differs (D058). An
-/// isolated patch: remove it when AzuAutoStore offers a chest-order hook. Unity game thread only.
+/// Each part checks Azu's code shape at startup and turns off alone when it differs (D058), leaving Azu's order. Unity
+/// game thread only. Workaround for AzuAutoStore. Removal condition: AzuAutoStore offers a chest-order hook (#43).
 /// </summary>
 internal static class AzuStoreOrder
 {
@@ -133,8 +133,9 @@ internal static class AzuStoreOrder
         if (restPass)
         {
             // Ruled chests had their turn; an unruled one (no rule, or a rule cleared before D086 M1) is Azu's to fill.
-            var payload = ChestRuleStore.Payload(chest);
-            return payload.Length != 0 && Plugin.Instance is { } plugin && !plugin.RuleEvaluator.Unruled(payload, plugin.RuleTaxonomy);
+            if (Plugin.Instance is not { } plugin) return false;
+            var payload = plugin.RuleOf(chest).Payload; // X60: an automatic rule counts.
+            return payload.Length != 0 && !plugin.RuleEvaluator.Unruled(payload, plugin.RuleTaxonomy);
         }
         if (drop == null || !drop || !ReferenceEquals(item, drop.m_itemData)) return false;
         if (!dropDecided) { dropDecided = true; dropBest = BestForPickup(drop, item); }
@@ -224,18 +225,20 @@ internal static class AzuStoreOrder
     {
         var ruled = new Dictionary<string, (object Box, Container Chest)>(StringComparer.Ordinal);
         var payloads = new List<KeyValuePair<string, string>>();
+        var filters = new Dictionary<string, ContainerFilter?>(StringComparer.Ordinal);
         foreach (var box in boxes)
         {
             if (box == null || !vanillaType!.IsInstanceOfType(box) || boxedContainer!.GetValue(box) is not Container chest || !chest) continue;
-            var payload = ChestRuleStore.Payload(chest);
+            var (payload, filter) = plugin.RuleOf(chest); // X60: automatic rules and filters (D155, D160).
             var view = ChestRuleStore.View(chest);
             if (payload.Length == 0 || !view || !view!.IsValid()) continue;
             var id = view.GetZDO().m_uid.ToString();
             if (ruled.ContainsKey(id)) continue;
-            ruled.Add(id, (box, chest)); payloads.Add(new KeyValuePair<string, string>(id, payload));
+            ruled.Add(id, (box, chest)); payloads.Add(new KeyValuePair<string, string>(id, payload)); filters[id] = filter;
         }
         if (ruled.Count == 0) return 0;
-        var order = new StoreOrder(plugin.RuleTaxonomy, answers, payloads, plugin.CategoryMemberCount, plugin.RuleEvaluator);
+        var order = new StoreOrder(plugin.RuleTaxonomy, answers, payloads, plugin.CategoryMemberCount, plugin.RuleEvaluator,
+            id => filters.TryGetValue(id, out var filter) ? filter : null);
         var quick = quickSlots!.Invoke(null, null);
         var items = single != null ? new List<ItemDrop.ItemData> { single } : inventory.GetAllItems().ToList();
         var total = 0;
@@ -420,10 +423,11 @@ internal static class AzuStoreOrder
             var position = item.transform.position; var prefab = data.m_dropPrefab.name;
             var chests = new Dictionary<string, Container>(StringComparer.Ordinal);
             var payloads = new List<KeyValuePair<string, string>>();
+            var filters = new Dictionary<string, ContainerFilter?>(StringComparer.Ordinal);
             foreach (var chest in (List<Container>)registry!.GetValue(null))
             {
                 if (!chest) continue;
-                var payload = ChestRuleStore.Payload(chest);
+                var (payload, filter) = plugin.RuleOf(chest); // X60
                 var view = ChestRuleStore.View(chest);
                 if (payload.Length == 0 || !view || !view!.IsValid() || !view.IsOwner()) continue;
                 var reach = containerRange!(chest);
@@ -435,10 +439,11 @@ internal static class AzuStoreOrder
                 if (inventory == null || howMuchFits!(inventory, data) <= 0) continue;
                 var id = zdo.m_uid.ToString();
                 if (chests.ContainsKey(id)) continue;
-                chests.Add(id, chest); payloads.Add(new KeyValuePair<string, string>(id, payload));
+                chests.Add(id, chest); payloads.Add(new KeyValuePair<string, string>(id, payload)); filters[id] = filter;
             }
             if (chests.Count == 0) return null;
-            var best = new StoreOrder(plugin.RuleTaxonomy, answers, payloads, plugin.CategoryMemberCount, plugin.RuleEvaluator)
+            var best = new StoreOrder(plugin.RuleTaxonomy, answers, payloads, plugin.CategoryMemberCount, plugin.RuleEvaluator,
+                    id => filters.TryGetValue(id, out var filter) ? filter : null)
                 .For(prefab, plugin.InstanceFacets(data, answers)).FirstOrDefault();
             return best == null ? null : chests[best];
         }

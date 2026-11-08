@@ -110,7 +110,7 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         if (!settings.AllowStashing.Value) return CleanupRunner.Refuse("yavsos_stash_off_server");
         if (!NativeInventoryProbe.Supported) return CleanupRunner.Refuse(NativeInventoryProbe.Checked ? "yavsos_stash_reader_broken" : "yavsos_run_reader_checking");
         var answers = Answers(plugin);
-        if (answers == null) return CleanupRunner.Refuse("yavsos_run_categories_loading");
+        if (answers == null) return CleanupRunner.Refuse(CategoryWait.Run(plugin.CategoriesWait)); // X62
         var range = Math.Min(radius ?? settings.EffectiveStashRange, settings.MaximumRange.Value);
         var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal), Single = single,
             Tooltip = single == null ? null : ShownTooltip() };
@@ -119,7 +119,7 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         var plan = StashPlanner.Plan(input, plugin.RuleEvaluator);
         // D086 D4 (M12): while categories load, Always rules and chests already holding the item still take it.
         if (plan.CategoriesPending && plan.Moves.Count == 0)
-        { run.Adapter.Dispose(); return CleanupRunner.Refuse("yavsos_stash_categories_partial"); }
+        { run.Adapter.Dispose(); return CleanupRunner.Refuse(CategoryWait.StashNothing(plugin.CategoriesWait)); }
         run.Plan = plan;
         foreach (var stack in input.Player.Stacks) run.Keys[stack.Handle] = stack.MergeKey;
         // #64 (D151): a favorites mod YAVSOS couldn't read is named once, in the first stash result after it failed.
@@ -223,7 +223,8 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
             foreach (var skipped in capture.Uncapturable)
                 if (CleanupRunner.LogLimit(id + "|" + skipped) is { } more)
                     log.LogInfo($"Stash: {skipped} in {GameText.Localize(container.m_name)} at {container.transform.position} can't be read exactly; it stays and holds its slot." + more);
-            chests.Add(new StashChest(id, ChestRuleStore.Payload(container), capture.Snapshot, view.IsOwner(), MucRoute.OwnerState(zdo.GetOwner())));
+            var (payload, filter) = Plugin.Instance!.RuleOf(container); // X60: a store's automatic rule and its filter (D160).
+            chests.Add(new StashChest(id, payload, capture.Snapshot, view.IsOwner(), MucRoute.OwnerState(zdo.GetOwner()), filter));
             run.Chests.Add(id, container);
             return true;
         }
@@ -252,8 +253,14 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         }
         // With AzuAutoStore, the ruled tier is what its store key does in YAVSOS's order (D070), with Azu's exclusions.
         var azu = !Enabled;
+        // F14: the chest's own answer for one unit; no answer (check off, item unresolved) counts as "takes".
+        Func<string, TransferStack, bool>? takes = GameTakes.Usable
+            ? (id, stack) => !run.Chests.TryGetValue(id, out var chest) ||
+                GameTakes.Takes(chest.GetInventory(), adapter.TryItem(inventory, stack.Handle, out var item) ? item : null) != false
+            : null;
         return new StashInput(plugin.RuleTaxonomy, answers, own.Snapshot, chests, plugin.CategoryMemberCount, muc, held, only, Facets,
-            azuStores: azu, azuAllows: azu ? (id, identity) => !run.Chests.TryGetValue(id, out var chest) || AzuExclusions.Allows(chest, identity.Prefab) != false : null);
+            azuStores: azu, azuAllows: azu ? (id, identity) => !run.Chests.TryGetValue(id, out var chest) || AzuExclusions.Allows(chest, identity.Prefab) != false : null,
+            takes: takes, categoriesWait: plugin.CategoriesWait); // X71
     }
 
     /// <summary>
@@ -298,7 +305,7 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         {
             // Spread over frames (P6-11 cost check): one scene search, then a few chests per step, then the receivers.
             var timed = UiCost.Start();
-            var near = (azu ? AzuStoreOrder.Nearby(player!).Where(x => ChestRuleStore.Payload(x).Length != 0 && ChestRuleStore.HasAccess(x, player!))
+            var near = (azu ? AzuStoreOrder.Nearby(player!).Where(x => plugin.RuleOf(x).Payload.Length != 0 && ChestRuleStore.HasAccess(x, player!))
                 : CleanupRunner.Nearby(player, range, CleanupRunner.Scene())).Take(azu ? StashPlanner.MaximumChests : settings.EffectiveMaximumChests).ToList();
             UiCost.Stop("stash explain scan", timed);
             var chests = new List<StashChest>();
@@ -441,7 +448,9 @@ internal sealed class StashRunner : MoveRunner<StashMove, StashRunner.Run>
         if (!ChestRuleStore.HasAccess(destination, player)) return TransferRefusal.AccessDenied;
         var reach = run.Radius + 2f;
         if ((destination.transform.position - player.transform.position).sqrMagnitude > reach * reach) return TransferRefusal.Expired;
-        var prefab = move.Identity.Prefab; var payload = ChestRuleStore.Payload(destination);
+        var prefab = move.Identity.Prefab; var (payload, filter) = plugin.RuleOf(destination);
+        // X60 (D160): never into a store whose filter refuses the item.
+        if (ContainerFilter.Refuses(filter, prefab)) return TransferRefusal.RuleMismatch;
         if (move.Tier == StashTier.Ruled)
         {
             // The stack's current rarity and condition (P6-07b), as planned; a stack gone since is refused at the write.
@@ -525,7 +534,7 @@ internal static class QuickSlots
 }
 
 /// <summary>
-/// D061 Q1/Q5: YAVSOS's store key (default <c>.</c>) and single-item key (default middle mouse on an inventory stack),
+/// D061 Q1/Q5: YAVSOS's store key (default <c>.</c>) and single-item key (default Shift + middle mouse on an inventory stack, D162),
 /// only when AzuAutoStore is not installed. The cleanup key (Ctrl + <c>.</c> by default, D126) stays cleanup. Unity game thread only.
 /// </summary>
 internal static class StashTriggers
@@ -536,7 +545,12 @@ internal static class StashTriggers
             Chat.instance && Chat.instance.HasFocus() || Interface.TypingBlock.Active) return; // Typing in the panel's search.
         if (InventoryGui.IsVisible())
         {
-            if (settings.StashItemShortcut.Value.IsDown() && Pointed() is { } item) runner.Start(single: item);
+            if (settings.StashItemShortcut.Value.IsDown() && Pointed() is { } item)
+            {
+                runner.Start(single: item);
+                // X68 (D162): the click is YAVSOS's, so ZenSign's search on the same button doesn't also run.
+                ZenSignSearchGuard.Acted(settings.StashItemShortcut.Value.MainKey);
+            }
             // F7 (DOCS-CODE-COMPARISON U2): the store key stores nothing with the inventory open; say so instead of nothing.
             else if (settings.StashShortcut.Value.IsDown())
                 GameText.Say(CleanupTriggers.StackKey(false, settings.StashItemShortcut) is { } key

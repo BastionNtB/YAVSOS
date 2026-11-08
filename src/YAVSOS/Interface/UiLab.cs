@@ -45,18 +45,83 @@ internal static class UiLab
     /// <summary>D101: point at a category tree row while searching, as the pointer would ("" leaves it).</summary>
     public static string PointRow(string id) { if (Rules is { } r) r.RowPointer(id.Length != 0 ? id : r.RowHovered, id.Length != 0); return "pointed"; }
     public static string ShowCategories() { Rules?.ShowCategories(); return "queued"; }
+    /// <summary>
+    /// D163: the Categories tree's rows as the panel draws them (search included), at most <paramref name="show"/>: one
+    /// "depth|id|kind|state|open|name" line each, kind "heading" or "category". "" for <paramref name="contains"/> shows all;
+    /// otherwise only rows whose ID or name contains it, plus every heading.
+    /// </summary>
+    public static string Tree(string contains, int show) => Rules is { } r && r.Chest && Plugin.Instance is { } p
+        ? string.Join("\n", r.CategoryRows(p.RuleTaxonomy)
+            .Where(x => x.Heading || contains.Length == 0 || x.Id.Contains(contains) || x.Name.IndexOf(contains, System.StringComparison.OrdinalIgnoreCase) >= 0)
+            .Take(show).Select(x => $"{x.Depth}|{x.Id}|{(x.Heading ? "heading" : "category")}|{x.State}|{(x.HasChildren ? x.Expanded ? "open" : "folded" : "-")}|{x.Name}"))
+        : "no panel";
+    /// <summary>D163: the fold button of a tree row (a heading or an umbrella), as a click would.</summary>
+    public static string Fold(string id)
+    {
+        if (Rules is not { } r || !r.Chest || Plugin.Instance is not { } p) return "no panel";
+        if (r.CategoryRows(p.RuleTaxonomy).FirstOrDefault(x => x.Id == id) is not { HasChildren: true } row) return "no foldable row";
+        r.Fold(id, row.Expanded);
+        return row.Expanded ? "folding" : "unfolding";
+    }
+    /// <summary>D163: the tick box of a category row, as a click would (a heading has none).</summary>
+    public static string Tick(string id)
+    {
+        if (Rules is not { } r || !r.Chest || Plugin.Instance is not { } p) return "no panel";
+        if (r.CategoryRows(p.RuleTaxonomy).FirstOrDefault(x => x.Id == id) is not { Heading: false }) return "no category row";
+        r.ToggleCategory(p.RuleTaxonomy, id);
+        return "queued";
+    }
     public static string ShowFilters() { Rules?.ShowFilters(); return "queued"; }
     public static string ShowItems() { Rules?.ShowItems(); return "queued"; }
     // P6-18 item grid.
     public static string GridSearch(string text) { Rules?.SearchItems(text); return "typed"; }
-    public static string GridClick(string prefab)
+    /// <summary>X58 (D148): the YAVSOS button below the chest window: whether the panel shows, and a click on it.</summary>
+    public static string PanelButton() => Rules is { } r ? "shown=" + r.PanelShown : "no panel";
+    public static string ClickPanelButton() { if (Rules is not { } r) return "no panel"; r.TogglePanel(); return "shown=" + r.PanelShown; }
+    public static string GridClick(string prefab) => GridClickAs(prefab, false);
+    /// <summary>X61: a right-click on the icon, which steps its mark the other way.</summary>
+    public static string GridRightClick(string prefab) => GridClickAs(prefab, true);
+    private static string GridClickAs(string prefab, bool backwards)
     {
         var entry = Rules?.GridEntries().FirstOrDefault(x => x.Copies.Contains(prefab));
         if (entry == null) return "not in grid";
-        Rules!.CycleMark(entry); return "queued for " + string.Join(",", entry.Copies);
+        Rules!.CycleMark(entry, backwards); return "queued for " + string.Join(",", entry.Copies);
+    }
+    /// <summary>
+    /// X59: a section button of the Items tab. <paramref name="section"/> is Here, Marked, Rule or Found, or a ticked
+    /// category's ID for its own section; <paramref name="button"/> is "never" (Never all) or "clear".
+    /// </summary>
+    public static string GridSectionClick(string section, string button)
+    {
+        if (Rules is not { } r) return "no panel";
+        var list = r.GridEntries().Where(x => x.Group != null ? x.Group == section : string.Equals(x.Section.ToString(), section, System.StringComparison.OrdinalIgnoreCase)).ToList();
+        if (list.Count == 0) return "no such section";
+        r.MarkSection(list, button == "never" ? Core.Interface.GridButton.NeverAll : Core.Interface.GridButton.Clear);
+        return "queued for " + list.Count;
+    }
+    /// <summary>#62 (D158): the section view button: a click switches between one section per ticked category and one section.</summary>
+    public static string GridToggleView()
+    {
+        if (Rules is not { } r) return "no panel";
+        var before = r.SectionsPerCategory; r.ToggleSectionView();
+        return "queued; perCategory was " + before + "; tip=" + Texts.English(Core.Interface.ItemGrid.ViewTip(before)).Text;
+    }
+    /// <summary>
+    /// D158: a section button's tooltip and whether it works (Never all stops above 512 icons to mark). <paramref name="section"/>
+    /// and <paramref name="button"/> as for <see cref="GridSectionClick"/>.
+    /// </summary>
+    public static string GridSectionTip(string section, string button)
+    {
+        if (Rules is not { } r) return "no panel";
+        var list = r.GridEntries().Where(x => x.Group != null ? x.Group == section : string.Equals(x.Section.ToString(), section, System.StringComparison.OrdinalIgnoreCase)).ToList();
+        if (list.Count == 0) return "no such section";
+        var kind = button == "never" ? Core.Interface.GridButton.NeverAll : Core.Interface.GridButton.Clear;
+        var toMark = Core.Interface.ItemGrid.ToMark(list, kind);
+        var tip = r.SectionTip(list, kind);
+        return $"icons={list.Count}; toMark={toMark}; usable={Core.Interface.ItemGrid.Usable(kind, toMark)}; tip={tip?.Topic} || {tip?.Text.Replace("\n", " / ")}";
     }
     public static string Grid(int show) => Rules is { } r
-        ? string.Join(" ", r.GridEntries().GroupBy(x => x.Section).Select(g => $"{g.Key}={g.Count()}")) + $"; view={ItemGridView.Last?.Count ?? -1}/{ItemGridView.Last?.Pool ?? -1} cells | " +
+        ? $"perCategory={r.SectionsPerCategory}; " + string.Join(" ", r.GridEntries().GroupBy(x => x.Group != null ? x.Section + "/" + x.Group : x.Section.ToString()).Select(g => $"{g.Key}={g.Count()}")) + $"; view={ItemGridView.Last?.Count ?? -1}/{ItemGridView.Last?.Pool ?? -1} cells | " +
           string.Join(" ", r.GridEntries().Take(show).Select(x => $"{x.Section}:{x.Prefab}{(x.Copies.Count > 1 ? "×" + x.Copies.Count : "")}{(x.Mark == Core.Interface.GridMark.Always ? "+" : x.Mark == Core.Interface.GridMark.Never ? "-" : "")}{(x.Taken ? "" : "~")}")) +
           $" | always={string.Join(",", r.Includes)} never={string.Join(",", r.Excludes)}"
         : "no panel";

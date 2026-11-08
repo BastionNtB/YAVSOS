@@ -17,12 +17,13 @@ namespace YAVSOS.Interface;
 /// P6-06 (D062 Q4): lights up nearby chests (within the player's cleanup range) for a searched category or items.
 /// D122: chests that hold a match, ruled or not, in the player's <c>HoldsColor</c>; with the takes toggle on, also the
 /// other chests whose rule would take one, in <c>TakesColor</c>; each lit chest keeps why, for its label. P8-18 (D100): on while the search is active, then for the player's <c>HighlightSecondsAfterClose</c> once
-/// the chest closes (<see cref="HighlightLinger"/>); the Items tab's search asks for the items its grid shows. VNEI 0.17.6 has no chest highlight or find-item API to adopt (decompiled
+/// the chest closes or, D169, once the search is cleared (<see cref="HighlightLinger"/>); the Items tab's search asks for the items its grid shows. VNEI 0.17.6 has no chest highlight or find-item API to adopt (decompiled
 /// 2026-10-20), so this is YAVSOS's own: a uniform colour through the game's <c>MaterialMan</c> property blocks, the
 /// mechanism of vanilla <c>WearNTear.Highlight</c>, set and reset by YAVSOS. Visual only: no ZDO, inventory or rule
 /// write. The first scan judges <see cref="ChecksPerFrame"/> chests a frame; then, while the search is on, every chest
 /// found is judged again once a second in one frame (B2-03 measured that at 0.54 ms at most, 2026-11-03). At most
-/// <see cref="MaximumLit"/> chests are lit. Unity game thread only.
+/// <see cref="MaximumLit"/> chests are lit. X66 (D163): every chest it or <see cref="ChestArrivals"/> lights is also shown
+/// through walls (<see cref="ChestThroughWalls"/>, which this class owns and drives). Unity game thread only.
 /// </summary>
 internal sealed class ChestHighlight
 {
@@ -55,7 +56,12 @@ internal sealed class ChestHighlight
     /// <summary>A search is lighting (or has listed) chests: there is a status to show.</summary>
     internal bool Active => key.Length != 0;
 
-    internal ChestHighlight(ManualLogSource log) { this.log = log; }
+    private readonly List<(Container Chest, Kind Kind)> glowing = new List<(Container, Kind)>();
+
+    internal ChestHighlight(ManualLogSource log) { this.log = log; ThroughWalls = new ChestThroughWalls(log); }
+
+    /// <summary>X66 (D163): shows the chests that glow through walls too; driven from <see cref="LateUpdate"/>.</summary>
+    internal ChestThroughWalls ThroughWalls { get; }
 
     /// <summary>Whether chests can be coloured; when not, the panel only lists them.</summary>
     internal bool Supported
@@ -105,6 +111,18 @@ internal sealed class ChestHighlight
     /// <summary>The chest closed: the lit chests stay on for <paramref name="seconds"/> (0: off now).</summary>
     internal void Release(float seconds) => linger.Release(Time.unscaledTime, seconds);
 
+    /// <summary>
+    /// D169 (#119): the search was cleared (or its tab left) with the chest still open: the lit chests stay on for
+    /// <paramref name="seconds"/>, and closing the chest starts that time over; a new search that finds something
+    /// replaces them. 0, or nothing lit by a search now: as <see cref="Clear"/>.
+    /// </summary>
+    internal void LetGo(float seconds)
+    {
+        var now = Time.unscaledTime;
+        linger.LetGo(now, seconds);
+        if (!linger.On(now)) Clear();
+    }
+
     internal void Clear()
     {
         Expire();
@@ -125,6 +143,26 @@ internal sealed class ChestHighlight
     }
 
     internal bool Lit => lit.Count != 0;
+
+    /// <summary>
+    /// X66 (D163): once a frame from the plugin's LateUpdate, after the frame's search and arrival painting: every chest
+    /// that glows now (the search's, then the arrivals', which own a chest while they last) is also shown through walls.
+    /// </summary>
+    internal void LateUpdate()
+    {
+        glowing.Clear();
+        foreach (var x in lit) if (x.Chest) glowing.Add((x.Chest, x.Kind));
+        Plugin.Instance?.Arrivals?.AddLit(glowing);
+        if (glowing.Count == 0 && ThroughWalls.Idle) return;
+        ThroughWalls.Frame(glowing, Plugin.Instance?.Settings);
+    }
+
+    /// <summary>The world ended: the search ends, and nothing shows through walls.</summary>
+    internal void EndWorld()
+    {
+        Clear();
+        ThroughWalls.Clear();
+    }
 
     internal void Update()
     {
@@ -252,7 +290,7 @@ internal sealed class ChestHighlight
     // this chest accepts ("Accepts Copper, Tin"); a category search names the category.
     private Message? Takes(Plugin plugin, Container chest)
     {
-        var payload = ChestRuleStore.Payload(chest);
+        var (payload, filter) = plugin.RuleOf(chest); // X60: a store's automatic rule lights it too; its filter narrows (D160).
         if (payload.Length == 0) return null;
         var taxonomy = plugin.RuleTaxonomy; var answers = plugin.CategoryAnswers;
         var named = holdsCategory.Length != 0 ? HighlightText.Accepts(HighlightText.Names(new[] { subject })) : null;
@@ -263,7 +301,7 @@ internal sealed class ChestHighlight
             List<string>? accepted = null;
             foreach (var item in items)
             {
-                if (!plugin.RuleEvaluator.CouldAccept(payload, item, taxonomy, answers)) continue;
+                if (ContainerFilter.Refuses(filter, item) || !plugin.RuleEvaluator.CouldAccept(payload, item, taxonomy, answers)) continue;
                 if (named != null) return named; // A category's members: the label names the category.
                 (accepted ??= new List<string>()).Add(NameOf(item));
             }

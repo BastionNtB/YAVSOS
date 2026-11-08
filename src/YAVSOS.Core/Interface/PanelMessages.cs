@@ -5,9 +5,10 @@ namespace YAVSOS.Core.Interface;
 /// <summary>
 /// P10-25 (D132): the control a message came from. Every message shows in the one strip under the panel's header; the
 /// control keeps an amber outline until the next action, so the message points back to it. <see cref="Edit"/> is the
-/// Edit section's tab body (ticks, Items-grid clicks, filters and the Remove buttons above it).
+/// Edit section's tab body (ticks, Items-grid clicks, filters and the Remove buttons above it). <see cref="Template"/> is
+/// the Templates tab (X23): its Save button, its name field and the selected template's buttons.
 /// </summary>
-public enum PanelControl { Edit, Undo, Paste, Clear, Priority, OptOut, Cleanup, Suggestion }
+public enum PanelControl { Edit, Undo, Paste, Clear, Priority, OptOut, Cleanup, Suggestion, Template }
 
 /// <summary>A refusal (amber: nothing was done) or a summary (cleanup found nothing to move, so no result panel follows).</summary>
 public enum MessageKind { Refusal, Summary }

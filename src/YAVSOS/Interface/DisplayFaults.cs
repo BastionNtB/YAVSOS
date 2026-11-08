@@ -11,7 +11,8 @@ namespace YAVSOS.Interface;
 internal static class DisplayFaults
 {
     internal const DisplayPart Where = DisplayPart.Where, Search = DisplayPart.Search, Categories = DisplayPart.Categories,
-        Labels = DisplayPart.Labels, Glow = DisplayPart.Glow, Results = DisplayPart.Results;
+        Labels = DisplayPart.Labels, Glow = DisplayPart.Glow, Results = DisplayPart.Results,
+        ThroughWalls = DisplayPart.ThroughWalls;
     private static readonly List<DisplayPart> off = new();
     internal static IReadOnlyList<DisplayPart> Off => off;
     internal static void Add(DisplayPart part) { if (!off.Contains(part)) off.Add(part); }

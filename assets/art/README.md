@@ -18,7 +18,7 @@ regenerate, then export again.
 | --- | --- | --- |
 | `wordmark.svg` | The YAVSOS word mark: six letters cut after the icon's rune, the Y being the rune itself | `scripts/art/wordmark.py` |
 | `name-block.svg` | The full name in Marcellus capitals, as paths: two lines flush to the word mark's width, initials lit | `scripts/art/nameblock.py` |
-| `sign.svg` | The wooden sign: the panel (planks, grain, knots, fibre noise, nails) carrying the word mark and the name block | `scripts/art/panel.py` |
+| `sign.svg` | The wooden sign: the panel (planks, grain, knots, fiber noise, nails) carrying the word mark and the name block | `scripts/art/panel.py` |
 | `banner.svg` | The title banner, 1280x320: slate tile, three chests after the icon's (the rune on the front one), the sign on the right | `scripts/art/banner.py` |
 | `divider-left.svg`, `divider-right.svg` | Section dividers, 1280x80, transparent: a band of cut marks fading away from the icon's chest, anchored at a quarter or three quarters; the guide alternates them down the page | `scripts/art/divider.py` |
 | `ornament.svg` | Closing ornament, 480x110, transparent: the rune between two cuts that taper away, for the end of the guide | `scripts/art/ornament.py` |

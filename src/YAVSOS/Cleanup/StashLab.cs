@@ -27,6 +27,17 @@ internal static class StashLab
           $"muc={(MucRoute.Available(out var source) ? source : "none")}; bundled={MucRoute.BundledStatus}; active={BundledCopy.Active}; probe={NativeInventoryProbe.Status}"
         : "not loaded";
 
+    /// <summary>
+    /// X68 (D162): the stack key as saved, the file's record of one-time moves, and whether ZenSign's search is kept from
+    /// stack-key clicks (Unchecked until the first stack-key press, then Active, Off or Absent), with ZenSign's button state.
+    /// </summary>
+    public static string StackKey()
+    {
+        var plugin = Plugin.Instance; if (plugin == null) return "not loaded";
+        plugin.Config.TryGetEntry<string>(new BepInEx.Configuration.ConfigDefinition("Internal", "SettingMoves"), out var moves);
+        return $"stackKey={plugin.Settings.StashItemShortcut.Value}; moves={moves?.Value ?? "-"}; zenSign={Integrations.ZenSignSearchGuard.Status}";
+    }
+
     /// <summary>#64: which favorites mods are read, and what they mark in the player's inventory now.</summary>
     public static string Favorites()
     {

@@ -8,9 +8,9 @@ Every setting YAVSOS has, as the Configuration Manager shows it in English. Chan
 game with a Configuration Manager (F1 with BepInEx ConfigurationManager), or in
 `BepInEx/config/com.bastionntb.yavsos.cfg`.
 
-**Who sets what.** On a server with YAVSOS, the server decides everything under **Server**,
-and its categories file applies to everyone. While `LockSharedPolicy` is on, only admins can
-change those. Everything under **Cleanup**, **Stash** and **Controls** is each player's own.
+**Who sets what.** On a server with YAVSOS, the server decides everything under **Server**
+and **Storehouse**, and its categories file applies to everyone. While `LockSharedPolicy` is
+on, only admins can change those. Everything under **Cleanup**, **Stash** and **Controls** is each player's own.
 Single-player and client-only games use your own file for all of them.
 
 **With AzuAutoStore.** AzuAutoStore does the stashing with its own keys, range and hotbar
@@ -27,8 +27,18 @@ Set by the server.
 | `AllowCleanup` | on | — | Let players run cleanup, which moves misplaced items between nearby chests. Set by the server. |
 | `AllowStashing` | on | — | Let players stash with YAVSOS's stash key and stack key. With AzuAutoStore installed, AzuAutoStore does the stashing and this has no effect. Set by the server. |
 | `LockSharedPolicy` | on | — | While this is on, only server admins can change the server's shared settings (ServerSync decides who is an admin). It gives no one access to chests. |
-| `MaximumChests` | 256 | 16–256 | The most chests one cleanup or YAVSOS stash looks at, nearest first; the result says when more were in range. With AzuAutoStore installed, its stash key finds chests itself, so this limits cleanup only. Set by the server. |
+| `MaximumChests` | 256 | 16–512 | The most chests one cleanup or YAVSOS stash looks at, nearest first; the result says when more were in range. More chests make each run slower. With AzuAutoStore installed, its stash key finds chests itself, so this limits cleanup only. Set by the server. |
 | `MaximumRange` | 50 m | 1–100 m | The largest range, in meters, a player can use for cleanup and for YAVSOS's own stash. With AzuAutoStore installed, its stash key uses its own range, so this limits cleanup only. Set by the server. |
+| `MaximumSources` | 64 | 16–256 | The most chests one cleanup moves items out of. Chests with misplaced items come first, nearest first, then the nearest others. A higher number reaches more chests per press but makes each cleanup slower. MaximumChests still limits the chests it looks at. Set by the server. |
+
+## Storehouse
+
+Set by the server.
+
+| Setting | Default | Allowed | What it does |
+| --- | --- | --- | --- |
+| `AutomaticRules` | on | — | Stores that accept only some items, such as Storehouse's, act as if their own category were ticked while they have no YAVSOS rule, so a new store fills without anyone opening it. Off: they act as chests without a rule. Each store type keeps its category either way. Set by the server. |
+| `DefaultPriority` | 4 | 1–10 | The priority of those automatic rules (AutomaticRules), from 1 (fills first) to 10 (fills last), as on the YAVSOS panel. Set by the server. |
 
 ## Cleanup
 
@@ -49,7 +59,7 @@ Your own.
 | `IncludeQuickSlots` | off | — | Also stash items from AzuExtendedPlayerInventory's quick slots with the stash key and the stack key. Used only without AzuAutoStore, which never stashes them. |
 | `Range` | 10 m | 1–100 m | How far from you, in meters, the stash key and the stack key look for chests. The server's MaximumRange caps it. Used only without AzuAutoStore. |
 | `Shortcut` | . | — | The stash key: it stashes items from your inventory into nearby chests whose rules accept them, and into chests without a rule that already hold them. Used only without AzuAutoStore. |
-| `SingleItemShortcut` | Middle mouse | — | The stack key: with your inventory open, it stashes the stack under the pointer into nearby chests. Used only without AzuAutoStore. |
+| `SingleItemShortcut` | Shift + Middle mouse | — | The stack key: with your inventory open, it stashes the stack under the pointer into nearby chests. Used only without AzuAutoStore. The default is Shift + middle mouse because ZenSign searches with middle mouse; when both use the same button, a click that stashes doesn't also search. |
 
 ## Controls
 
@@ -57,8 +67,11 @@ Your own.
 
 | Setting | Default | Allowed | What it does |
 | --- | --- | --- | --- |
+| `ButtonOffsetX` | 0 | — | Moves the YAVSOS button to the right of its place below the chest window, in the game's UI units (scaled to 1080p); a negative value moves it left. |
+| `ButtonOffsetY` | 6 | — | Moves the YAVSOS button down from the chest window's bottom edge, in the game's UI units (scaled to 1080p); a negative value moves it up. |
+| `ButtonPlace` | Left | Left, Middle, Right | Where the YAVSOS button sits below the chest window: at its left end, its middle or its right end. Choosing one resets ButtonOffsetX and ButtonOffsetY, which then move the button from there. |
 | `ChestArrivalEffect` | small-item puff | None, small-item puff, smelter puff, fermenter puff, loot sparkle, pick sparkle, auto-pickup shimmer | The small effect a chest plays when your stash or cleanup puts items into it. None turns it off. With AzuAutoStore installed, its stash key plays AzuAutoStore's own effect instead; cleanup still plays this one. |
-| `HighlightSecondsAfterClose` | 20 | 0–60 | How many seconds chests stay lit. After you close a chest, its search keeps the chests it found lit this long, so you can walk to them; while the search is on, they stay lit anyway. After your stash or cleanup, the chests it put items into, or where something stays, light up this long. 0 turns the light off: search lights end when the chest closes, and a stash or cleanup only plays the effect chosen in ChestArrivalEffect. |
+| `HighlightSecondsAfterClose` | 20 | 0–60 | How many seconds chests stay lit. When you clear a search or close the chest, the chests it found stay lit this long, so you can walk to them; while the search is on, they stay lit anyway. After your stash or cleanup, the chests it put items into, or where something stays, light up this long. 0 turns the light off: search lights end when you clear the search or close the chest, and a stash or cleanup only plays the effect chosen in ChestArrivalEffect. |
 | `HoldsColor` | gold (`FFC740`) | any color | The color of chests that hold what you searched for, and of chests your stash or cleanup just put items into. Alpha is ignored. |
 | `PanelFolded` | off | — | Show the YAVSOS panel folded: only its title, status marks and the chest label. The arrow left of the panel's title folds and unfolds it. |
 | `PanelOffsetX` | 0 | — | Moves the YAVSOS panel to the right of its place beside the chest window, in the game's UI units (scaled to 1080p); a negative value moves it left. Drag the panel's title to change it, for example if it covers another mod's window. |
@@ -66,9 +79,11 @@ Your own.
 | `ResultPanelHoldInInventory` | off | — | Keep the result panel up while your inventory is open; its countdown runs only while the inventory is closed. When this is off, the panel closes when the time in ResultPanelSeconds runs out, whether the inventory is open or not. |
 | `ResultPanelSeconds` | 10 | 3–60 | How many seconds the result panel stays up before it closes by itself. Its Close button closes it sooner. |
 | `SearchShowsTakers` | off | — | Also light the chests whose rules accept what you search for, not only the chests that hold it. The tag button beside the search box ("Also show chests that accept it") turns this on and off. |
+| `SectionsPerCategory` | on | — | Show the items a rule accepts on the Items tab in one section per ticked category; off shows one section for the whole rule. The button beside the Items tab's search box switches between the two. |
 | `ShowChestLabels` | on | — | Show the chest label when you point at a chest: its rule, such as "Food › eaten by Boar · priority 2 (Urgent)". It shows only on chests with a rule that you can open. A chest lit by your search or cleanup says why either way. |
 | `ShowItemCategories` | on | — | Add an item's categories to its tooltip, such as "Food ingredients, Animal feed · eaten by Boar, Hen". |
 | `ShowResultPanel` | on | — | After a cleanup or a stash, show the result panel: what moved and what stayed, with item names and reasons. With AzuAutoStore installed, it also shows after AzuAutoStore's stash key. |
-| `ShowRuleControls` | on | — | Show the YAVSOS panel beside an open chest. |
+| `ShowRuleControls` | off | — | Show the YAVSOS panel beside an open chest. The YAVSOS button below the chest window turns this on and off. While the panel is hidden, the stash and cleanup keys, the result panel and the item tooltips keep working. |
+| `ShowThroughWalls` | on | — | Also show glowing chests through walls and other chests. With Zen.ModLib installed, each one gets Zen.ModLib's blinking outline. Without it, or with Zen.ModLib's outlines turned off, a marker over the chest gives its place in its stack ("2 of 3"). The glow itself stays on either way. |
 | `StaysColor` | red-orange (`FF6B33`) | any color | The color of chests where something stays after your cleanup, because no chest accepts it or the chests that accept it are full. Alpha is ignored. |
 | `TakesColor` | cool blue (`80B8FF`) | any color | The color of chests whose rules accept what you searched for, shown while the tag button beside the search box ("Also show chests that accept it") is on. Alpha is ignored. |

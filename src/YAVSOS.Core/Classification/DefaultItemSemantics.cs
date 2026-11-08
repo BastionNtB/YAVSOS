@@ -112,10 +112,10 @@ internal static class DefaultItemSemantics
         Magic("magic.wizardry.scrolls", wizardry, Context.Consumable, "ArcaneScroll_DamageBuff_TW", "ArcaneScroll_SpeedBuff_TW", "ArcaneScroll_JumpBuff_TW", "ArcaneScroll_SlowfallBuff_TW");
 
         Add("materials.hides", monstrum, Context.Resource, "FoxPelt_TW");
-        // E07 upstream compatibility patch (D042): Therzie Armory 1.4.2, Warfare 1.9.4 and Wizardry 1.2.2 swap these
+        // E07, workaround for Therzie's Armory, Warfare and Wizardry (D042): 1.4.2, 1.9.4 and 1.2.2 swap these
         // materials into recipes from Player.OnSpawned, which never runs on a dedicated server, so the authoritative
-        // server never observes their crafting use. Remove when those mods apply the swap at registration time or
-        // YAVSOS observes the effective recipes on the server.
+        // server never observes their crafting use. Removal condition: those mods apply the swap at registration time
+        // or YAVSOS observes the effective recipes on the server.
         Add("materials.crafting", "D042 E07 spawn-time recipe swap not visible to dedicated servers", Context.Resource,
             "Diamond_TW", "Onyx_TW", "FoxPelt_TW");
         // This named semantic association includes source-inspected drops owned by Warfare.

@@ -58,6 +58,24 @@ public sealed class LoadedSourceLimits
         MaxFacts = maxFacts; MaxScalarBytes = maxScalarBytes; StepsPerTick = stepsPerTick;
         SliceMilliseconds = sliceMilliseconds; BuildSeconds = buildSeconds;
     }
+#if YAVSOS_LAB
+    /// <summary>
+    /// X63 (D145), Lab build only: these limits with another slice per frame, above the production caps, so one Lab
+    /// build can measure larger slices on a dedicated server. Same bounds as <see cref="YAVSOS.Core.Catalog.CatalogLimits.WithLabSlice"/>.
+    /// </summary>
+    public LoadedSourceLimits WithLabSlice(int stepsPerTick, double sliceMilliseconds)
+    {
+        if (stepsPerTick < 1 || stepsPerTick > YAVSOS.Core.Catalog.CatalogLimits.LabMaxStepsPerTick || double.IsNaN(sliceMilliseconds) ||
+            sliceMilliseconds <= 0 || sliceMilliseconds > YAVSOS.Core.Catalog.CatalogLimits.LabMaxSliceMilliseconds)
+            throw new ArgumentOutOfRangeException(nameof(stepsPerTick), "Lab source slice out of range.");
+        return new LoadedSourceLimits(this, stepsPerTick, sliceMilliseconds);
+    }
+    private LoadedSourceLimits(LoadedSourceLimits limits, int stepsPerTick, double sliceMilliseconds)
+    {
+        MaxFacts = limits.MaxFacts; MaxScalarBytes = limits.MaxScalarBytes; StepsPerTick = stepsPerTick;
+        SliceMilliseconds = sliceMilliseconds; BuildSeconds = limits.BuildSeconds;
+    }
+#endif
 }
 
 /// <summary>Freshness is supplied by the main-thread host. This pure builder never accesses game objects.</summary>

@@ -49,15 +49,26 @@ public sealed class Plugin : BaseUnityPlugin
     private ClassificationHost classification = null!;
     private LoadedSourceHost sources = null!;
     private AssignmentHost assignments = null!;
+    private StageStateHost stages = null!;
     private readonly ClassificationTaxonomy defaultTaxonomy = DefaultClassificationTaxonomy.Create();
     private CategoryPolicy? taxonomyPolicy;
     private ClassificationTaxonomy? policyTaxonomy;
     internal ChestRuleStore ChestRules { get; private set; } = null!;
+    /// <summary>X32 (D154): rule edits on chests another game owns, and this game's answers as an owner.</summary>
+    internal Networking.RuleWriteChannel RuleWrites { get; private set; } = null!;
+    /// <summary>X23 (D157): the server's rule templates: its file and synced list, and admins' changes to it.</summary>
+    internal TemplateHost Templates { get; private set; } = null!;
+    /// <summary>X23 (D157, D166): the player's own rule templates, one file for every character on the PC.</summary>
+    internal PersonalTemplates PersonalTemplates { get; private set; } = null!;
     internal ChestRuleEvaluator RuleEvaluator { get; } = new ChestRuleEvaluator();
+    /// <summary>X60 (D155, D160): each container type's built-in filter, read once categories are ready.</summary>
+    internal StoreFilters StoreFilters { get; private set; } = null!;
+    private readonly ContainerFilterAnswers filterAnswers = new ContainerFilterAnswers();
     private RuleControls? ruleControls;
 #if YAVSOS_LAB
     internal RuleControls? RuleControlsForLab => ruleControls; // UiLab only.
     internal PluginSettings SettingsForLab => settings; // CleanupLab.Allow only.
+    internal BepInEx.Logging.ManualLogSource LogForLab => Logger; // StackLab (X65) and ThroughWallsLab (X66).
 #endif
     /// <summary>The chest rule panel's state, for the item tooltip's "where would it go" line (P6-23).</summary>
     internal RuleControls? RuleEditor => ruleControls;
@@ -79,14 +90,30 @@ public sealed class Plugin : BaseUnityPlugin
         };
         policy = new PolicyHost(sync, Paths.ConfigPath, Logger);
         policy.Published += ServerPolicyPublished;
+#if YAVSOS_LAB
+        SliceLab.Load(Logger); // X63 (D145): the Lab slice setting and frame sampler, before the hosts read it.
+#endif
         catalog = new LoadedCatalogHost(Logger);
         sources = new LoadedSourceHost(Logger);
-        classification = new ClassificationHost(Logger.LogInfo, Logger.LogWarning, policy.State, () => catalog.Current,
+        ClassificationCache? classificationCache = null;
+#if YAVSOS_LAB
+        classificationCache = Transfers.FaultLab.ClassificationCache(); // X62 lab check: a server held at a failed stage.
+#endif
+        classification = new ClassificationHost(Logger.LogInfo, Logger.LogWarning, policy.State, () => catalog.Current, classificationCache,
             getSources: () => sources.Current, requireSources: true);
         assignments = new AssignmentHost(sync, policy.State, Logger, () => catalog.Current, () => classification.Current, () => sources.Current);
+        stages = new StageStateHost(sync, policy.State, Logger, () => assignments.ServerSession, () => assignments.ReceivedSession, ServerStages);
         ChestRules = new ChestRuleStore(() => RuleTaxonomy, () => policy.State.PolicyReady);
+        RuleWrites = new Networking.RuleWriteChannel(Logger);
+        ChestRules.Remote = RuleWrites;
+        Templates = new TemplateHost(sync, Paths.ConfigPath, Logger);
+        PersonalTemplates = new PersonalTemplates(Paths.ConfigPath, Logger);
         settings = new PluginSettings(Config, sync, policy.State.SharedSettingsChanged);
+        if (settings.StackKeyMoved)
+            Logger.LogInfo("The stack key (Stash.SingleItemShortcut) moved once from middle mouse to its new default, Shift + middle mouse (D162). Set it back in the settings to keep middle mouse.");
         sharedEntries = settings.SharedEntries;
+        GameTakes.Initialize(Logger); // F14
+        StoreFilters = new StoreFilters(Logger); // X60
         Cleanup = new CleanupRunner(settings, Logger, Results);
         Stash = new StashRunner(settings, Logger, Results);
         Highlight = new ChestHighlight(Logger);
@@ -143,16 +170,31 @@ public sealed class Plugin : BaseUnityPlugin
         Texts.Listen();
         MucRoute.Initialize(Logger);
         Favorites.Initialize(Logger); // #64: other mods' favorites, bound by shape once every plugin has loaded (D058).
+        ZenSignSearchGuard.Initialize(Logger); // X68 (D162): bound on the first stack-key press.
         if (!ServerYavsosProbe.Supported) // D058: only detection is off; clients wait for server settings as before.
             Logger.LogWarning("Server detection turned off: the bundled ServerSync changed. On a server without YAVSOS chest rules stay off.");
         ruleControls?.Probe(); // D058: the styled panel's GUIManager members.
+        // X60 (D160 Q2): another mod's server settings (Storehouse's Accepts and Rows lists) change what its stores take, so
+        // the filters are read again when Jotunn says synced settings arrived. Jotunn is required; a changed event only
+        // means the filters are read once per session (D058).
+        try { Jotunn.Managers.SynchronizationManager.OnConfigurationSynchronized += (_, _) => StoreFilters?.Invalidate(); }
+        catch (Exception error) when (error is not OutOfMemoryException)
+        { Logger.LogWarning("Container filters are read once per session only: Jotunn's settings-sync event couldn't be joined (" + error.GetType().Name + ": " + error.Message + ")."); }
         _ = Highlight.Supported; // D058: the chest highlight's MaterialMan members.
     }
 
     private void Update()
     {
         var started = UiCost.Start(); // Lab cost scope (UiLab.CostStart); free when off.
+#if YAVSOS_LAB
+        // X63 (D145): frame sampler, on only with the Lab slices file on a dedicated server.
+        if (catalog != null && sources != null) SliceLab.Before(Time.realtimeSinceStartupAsDouble, ClassificationEvidenceReady, catalog.LabState, sources.LabState);
+#endif
         UpdateCore();
+#if YAVSOS_LAB
+        if (catalog != null && sources != null) SliceLab.After(catalog.LabState, sources.LabState);
+        Transfers.FaultLab.Update(ClassificationEvidenceReady, Logger); // X71 lab check: a failed rebuild after a good build.
+#endif
         UiCost.Stop("plugin update", started);
     }
 
@@ -163,13 +205,18 @@ public sealed class Plugin : BaseUnityPlugin
         sources?.Update(catalog?.Current);
         classification?.Update();
         assignments?.Update();
+        StoreFilters?.Update(ClassificationEvidenceReady, catalog?.Current); // X60: a little each frame once categories are ready.
+        stages?.Update(Time.realtimeSinceStartupAsDouble);
         if (activeNet != null) NativeInventoryProbe.Update(Logger.LogInfo, Logger.LogWarning);
         MucRoute.Update();
+        if (activeNet != null) RuleWrites?.Update();
+        if (activeNet != null) Templates?.Update(Time.unscaledTime);
         AzuStoreOrder.Look(); // X14: the store key's result, once what it stored has arrived.
         Cleanup?.Update();
         Cleanup?.WarmUp(); // P10-28: once per launch, after categories are first ready.
         Stash?.Update();
         Arrivals?.Update();
+        ZenSignSearchGuard.Update(settings.StashItemShortcut.Value.MainKey); // X68: a consumed stack-key click lasts until its release.
         if (Cleanup != null && !Cleanup.Running && CleanupTriggers.Pressed(settings.CleanupShortcut)) Cleanup.Start();
         else if (Cleanup != null && CleanupTriggers.PressedInInventory(settings.CleanupShortcut))
             GameText.Say(Message.Of("yavsos_cleanup_inventory_open").With("button", Texts.Get("yavsos_cleanup_button")), overInventory: true);
@@ -197,6 +244,9 @@ public sealed class Plugin : BaseUnityPlugin
         var started = UiCost.Start();
         ruleControls?.LateUpdate();
         UiCost.Stop("panel frame", started);
+        started = UiCost.Start();
+        Highlight?.LateUpdate(); // X66: glowing chests through walls, after this frame's painting.
+        UiCost.Stop("through walls", started);
     }
 
     internal void StartWorld(ZNet net)
@@ -207,27 +257,41 @@ public sealed class Plugin : BaseUnityPlugin
         classification.BeginSession(true);
         sources.BeginSession(true);
         assignments.BeginSession(true);
+        stages.BeginSession();
         settingsBridge.BeginSession();
+        StoreFilters.BeginSession();
         NativeInventoryProbe.BeginSession();
         sync.ModRequired = net.IsServer() && !ZNet.IsSinglePlayer;
         var mode = net.IsServer() ? ZNet.IsSinglePlayer ? PolicyMode.Standalone : PolicyMode.ManagedServer : PolicyMode.AwaitingServer;
         policy.BeginSession(mode);
+        RuleWrites?.StartWorld();
+        Templates?.StartWorld(net);
+#if YAVSOS_LAB
+        SliceLab.BeginWorld(net.IsDedicated(), Time.realtimeSinceStartupAsDouble);
+#endif
     }
 
     internal void EndWorld(ZNet net)
     {
         if (!ReferenceEquals(activeNet, net)) return;
         activeNet = null;
+#if YAVSOS_LAB
+        SliceLab.EndWorld(Time.realtimeSinceStartupAsDouble);
+#endif
         Cleanup?.EndWorld();
         Stash?.EndWorld();
+        RuleWrites?.EndWorld();
+        Templates?.EndWorld();
         Results.Dismiss();
         Arrivals?.Clear();
-        Highlight?.Clear();
+        Highlight?.EndWorld();
         catalog.BeginSession(false);
         classification.BeginSession(false);
         sources.BeginSession(false);
         assignments.BeginSession(false);
+        stages.BeginSession();
         settingsBridge.BeginSession();
+        StoreFilters.BeginSession();
         activeServerPeer = null;
         peerGate.Clear();
         policy.BeginSession(PolicyMode.Offline);
@@ -237,12 +301,15 @@ public sealed class Plugin : BaseUnityPlugin
     internal void StartConnection(ZNet net, ZNetPeer peer)
     {
         StartWorld(net);
+        Templates?.Connected(net, peer); // X23: change requests on the server, answers on a client's server connection.
         if (net.IsServer() || ReferenceEquals(activeServerPeer, peer)) return;
         activeServerPeer = peer;
         catalog.BeginSession(true);
         classification.BeginSession(true);
         sources.BeginSession(true);
         assignments.BeginSession(true);
+        stages.BeginSession();
+        StoreFilters.BeginSession();
         peerGate.Replace(peer.m_rpc);
         policy.BeginSession(PolicyMode.AwaitingServer);
     }
@@ -362,7 +429,14 @@ public sealed class Plugin : BaseUnityPlugin
     // Per-item server authority (D042): the server row, or Misc for a local item the server did not classify.
     // Null until categories are ready; kept through a catalog/source rebuild (D049). Unity thread only.
     internal ClassificationResult? ResolveCategories(string prefab) => assignments?.Answers.Resolve(prefab);
-    internal ICategoryAnswers? CategoryAnswers => assignments?.Answers;
+    /// <summary>
+    /// The category answers rules and the planners use: the server's (or this game's), with each item's container-filter
+    /// categories added (X60). A rule part naming a filter category waits until the filters are read.
+    /// </summary>
+    internal ICategoryAnswers? CategoryAnswers => assignments?.Answers is { } answers
+        ? filterAnswers.Over(answers, StoreFilters?.Current, StoreFilters?.Pending != false) : null;
+    /// <summary>The answers without the container-filter categories: item tooltips and the panel's suggestions (X60).</summary>
+    internal ICategoryAnswers? BaseCategoryAnswers => assignments?.Answers;
     internal bool EpicLootRarityOffered => sources?.EpicLootRarityOffered == true;
     /// <summary>D071 status mark: EpicLoot's verified reader, or Absent before sources are captured.</summary>
     internal OptionalCapabilityState EpicLootState => sources?.EpicLootState ?? OptionalCapabilityState.Absent;
@@ -372,14 +446,42 @@ public sealed class Plugin : BaseUnityPlugin
     internal string? CategoriesGaveUp => catalog?.GaveUp ?? (ManagedClient ? null : sources?.GaveUp ?? classification?.GaveUp);
     /// <summary>A client of a managed server: the server's settings are announced (accepted or not).</summary>
     internal bool ManagedClient => policy.State.Mode == PolicyMode.ManagedClient;
+    /// <summary>
+    /// X62 (D145): on a client of a managed server, the server says its categories failed and wait for a slow retry, and
+    /// this client's categories aren't ready. False when the server sent nothing, or nothing this version can read.
+    /// </summary>
+    internal bool CategoriesServerFailed => YAVSOS.Core.Interface.CategoryWait.ServerFailed(ManagedClient, ClassificationEvidenceReady, stages?.Current);
+    /// <summary>
+    /// X71 (D159): why categories aren't ready (still loading, the server couldn't build them, or this game couldn't), so
+    /// the messages, the bracketed reasons and the item tooltip's where-line say what the Categories mark says.
+    /// </summary>
+    internal CategoryWaitState CategoriesWait =>
+        YAVSOS.Core.Interface.CategoryWait.State(ManagedClient, ClassificationEvidenceReady, CategoriesGaveUp != null, stages?.Current);
+    /// <summary>
+    /// X71 (D159): on a client, the last good categories still work while the server says its latest rebuild failed;
+    /// the Categories mark adds an amber line.
+    /// </summary>
+    internal bool CategoriesServerRebuildFailed =>
+        YAVSOS.Core.Interface.CategoryWait.ServerRebuildFailed(ManagedClient, ClassificationEvidenceReady, stages?.Current);
+    // X62: what a managed server publishes about its stages, read from the hosts each frame.
+    private ServerStageReport ServerStages() => ServerStageReport.Of(ClassificationEvidenceReady && !CategoriesRebuilding,
+        new StageFacts(catalog.Current != null, catalog.GaveUp, catalog.RetryInSeconds),
+        new StageFacts(sources.Current != null, sources.GaveUp, sources.RetryInSeconds),
+        new StageFacts(classification.Current != null, classification.GaveUp, classification.RetryInSeconds),
+        new StageFacts(assignments.Current?.CategoriesReady == true, assignments.SnapshotFailure, assignments.SnapshotRetryInSeconds));
     /// <summary>D071 status mark, B4.9: the server's category settings apply: managed and accepted, not merely announced.</summary>
     internal bool PolicyFromServer => ManagedClient && policy.State.PolicyReady;
     internal bool ServerPolicyRejected => policy.State.RemoteRejected;
-    internal int CategoryMemberCount(string category) => assignments?.CategoryMemberCount(category) ?? 0;
+    internal int CategoryMemberCount(string category) =>
+        StoreFilters?.Current.ForCategory(category)?.Count ?? assignments?.CategoryMemberCount(category) ?? 0;
     internal bool CategoriesRebuilding => assignments?.CategoriesRebuilding == true;
     // Chest rules parse against the effective policy's category set, or the default set before the policy
     // arrives; a rule naming a category outside it is unreadable and accepts nothing (D048).
-    internal ClassificationTaxonomy RuleTaxonomy
+    // X60: with a category per container filter added once the filters are read (ContainerFilterSet.Extend, same object
+    // while neither changes).
+    internal ClassificationTaxonomy RuleTaxonomy => StoreFilters?.Current is { } filters ? filters.Extend(PolicyTaxonomy) : PolicyTaxonomy;
+
+    private ClassificationTaxonomy PolicyTaxonomy
     {
         get
         {
@@ -389,6 +491,26 @@ public sealed class Plugin : BaseUnityPlugin
             return policyTaxonomy!;
         }
     }
+
+    /// <summary>
+    /// X60 (D155, D160): the rule every reader uses for <paramref name="container"/> and its type's filter. A filtering
+    /// container with no YAVSOS rule acts as if its own category were ticked at the server's Storehouse.DefaultPriority
+    /// (while Storehouse.AutomaticRules is on); nothing is saved. Otherwise its stored payload. A container whose type has
+    /// no filter, or before the filters are read, is as before.
+    /// </summary>
+    internal (string Payload, ContainerFilter? Filter) RuleOf(Container container)
+    {
+        var stored = ChestRuleStore.Payload(container);
+        var filter = StoreFilters?.For(container);
+        if (filter == null) return (stored, null);
+        return (AutomaticPayload(filter, stored) ?? stored, filter);
+    }
+
+    /// <summary>The automatic rule's payload when <paramref name="stored"/> is no rule and the automatic rules are on; else null.</summary>
+    internal string? AutomaticPayload(ContainerFilter filter, string stored) =>
+        settings.StoreAutomaticRules.Value && RuleEvaluator.Unruled(stored, RuleTaxonomy)
+            ? StoreFilters.Current.AutomaticPayload(filter, YAVSOS.Core.Interface.ChestPriority.Rank(settings.StoreDefaultPriority.Value), PolicyTaxonomy)
+            : null;
     internal bool ClassificationEvidenceReady => assignments?.Answers.CategoriesReady == true;
     internal long? CaptureSettingsUpdate(long sender, ZPackage package)
     {
@@ -422,6 +544,8 @@ public sealed class Plugin : BaseUnityPlugin
         classification?.Dispose();
         sources?.Dispose();
         assignments?.Dispose();
+        stages?.Dispose();
+        Templates?.Dispose();
         harmony?.UnpatchSelf();
         YAVSOS.Vendor.MultiUserChest.BundledCopy.Deactivate();
     }

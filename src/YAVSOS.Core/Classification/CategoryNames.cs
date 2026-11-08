@@ -35,6 +35,9 @@ public sealed class CategoryNames
         return text;
     }
 
+    /// <summary>Formats another tree text with the same formatter (D163: a heading row's text).</summary>
+    public string Format(Message message) => format(message ?? throw new ArgumentNullException(nameof(message)));
+
     /// <summary>
     /// The name to put in a message or list: a <see cref="Message"/> for a built-in or Other subcategory, else the
     /// <see cref="string"/> as written (like <see cref="MessageList"/> items).

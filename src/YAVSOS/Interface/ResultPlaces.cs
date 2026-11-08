@@ -11,9 +11,9 @@ namespace YAVSOS.Interface;
 
 /// <summary>
 /// X55 (D130 variant A): names the chests and drawers a run's result lists, the way the where-line and the chest label
-/// already name them: the open chest, otherwise the game's name and distance (<see cref="CleanupRunner.ChestNamer"/>),
-/// then the chest label when the chest has a rule and ShowChestLabels is on. A RossItemDrawers drawer is named by its
-/// own hover name ("Item Drawer"), since its chest name may be the base chest's. Asked once per shown line when a
+/// already name them: the open chest, otherwise the game's name, flat distance and place in its stack (X65,
+/// <see cref="CleanupRunner.ChestNamer"/>), then the chest label when the chest has a rule and ShowChestLabels is on.
+/// A RossItemDrawers drawer is named by its own hover name ("Item Drawer"), since its chest name may be the base chest's. Asked once per shown line when a
 /// result is published (<see cref="RunReport.Detail"/>), so the distance is from where the player is then. Read only.
 /// Unity game thread only.
 /// </summary>
@@ -40,8 +40,8 @@ internal static class ResultPlaces
             if (!chests.TryGetValue(id, out var chest) || !chest) return null;
             var name = chestName(id);
             if (RossItemDrawersIntegration.IsDrawer(chest))
-                return ResultPlace.Of(name == null || name.IsOpen ? name : ChestName.Away(Texts.Escape(DrawerName(chest, name.Name)), name.Meters));
-            if (name != null && !name.IsOpen) name = ChestName.Away(Texts.Escape(name.Name), name.Meters);
+                return ResultPlace.Of(name == null || name.IsOpen ? name : name.Named(Texts.Escape(DrawerName(chest, name.Name))));
+            if (name != null && !name.IsOpen) name = name.Named(Texts.Escape(name.Name)); // X65: keeps its place in its stack.
             return ResultPlace.Of(name, Label(plugin, chest));
         };
     }

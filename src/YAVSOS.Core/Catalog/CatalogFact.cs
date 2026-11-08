@@ -69,4 +69,25 @@ public sealed class CatalogLimits
         StepsPerTick = stepsPerTick; SliceMilliseconds = sliceMilliseconds; BuildSeconds = buildSeconds;
     }
     private static bool Finite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
+#if YAVSOS_LAB
+    /// <summary>X63 (D145) measurement, Lab build only: the largest slice <see cref="WithLabSlice"/> accepts.</summary>
+    public const int LabMaxStepsPerTick = 4096;
+    public const double LabMaxSliceMilliseconds = 50;
+    /// <summary>
+    /// X63 (D145), Lab build only: these limits with another slice per frame, above the production caps, so one Lab
+    /// build can measure larger slices on a dedicated server. The release DLL has no way past the caps.
+    /// </summary>
+    public CatalogLimits WithLabSlice(int stepsPerTick, double sliceMilliseconds)
+    {
+        if (stepsPerTick < 1 || stepsPerTick > LabMaxStepsPerTick || !Finite(sliceMilliseconds) || sliceMilliseconds <= 0 ||
+            sliceMilliseconds > LabMaxSliceMilliseconds)
+            throw new ArgumentOutOfRangeException(nameof(stepsPerTick), "Lab catalog slice out of range.");
+        return new CatalogLimits(this, stepsPerTick, sliceMilliseconds);
+    }
+    private CatalogLimits(CatalogLimits limits, int stepsPerTick, double sliceMilliseconds)
+    {
+        MaxItems = limits.MaxItems; MaxRecipes = limits.MaxRecipes; MaxRows = limits.MaxRows; MaxScalarBytes = limits.MaxScalarBytes;
+        StepsPerTick = stepsPerTick; SliceMilliseconds = sliceMilliseconds; BuildSeconds = limits.BuildSeconds;
+    }
+#endif
 }

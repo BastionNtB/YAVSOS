@@ -110,14 +110,14 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         // D056: with Azu present, its exclusions must be readable; cleanup never bypasses them.
         if (AzuExclusions.State == AzuExclusionState.Unavailable) return Refuse("yavsos_cleanup_azu_unreadable");
         var answers = plugin.CategoryAnswers;
-        if (answers == null || !answers.CategoriesReady) return Refuse("yavsos_run_categories_loading");
+        if (answers == null || !answers.CategoriesReady) return Refuse(CategoryWait.Run(plugin.CategoriesWait)); // X62
         var range = Math.Min(radius ?? settings.EffectiveCleanupRange, settings.MaximumRange.Value);
         var run = new Run { Session = ZNet.instance, Radius = range, Adapter = new GameInventorySnapshotAdapter(), Chests = new Dictionary<string, Container>(StringComparer.Ordinal) };
         var timed = UiCost.Start();
         var input = Gather(plugin, answers, player, run, out var unreadable, out var mucSource);
         UiCost.Stop("cleanup gather", timed); // A2-01: the gather's share of the logged plan time.
         var plan = CleanupPlanner.Plan(input, plugin.RuleEvaluator);
-        if (plan.CategoriesPending) { run.Adapter.Dispose(); return Refuse("yavsos_run_categories_loading"); }
+        if (plan.CategoriesPending) { run.Adapter.Dispose(); return Refuse(CategoryWait.Run(plugin.CategoriesWait)); }
         run.Plan = plan;
         foreach (var rest in plan.Remainders)
         {
@@ -237,9 +237,11 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
                 if (LogLimit(id + "|" + skipped) is { } more)
                     log.LogInfo($"Cleanup leaves {skipped} in {GameText.Localize(container.m_name)} at {container.transform.position}: YAVSOS can't move it without changing it." + more);
             var player = Player.m_localPlayer;
-            chests.Add(new CleanupChest(id, ChestRuleStore.Payload(container), capture.Snapshot, view.IsOwner(), ChestRuleStore.CleanupOptOut(container),
+            // X60: the automatic rule of a store without a YAVSOS rule, and its type's filter (narrow only, D160).
+            var (payload, filter) = Plugin.Instance!.RuleOf(container);
+            chests.Add(new CleanupChest(id, payload, capture.Snapshot, view.IsOwner(), ChestRuleStore.CleanupOptOut(container),
                 player ? Vector3.Distance(player.transform.position, container.transform.position) : 0,
-                view.IsOwner() ? OwnerMucState.Usable : MucRoute.OwnerState(zdo.GetOwner())));
+                view.IsOwner() ? OwnerMucState.Usable : MucRoute.OwnerState(zdo.GetOwner()), filter));
             run.Chests.Add(id, container);
             if (drag != null && run.Adapter.TryHandle(container.GetInventory(), drag, out var handle)) held.Add(handle);
             return true;
@@ -263,21 +265,35 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         // P6-07b: each stack's own rarity and condition, read once per stack for the planner's instance filters.
         var adapter = run.Adapter;
         var facets = new Dictionary<Guid, IReadOnlyList<FacetEvidence>>(); Dictionary<Guid, Inventory>? holders = null;
-        IReadOnlyList<FacetEvidence> Facets(TransferStack stack)
+        // The live item of a captured stack, from the inventory that holds it.
+        ItemDrop.ItemData? Live(TransferStack stack)
         {
-            if (facets.TryGetValue(stack.Handle, out var known)) return known;
             if (holders == null)
             {
                 holders = new Dictionary<Guid, Inventory>();
                 foreach (var chest in chests) { var inventory = found[chest.Id].GetInventory(); foreach (var row in chest.Inventory.Stacks) holders[row.Handle] = inventory; }
             }
-            known = holders.TryGetValue(stack.Handle, out var holder) && adapter.TryItem(holder, stack.Handle, out var item)
-                ? plugin.InstanceFacets(item, answers) : Plugin.UnreadableFacets(stack.Identity.Prefab, answers);
+            return holders.TryGetValue(stack.Handle, out var holder) && adapter.TryItem(holder, stack.Handle, out var item) ? item : null;
+        }
+        IReadOnlyList<FacetEvidence> Facets(TransferStack stack)
+        {
+            if (facets.TryGetValue(stack.Handle, out var known)) return known;
+            known = Live(stack) is { } item ? plugin.InstanceFacets(item, answers) : Plugin.UnreadableFacets(stack.Identity.Prefab, answers);
             facets.Add(stack.Handle, known);
             return known;
         }
+        // F14: the destination's own answer for one unit; no answer (check off, item unresolved) counts as "takes".
+        Func<string, TransferStack, bool>? takes = GameTakes.Usable
+            ? (chest, stack) => GameTakes.Takes(found[chest].GetInventory(), Live(stack)) != false : null;
+        // X67 (D156): the server's source limit; the chest-limit reason names it.
+        var sources = settings.EffectiveMaximumSources;
+#if YAVSOS_LAB
+        if (FaultLab.SourceLimit > 0) sources = Math.Min(sources, FaultLab.SourceLimit); // Lab-only lower limit.
+#endif
+        RunReport.SourcesPerRun = sources;
         return new CleanupInput(plugin.RuleTaxonomy, answers, chests, plugin.CategoryMemberCount, mucAvailable: muc, azuAllows: azu, held: held, instanceFacets: Facets,
-            timed: UiCost.Timer("cleanup plan ")); // A2-01 part 2: Lab only; null in the release build.
+            timed: UiCost.Timer("cleanup plan "), takes: takes, categoriesWait: plugin.CategoriesWait, // A2-01 part 2: timed is Lab only; null in the release build. X71: the wait.
+            maximumChests: settings.EffectiveMaximumChests, maximumSources: sources);
     }
 
     /// <summary>
@@ -380,17 +396,21 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     /// The open chest, otherwise the chest's name and distance ("Chest 6 m away"), since many chests share a name; null
     /// for a chest no longer there ("a chest nearby"). Typed (inventory case 3), so no answer compares English words.
     /// X16: the distance is from where the player is when a name is asked for, so a line rebuilt later follows them.
+    /// X65 (D163): the distance is flat, and a chest in a stack says its place in it ("…, 2 of 3 from the bottom"); the
+    /// stacks are found once per namer, at its first name (<see cref="ChestStackPlaces"/>), since chests don't move.
     /// </summary>
     internal static Func<string, ChestName?> ChestNamer(Player player, Container? open, IReadOnlyDictionary<string, Container> chests)
     {
         var last = player.transform.position;
+        Dictionary<Container, StackPlace>? stacks = null;
         return id =>
         {
             if (!chests.TryGetValue(id, out var container) || !container) return null;
             if (ReferenceEquals(container, open)) return ChestName.Open;
             if (player) last = player.transform.position; // Gone (logout, death): the last place seen.
-            return ChestName.Away(GameText.Localize(container.m_name),
-                (long)Math.Round(Vector3.Distance(last, container.transform.position), MidpointRounding.AwayFromZero));
+            stacks ??= ChestStackPlaces.Of(chests.Values);
+            stacks.TryGetValue(container, out var place);
+            return ChestName.Away(GameText.Localize(container.m_name), ChestStackPlaces.Across(last, container.transform.position), place);
         };
     }
 
@@ -503,10 +523,13 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
         var prefab = move.Identity.Prefab; var taxonomy = plugin.RuleTaxonomy;
         // The stack's current rarity and condition (P6-07b), as planned; a stack gone since is refused at the write.
         var item = run.Adapter.TryItem(source.GetInventory(), move.Handle, out var live) ? live : null;
-        var destinationPayload = ChestRuleStore.Payload(destination); var sourcePayload = ChestRuleStore.Payload(source);
-        if (plugin.RuleEvaluator.Evaluate(destinationPayload, prefab, taxonomy, answers, plugin.InstanceFacetsFor(destinationPayload, prefab, item, answers)) != ChestRuleDecision.Accept)
+        // X60: the rules the plan used (a store's automatic rule) and each side's filter, narrow only (D160).
+        var (destinationPayload, destinationFilter) = plugin.RuleOf(destination); var (sourcePayload, sourceFilter) = plugin.RuleOf(source);
+        if (ContainerFilter.Narrow(plugin.RuleEvaluator.Evaluate(destinationPayload, prefab, taxonomy, answers, plugin.InstanceFacetsFor(destinationPayload, prefab, item, answers)),
+                destinationFilter, prefab) != ChestRuleDecision.Accept)
             return TransferRefusal.RuleMismatch;
-        var decision = plugin.RuleEvaluator.Evaluate(sourcePayload, prefab, taxonomy, answers, plugin.InstanceFacetsFor(sourcePayload, prefab, item, answers));
+        var decision = ContainerFilter.Narrow(plugin.RuleEvaluator.Evaluate(sourcePayload, prefab, taxonomy, answers, plugin.InstanceFacetsFor(sourcePayload, prefab, item, answers)),
+            sourceFilter, prefab);
         var expected = move.Kind switch { CleanupKind.Rejected => ChestRuleDecision.Reject, CleanupKind.Unruled => ChestRuleDecision.NoRule, _ => ChestRuleDecision.Accept };
         if (decision != expected) return TransferRefusal.RuleMismatch;
         // A re-sort must still go to a strictly better-ranked chest, as the plan decided (D061, D092).
@@ -521,8 +544,8 @@ internal sealed class CleanupRunner : MoveRunner<CleanupMove, CleanupRunner.Run>
     {
         var item = answers.Resolve(prefab);
         var facets = live == null ? Plugin.UnreadableFacets(prefab, answers) : plugin.InstanceFacets(live, answers);
-        var sourceRules = plugin.RuleEvaluator.Read(ChestRuleStore.Payload(source), taxonomy).Rules;
-        var destinationRules = plugin.RuleEvaluator.Read(ChestRuleStore.Payload(destination), taxonomy).Rules;
+        var sourceRules = plugin.RuleEvaluator.Read(plugin.RuleOf(source).Payload, taxonomy).Rules;
+        var destinationRules = plugin.RuleEvaluator.Read(plugin.RuleOf(destination).Payload, taxonomy).Rules;
         return sourceRules != null && destinationRules != null &&
             CleanupPlanner.ResortStillBetter(item, prefab, sourceRules, destinationRules, facets, taxonomy);
     }

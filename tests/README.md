@@ -17,6 +17,6 @@ planning, move results and the MultiUserChest observer, the client/server policy
 exchange (formats, versions, stale or malformed data), capability checks for optional mods,
 and the panel's text and layout rules.
 
-Passing tests prove that behaviour, not runtime compatibility. Game hooks, other mods,
+Passing tests prove that behavior, not runtime compatibility. Game hooks, other mods,
 ServerSync, and anything that moves items between players also need runtime checks in the
 game; a change to those paths should say which checks it ran (see `CONTRIBUTING.md`).

@@ -31,6 +31,8 @@ public sealed class ClassificationCache : IDisposable
     private readonly StageRetry retry = new StageRetry(0, 0, 1000);
     /// <summary>Failed builds since the inputs last changed.</summary>
     public int Retries => retry.Attempts;
+    /// <summary>X62: seconds until the next retry; negative when none is scheduled.</summary>
+    public double RetryInSeconds => retry.SecondsUntil(clock());
     public ClassificationState State { get; private set; }
     public ClassifiedCatalog? Current { get; private set; }
     public long Revision => revision;

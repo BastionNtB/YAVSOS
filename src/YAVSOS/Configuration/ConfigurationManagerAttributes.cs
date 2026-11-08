@@ -11,6 +11,9 @@ internal sealed class ConfigurationManagerAttributes
     /// <summary>Shown but not editable (D079: settings for behaviour another installed mod takes over).</summary>
     public bool? ReadOnly;
 
+    /// <summary>False: not listed (X68: YAVSOS's own record of one-time setting moves, which isn't a setting).</summary>
+    public bool? Browsable;
+
     /// <summary>
     /// P10-04 (EXTRACTION-TOOL-CHECK §3, route A): the description in the player's language. The bound description stays
     /// English, so the <c>.cfg</c> file and <c>docs/SETTINGS.md</c> stay English. A Configuration Manager that reads only

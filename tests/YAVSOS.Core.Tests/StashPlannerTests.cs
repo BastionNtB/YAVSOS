@@ -85,6 +85,46 @@ public sealed class StashPlannerTests
         Func<string, int>? size = null) =>
         StashPlanner.Plan(new StashInput(Taxonomy, answers ?? new Answers(), world.Player.Snapshot(), world.Snapshot(), size, muc, held, only));
 
+    private static StashPlan PlanTaking(World world, Func<string, TransferStack, bool> takes) =>
+        StashPlanner.Plan(new StashInput(Taxonomy, new Answers(), world.Player.Snapshot(), world.Snapshot(), takes: takes));
+
+    // F14 (D129): a chest whose own check refuses the item drops out; the stack goes whole to the next ranked chest, or,
+    // with none left, stays without a report, as an item no chest takes.
+    [Fact]
+    public void Takes_RefusingChest_IsSkipped_TheStackGoesOnOrStaysSilently()
+    {
+        var world = new World();
+        var copper = Put(world.Player, "Copper", 20, y: 1, crafter: 3);
+        world.Add("a-materials", Rule(new[] { "materials" }));
+        world.Add("b-metal", Rule(new[] { "materials.metal" }));
+        Assert.Equal("b-metal", Assert.Single(Plan(world).Moves).DestinationId);
+        var move = Assert.Single(PlanTaking(world, (chest, _) => chest != "b-metal").Moves);
+        Assert.Equal(("a-materials", 20, copper.Handle), (move.DestinationId, move.Units, move.Handle));
+        Assert.Same(copper.Identity, move.Identity);
+        var none = PlanTaking(world, (_, _) => false);
+        Assert.Empty(none.Moves); Assert.Empty(none.Remainders);
+        Assert.Equal(ChestVerdict.Refused, PlacementExplainer.Stash(new StashInput(Taxonomy, new Answers(), world.Player.Snapshot(), world.Snapshot(),
+            takes: (chest, _) => chest != "b-metal"), copper.Handle).Chests.Single(x => x.ChestId == "b-metal").Verdict);
+    }
+
+    // F14: an unruled chest that holds the item but refuses more of it gets nothing; a full chest isn't asked.
+    [Fact]
+    public void Takes_RefusingHolder_GetsNothing_AndAFullChestIsNotAsked()
+    {
+        var world = new World();
+        Put(world.Player, "Copper", 20, y: 1);
+        Put(world.Add("box", ""), "Copper", 3);
+        Assert.Single(Plan(world).Moves);
+        Assert.Empty(PlanTaking(world, (_, _) => false).Moves);
+        var full = new World();
+        Put(full.Player, "Copper", 20, y: 1);
+        Put(full.Add("metal", Rule(new[] { "materials.metal" }), width: 1), "Copper", 50);
+        var asked = 0;
+        var plan = PlanTaking(full, (_, _) => { asked++; return false; });
+        Assert.Equal(0, asked);
+        Assert.Equal(RunReason.NoCapacity, Assert.Single(plan.Remainders).Reason);
+    }
+
     [Fact]
     public void EmptyRuledChest_ReceivesItsCategory_AndUnwantedItemsStaySilently()
     {

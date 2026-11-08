@@ -52,6 +52,13 @@ internal sealed class AssignmentHost : IDisposable
     internal ICategoryAnswers Answers => answers;
     internal int CategoryMemberCount(string category) => answers.MemberCount(category);
     internal bool CategoriesRebuilding => answers.Rebuilding;
+    /// <summary>X62: this server's session for its publications, which the stage state shares.</summary>
+    internal string ServerSession => serverSession;
+    /// <summary>X62: on a client, the server session its assignment value is bound to; null before the first valid one.</summary>
+    internal string? ReceivedSession => receiver.Session;
+    /// <summary>X62: the snapshot stage failed and waits for its retry (D144): the reason, else null.</summary>
+    internal string? SnapshotFailure => exchange.Faulted ? exchange.Diagnostic : null;
+    internal double SnapshotRetryInSeconds => exchange.RetryInSeconds;
 
     internal AssignmentHost(ConfigSync sync, PolicyLifecycle policy, ManualLogSource log,
         Func<CatalogSnapshot?> getCatalog, Func<ClassifiedCatalog?> getClassification, Func<ClassificationSourceSnapshot?> getSources)

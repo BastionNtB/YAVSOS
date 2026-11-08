@@ -63,6 +63,16 @@ public static class HighlightText
     }
 
     /// <summary>
+    /// X65 (D163): another chest in the status line's tooltip, "Reinforced chest 6 m", or with its place in its stack,
+    /// "Reinforced chest 6 m, 2 of 3 from the bottom". <paramref name="chest"/> is its name in the player's language, safe
+    /// for rich text; <paramref name="meters"/> its flat distance (<see cref="ChestPlaceText.Across"/>).
+    /// </summary>
+    public static Message TipChest(string chest, long meters, StackPlace stack) =>
+        ChestPlaceText.Stack(stack) is { } place
+            ? Message.Of("yavsos_search_tip_chest_at").With("chest", chest ?? "").With("meters", meters).With("place", place)
+            : Message.Of("yavsos_search_tip_chest").With("chest", chest ?? "").With("meters", meters);
+
+    /// <summary>
     /// Names for a label or heading: the first <paramref name="shown"/> distinct names, then "+N more". Null without
     /// names. The names are already in the player's language (and safe for rich text where the caller needs it).
     /// </summary>

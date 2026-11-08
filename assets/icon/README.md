@@ -9,7 +9,7 @@ drafting). Not derived from any other mod's artwork.
 | `icon.png` | 256×256, the file Thunderstore and Hexium packages need as `icon.png`. |
 | `yavsos-icon-1024.png` | 1024×1024 for the Nexus page and any large use. |
 
-Design: the Valheim chest silhouette (wide, flaring toward the floor, overhanging lid, centre
+Design: the Valheim chest silhouette (wide, flaring toward the floor, overhanging lid, center
 ring with hasp, side rings as flat bumps) with a hand-drawn fork rune carved over the ring.
 The fork is the first letter of YAVSOS and one path splitting in two, which is what sorting
 does.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.1 (2026-11-20)
+
+Increased future-proof compatibility! Smarter search!
+
+### Mod compatibility
+
+- **Increased AzuAutoStore compatibility.** Chest rules will keep working through more AzuAutoStore updates.
+- **EpicLoot rarities from EpicLoot.** The rarity filter now picks up new EpicLoot rarities by itself.
+- **Game updates.** Stashing and cleanup will keep working through more Valheim updates.
+
+### Fixed
+
+- **Category search.** Fixed search listing unrelated items, such as Forest items when searching "ores".
+- **Very large mod packs.** Fixed the panel turning off in mod packs with more than 8,192 items.
+
 ## 1.3.0 (2026-11-08)
 
 Templates! Full multiplayer rule editing! Storehouse mod support!

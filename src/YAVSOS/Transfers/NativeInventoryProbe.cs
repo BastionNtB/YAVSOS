@@ -9,9 +9,10 @@ namespace YAVSOS.Transfers;
 /// <summary>
 /// Startup capability check for the exact native inventory reader (D057 O12, D058), replacing the former game-version
 /// pin. Once per world, after ObjectDB has items, it builds a detached inventory from real loaded items with quality,
-/// durability, crafter, world level, flags and custom data, saves it, validates the bytes with
-/// <see cref="NativeTransferInventoryCodec"/>, loads them into a second inventory and requires every identity, cell and
-/// the re-saved bytes to match exactly. Custom data another mod adds on load is allowed when everything of ours survives
+/// durability, crafter, world level, flags and custom data, saves it with the game's own code, loads the bytes into a
+/// second inventory and requires every identity, cell and the re-saved bytes to match exactly. The save format's
+/// layout and number are the game's: no decoder of YAVSOS's reads them, so a new format that still round-trips items
+/// exactly keeps stash and cleanup on (#101, D171). Custom data another mod adds on load is allowed when everything of ours survives
 /// unchanged and a second round trip is byte-identical. On failure only the features that capture inventories (YAVSOS's
 /// own stash and cleanup) are disabled (B4.6).
 /// Instance metadata of real items, including EpicLoot data, is still round-tripped per item at every capture.
@@ -64,7 +65,6 @@ internal static class NativeInventoryProbe
         Place(source, Sample(gear, 1, true), 2, 1);
 
         var saved = new ZPackage(); source.Save(saved); var bytes = saved.GetArray();
-        NativeTransferInventoryCodec.Validate(bytes, width, height, Limits);
         var loaded = RoundTrip(bytes, width, height, out var resaved);
         var before = source.GetAllItems();
         var added = new SortedSet<string>(StringComparer.Ordinal);
@@ -81,7 +81,6 @@ internal static class NativeInventoryProbe
         }
         if (added.Count == 0 && !resaved.SequenceEqual(bytes)) throw new InvalidOperationException("re-saved bytes differ");
         // Whatever the load added must be settled: a second round trip changes nothing at all.
-        NativeTransferInventoryCodec.Validate(resaved, width, height, Limits);
         var again = RoundTrip(resaved, width, height, out var resavedAgain);
         if (!resavedAgain.SequenceEqual(resaved)) throw new InvalidOperationException("re-saved bytes keep changing");
         foreach (var item in loaded.GetAllItems())
@@ -131,13 +130,5 @@ internal static class NativeInventoryProbe
     {
         if (!inventory.AddItem(item, new Vector2i(x, y)) || inventory.GetItemAt(x, y) != item)
             throw new InvalidOperationException("could not place " + item.m_dropPrefab.name);
-    }
-
-    private static NativeTransferPrefabLimits? Limits(int hash)
-    {
-        var prefab = ObjectDB.instance.GetItemPrefab(hash);
-        var data = prefab ? prefab.GetComponent<ItemDrop>()?.m_itemData : null;
-        return data?.m_shared == null ? null
-            : new NativeTransferPrefabLimits(data.m_shared.m_maxStackSize, data.m_shared.m_maxQuality, data.m_shared.m_variants);
     }
 }

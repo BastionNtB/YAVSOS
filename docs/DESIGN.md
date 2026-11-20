@@ -124,9 +124,19 @@ as its rule. The alternative, a list of supported chests, would miss every new m
 
 **The runtime backstop refuses one write, not the mod.** If AzuAutoStore writes into a chest
 with a rule by a path the rule did not approve, YAVSOS refuses that write and the item stays
-with the player. It logs once per path and keeps the integration running. Only the startup
-checks turn an integration off. Disabling the integration on the first surprise was rejected:
-one unusual path would make the whole mod useless.
+with the player. It logs once per path and keeps the integration running. A write path that AzuAutoStore
+added since the reviewed version is watched too, but its writes into a chest whose rule
+doesn't accept the item are only logged: YAVSOS can't tell whether refusing would lose the
+item on a path nobody has checked, and a misplaced item is the safer failure.
+Disabling the integration on the first surprise was rejected: one unusual path would make
+the whole mod useless.
+
+**Each AzuAutoStore hook has its own startup check.** When AzuAutoStore's code changes, only
+the hook whose check fails turns off: empty chests stop attracting items, or ground pickup
+stops asking rules, while rules keep other items out. Only a missing store call turns the
+whole integration off. A list of AzuAutoStore's write paths and chest types is compared for
+the log only. Turning everything off on any difference was rejected (D171): it pinned one
+AzuAutoStore release, and a missed path can misplace an item but not lose one.
 
 **A per-item round trip guards moves into another player's chest.** Such an item travels in
 the game's save format. Each one is saved and loaded before it moves. A durability change of
@@ -220,6 +230,15 @@ damaged, EpicLoot rarity, crafted by). Never always wins. Always accepts the ite
 no ticked category or filter does. The editor offers only the filters and values that the
 ticked categories' items can have. A stack filter that can't read its evidence at that moment
 rejects the stack, so a "plain" rarity rule never accepts an item it could not check.
+
+**EpicLoot's rarities come from EpicLoot.** The rarity filter offers the rarities the loaded
+EpicLoot declares, so a rarity a later EpicLoot adds becomes a filter value by itself, and its
+dust, shards and runestones keep their categories. EpicLoot's save-data version is not
+checked. A rarity EpicLoot no longer declares stays in saved rules, marked as no longer
+applying. A fixed list of six names was replaced (D171, #104): a seventh rarity turned the
+rarity filters and EpicLoot's item roles off, and a new data version made every magic item
+unreadable. If a later EpicLoot renumbered its rarities, magic items could go to the wrong
+rarity's chest; they would be misplaced, never lost.
 
 **One ranking.** When several chests accept an item, they are ranked in this order:
 
@@ -590,6 +609,14 @@ is planned for 1.5 (#82).
   across the ground of the chest below it, so a stack that leans a little stays one stack. It
   splits where two are more than 2.5 m apart in height.
   Every container counts, with or without a rule.
+
+**The Categories tab's search matches at word starts.** "ores" finds the "Ores & metal scrap"
+category, not "Heart of the Forest". Only when nothing matches at the start of a word does it
+match inside words, and only when no name the player can see matches
+does it match the game's internal item IDs. In languages written without spaces between
+words, such as Chinese, every letter starts a word. Matching anywhere in a name was replaced (D171,
+#118): a short query filled the eight item places with items whose hidden IDs happened to
+contain it.
 
 **Search lights chests.** Searching in the Categories tab or the Items tab lights the nearby
 chests that hold the items found. With "Also show chests that accept it" on, chests whose rules

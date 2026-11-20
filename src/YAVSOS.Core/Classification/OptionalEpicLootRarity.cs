@@ -9,7 +9,8 @@ using YAVSOS.Core.Catalog;
 namespace YAVSOS.Core.Classification;
 
 /// <summary>
-/// EpicLoot 0.14.13 rarity semantics as detached data. Static material rarity comes from the loaded definition's
+/// EpicLoot rarity semantics as detached data (verified on 0.14.13). The rarity names and values are EpicLoot's own
+/// <c>ItemRarity</c> declaration, read at startup (#104, D171); until then, and without EpicLoot, the six known ones. Static material rarity comes from the loaded definition's
 /// item type and ammo-type tag; equipment rarity is read freshly from one instance's existing custom data and is
 /// never cached, written or attached to the prefab. Unsupported shapes stay Unknown instead of using EpicLoot's
 /// permissive Magic fallback.
@@ -23,10 +24,65 @@ public static class OptionalEpicLootRarity
     public const string VerifiedVersion = "0.14.13";
     // ItemInfo.dataKey(classKey(MagicItemComponent, "")): mod GUID + '#' + type full name; same-assembly types have no suffix.
     public const string InstanceDataKey = PluginGuid + "#EpicLoot.MagicItemComponent";
-    public const int SupportedMagicItemVersion = 3;
     public const int MaximumInstancePayload = 65536;
-    // EpicLoot.ItemRarity declaration order; Newtonsoft writes the numeric value by default.
-    public static IReadOnlyList<string> RarityNames { get; } = Array.AsReadOnly(new[] { "Magic", "Rare", "Epic", "Legendary", "Mythic", "Ancient" });
+    public const int MaximumRarities = 64;
+    /// <summary>The rarities EpicLoot 0.14.13 declares, in value order 0–5; the default before a declaration is read.</summary>
+    public static IReadOnlyList<string> KnownRarityNames { get; } = Array.AsReadOnly(new[] { "Magic", "Rare", "Epic", "Legendary", "Mythic", "Ancient" });
+
+    private sealed class Declaration
+    {
+        internal readonly string[] Names; internal readonly int[] Values; internal readonly IReadOnlyList<string> FilterValues;
+        internal Declaration(string[] names, int[] values)
+        { Names = names; Values = values; FilterValues = Array.AsReadOnly(names.Select(x => x.ToLowerInvariant()).ToArray()); }
+    }
+    private static volatile Declaration declared = new(KnownRarityNames.ToArray(), Enumerable.Range(0, 6).ToArray());
+
+    /// <summary>The current rarity names in EpicLoot's spelling, in value order.</summary>
+    public static IReadOnlyList<string> RarityNames => Array.AsReadOnly(declared.Names);
+    /// <summary>The rule filter's values: <see cref="RarityNames"/> in lower case, in the same order.</summary>
+    public static IReadOnlyList<string> FilterValues => declared.FilterValues;
+
+    /// <summary>
+    /// #104 (D171): the rarities the loaded EpicLoot declares, as (stored value, enum name). Newtonsoft stores the value
+    /// by default. Called once at startup, before classification reads them; a rule naming a rarity no longer declared
+    /// keeps it and shows it as stale (D065). Throws on a declaration YAVSOS can't use: none, too many, a duplicate value
+    /// or name (ignoring case, since filter values are lower case), or a name that isn't a plain identifier.
+    /// </summary>
+    public static void Declare(IEnumerable<KeyValuePair<int, string>> rarities) => declared = Validate(rarities);
+
+    /// <summary>Checks a declaration the way <see cref="Declare"/> does, without using it.</summary>
+    public static void Validate(IEnumerable<KeyValuePair<int, string>> rarities, out IReadOnlyList<string> names)
+    { var checkedOne = Validate(rarities); names = Array.AsReadOnly(checkedOne.Names); }
+
+    private static Declaration Validate(IEnumerable<KeyValuePair<int, string>> rarities)
+    {
+        if (rarities == null) throw new ArgumentNullException(nameof(rarities));
+        var list = rarities.Take(MaximumRarities + 1).OrderBy(x => x.Key).ToList();
+        if (list.Count == 0 || list.Count > MaximumRarities) throw new ArgumentException("Unsupported number of rarities.");
+        if (list.Select(x => x.Key).Distinct().Count() != list.Count) throw new ArgumentException("Duplicate rarity value.");
+        foreach (var (_, name) in list)
+            if (string.IsNullOrEmpty(name) || name.Length > 64 || !char.IsLetter(name[0]) || name.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')))
+                throw new ArgumentException("Unsupported rarity name.");
+        if (list.Select(x => x.Value).Distinct(StringComparer.OrdinalIgnoreCase).Count() != list.Count) throw new ArgumentException("Duplicate rarity name.");
+        return new Declaration(list.Select(x => x.Value).ToArray(), list.Select(x => x.Key).ToArray());
+    }
+
+    /// <summary>The index in <see cref="RarityNames"/> of a stored rarity value; -1 when EpicLoot doesn't declare it.</summary>
+    private static int IndexOfValue(Declaration current, long value)
+    {
+        for (var i = 0; i < current.Values.Length; i++) if (current.Values[i] == value) return i;
+        return -1;
+    }
+
+    /// <summary>The filter value of a stored rarity (a number, or its name), read against one declaration; null when undeclared.</summary>
+    private static string? StoredRarity(Dictionary<string, JsonMember> members)
+    {
+        var current = declared;
+        if (!members.TryGetValue("Rarity", out var rarity)) return null;
+        var index = rarity.Kind == JsonKind.Integer ? IndexOfValue(current, rarity.Integer)
+            : rarity.Kind == JsonKind.String ? IndexOf(current, rarity.Text) : -1;
+        return index < 0 ? null : current.FilterValues[index];
+    }
     private const string InstanceSource = "epicloot-instance:" + AdapterVersion;
 
     /// <summary>CraftingItemExtensions.IsMagicCraftingMaterial/IsRunestone plus GetCraftingMaterialRarity, strictly.</summary>
@@ -37,8 +93,9 @@ public static class OptionalEpicLootRarity
         var parts = item.Value("ammoType").Split('|');
         if (parts.Length != 2 || !parts[1].EndsWith("MagicCraftingMaterial", StringComparison.Ordinal) &&
             !parts[1].EndsWith("Runestone", StringComparison.Ordinal)) return null;
-        var index = IndexOf(parts[0]);
-        return index < 0 ? null : RarityNames[index].ToLowerInvariant();
+        var current = declared;
+        var index = IndexOf(current, parts[0]);
+        return index < 0 ? null : current.FilterValues[index];
     }
 
     /// <summary>Raw FacetEvidence/Coverage rows for registered static materials when EpicLoot is supported.</summary>
@@ -98,19 +155,19 @@ public static class OptionalEpicLootRarity
         if (payload.Length > MaximumInstancePayload) return new[] { ClassificationFilters.UnreadableRow("rarity") };
         var complete = new JsonScan(payload).TopLevel(out var members);
         if (complete && members == null) return Array.Empty<FacetEvidence>();
-        var index = complete ? StoredRarityIndex(members!) : -1;
-        return index < 0 ? new[] { ClassificationFilters.UnreadableRow("rarity") } : new[] { new FacetEvidence("rarity",
-            RarityNames[index].ToLowerInvariant(), InstanceSource, "EpicLoot MagicItem rarity on this item instance") };
+        var value = complete ? StoredRarity(members!) : null;
+        return value == null ? new[] { ClassificationFilters.UnreadableRow("rarity") } : new[] { new FacetEvidence("rarity",
+            value, InstanceSource, "EpicLoot MagicItem rarity on this item instance") };
     }
 
-    private static int IndexOf(string name)
+    private static int IndexOf(Declaration current, string name)
     {
-        for (var i = 0; i < RarityNames.Count; i++) if (RarityNames[i] == name) return i;
+        for (var i = 0; i < current.Names.Length; i++) if (current.Names[i] == name) return i;
         return -1;
     }
 
-    // Accepts only a complete JSON object with exactly one supported Version and one Rarity. Null MagicItem,
-    // malformed/duplicate/case-variant members, non-integer or undeclared values remain Unknown.
+    // Accepts only a complete JSON object with one Rarity; its data version is not checked (#104, D171). Null
+    // MagicItem, malformed/duplicate/case-variant members, non-integer or undeclared values remain Unknown.
     internal static int InstanceRarityIndex(string payload)
     {
         var reader = new JsonScan(payload);
@@ -120,10 +177,10 @@ public static class OptionalEpicLootRarity
 
     internal static int StoredRarityIndex(Dictionary<string, JsonMember> members)
     {
-        if (!members.TryGetValue("Version", out var version) || !members.TryGetValue("Rarity", out var rarity)) return -1;
-        if (version.Kind != JsonKind.Integer || version.Integer != SupportedMagicItemVersion) return -1;
-        if (rarity.Kind == JsonKind.Integer) return rarity.Integer >= 0 && rarity.Integer < RarityNames.Count ? (int)rarity.Integer : -1;
-        return rarity.Kind == JsonKind.String ? IndexOf(rarity.Text) : -1;
+        if (!members.TryGetValue("Rarity", out var rarity)) return -1;
+        var current = declared;
+        if (rarity.Kind == JsonKind.Integer) return IndexOfValue(current, rarity.Integer);
+        return rarity.Kind == JsonKind.String ? IndexOf(current, rarity.Text) : -1;
     }
 
     internal enum JsonKind { Other, Integer, String, Boolean }
@@ -135,7 +192,7 @@ public static class OptionalEpicLootRarity
         internal JsonMember(JsonKind kind, long integer, string text) { Kind = kind; Integer = integer; Text = text; }
     }
 
-    /// <summary>Strict bounded RFC 8259 scanner. It records only top-level Version/Rarity values.</summary>
+    /// <summary>Strict bounded RFC 8259 scanner. It records only the top-level Rarity (and IsUnidentified) values.</summary>
     internal sealed class JsonScan
     {
         private const int MaximumDepth = 32;
@@ -161,10 +218,9 @@ public static class OptionalEpicLootRarity
                         var key = String(); Space(); Expect(':'); Space();
                         // Newtonsoft binds members case-insensitively; any variant/duplicate makes the binding ambiguous.
                         if (!seen.Add(key)) return false;
-                        var relevant = string.Equals(key, "Version", StringComparison.OrdinalIgnoreCase) ||
-                            string.Equals(key, "Rarity", StringComparison.OrdinalIgnoreCase) ||
+                        var relevant = string.Equals(key, "Rarity", StringComparison.OrdinalIgnoreCase) ||
                             identification && string.Equals(key, "IsUnidentified", StringComparison.OrdinalIgnoreCase);
-                        if (relevant && key != "Version" && key != "Rarity" && key != "IsUnidentified") return false;
+                        if (relevant && key != "Rarity" && key != "IsUnidentified") return false;
                         var value = Value(1, relevant);
                         if (relevant) members.Add(key, value);
                         Space();

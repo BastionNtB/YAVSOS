@@ -115,7 +115,8 @@ public static class ClassificationFilters
         var values = new HashSet<string>(upgraded ?? Array.Empty<string>(), StringComparer.Ordinal);
         return Qualities.Where(x => x == "1" ? values.Contains("no") : values.Contains("yes")).ToArray();
     }
-    public static IReadOnlyList<string> Rarities { get; } = Array.AsReadOnly(new[] { "magic", "rare", "epic", "legendary", "mythic", "ancient" });
+    /// <summary>#104 (D171): the rarities the loaded EpicLoot declares, lower case, in value order (<see cref="OptionalEpicLootRarity.Declare"/>).</summary>
+    public static IReadOnlyList<string> Rarities => OptionalEpicLootRarity.FilterValues;
     public static IReadOnlyList<string> Uses { get; } = Array.AsReadOnly(new[]
         { "crafting", "building", "fuel", "processing", "food", "brewing", "farming", "feed", "equipment" });
     /// <summary>

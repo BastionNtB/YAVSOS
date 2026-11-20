@@ -32,6 +32,11 @@ public sealed class PanelMarksTests
         Assert.Equal(MarkState.Broken, partial.State);
         Assert.Contains("On: Chest rules apply to AzuAutoStore's stash key and ground pickup.", Text(partial));
         Assert.Contains("Not working: AzuAutoStore changed, so YAVSOS can't choose which chests AzuAutoStore's stash key fills first.", Text(partial));
+        // D171: a hook that turns off alone shows its own amber line; rules stay on.
+        var hooks = PanelMarks.Azu("3.1.7", true, true, true, true, true, emptyChests: false, pickupRules: false)!;
+        Assert.Equal(MarkState.Limited, hooks.State);
+        Assert.Equal(new[] { "yavsos_mark_azu_rules", "yavsos_mark_azu_empty_chests_broken", "yavsos_mark_azu_pickup_rules_broken" }, Keys(hooks).Take(3));
+        Assert.DoesNotContain("yavsos_mark_azu_empty_chests_broken", Keys(azu));
         var changed = PanelMarks.Azu("", false, false, false, false, false)!;
         Assert.Equal(("AzuAutoStore", MarkState.Broken), (Heading(changed), changed.State));
         Assert.Equal(new[] { "yavsos_mark_azu_rules_broken" }, Keys(changed));
@@ -42,6 +47,7 @@ public sealed class PanelMarksTests
         Assert.Equal(MarkState.Working, PanelMarks.Drawers(true, true, true)!.State);
         Assert.Equal(new[] { "yavsos_mark_drawers_no_azu" }, Keys(PanelMarks.Drawers(true, false, false)!));
         Assert.Equal(new[] { "yavsos_mark_drawers_broken" }, Keys(PanelMarks.Drawers(true, false, true)!));
+        Assert.Equal(new[] { "yavsos_mark_drawers_azu_changed" }, Keys(PanelMarks.Drawers(true, false, true, azuEmptyChests: false)!)); // D171
         Assert.Equal("Item drawers", Heading(PanelMarks.Drawers(true, true, true)!));
     }
 

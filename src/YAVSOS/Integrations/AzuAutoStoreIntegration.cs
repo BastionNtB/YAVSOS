@@ -20,10 +20,12 @@ namespace YAVSOS.Integrations;
 internal enum AzuIntegrationState { Absent, Active, Disabled }
 
 /// <summary>
-/// P3-03: AzuAutoStore stashes; chest rules filter where it may put items (D042). Startup checks 1–2 decide
-/// whether to patch at all; patching is all-or-nothing; a failed check disables only this integration and
-/// Azu keeps working on its own rules. The runtime backstop refuses a single unapproved write and keeps the
-/// integration running (D046). Unity game thread only.
+/// P3-03: AzuAutoStore stashes; chest rules filter where it may put items (D042). Startup checks 1–2 decide what to
+/// patch, one hook at a time (D171, D058): a failed hook check turns off only that hook, and only a missing
+/// <c>TryStore</c> or required game member turns the whole integration off, when Azu keeps working on its own rules.
+/// The runtime backstop refuses a single unapproved write and keeps the integration running (D046); a write path
+/// the reviewed list doesn't know is watched too, and its writes into ruled chests are logged, not refused, since
+/// refusing on a path nobody checked could lose the item. Unity game thread only.
 /// </summary>
 internal static class AzuAutoStoreIntegration
 {
@@ -34,12 +36,16 @@ internal static class AzuAutoStoreIntegration
     private static readonly HashSet<string> ReportedBackstops = new HashSet<string>(StringComparer.Ordinal);
     private static ManualLogSource? log;
     private static Harmony? harmony;
-    private static int depth;
-    private static string entry = "";
+    private static int depth, logOnlyDepth;
+    private static string entry = "", logOnlyEntry = "";
     private static float lastPendingNotice = float.NegativeInfinity;
-    private static int haveItemSites, canStoreSites;
+    private static int tryStoreSites, pullHaveSites, canStoreSites;
 
     internal static AzuIntegrationState State { get; private set; } = AzuIntegrationState.Absent;
+    /// <summary>D171: H2 in TryStore is on, so an empty chest whose rule accepts an item takes it from the stash keys.</summary>
+    internal static bool EmptyChestsActive { get; private set; }
+    /// <summary>D171: H2 and H3 in AnyContainerWants are on, so ground pickup asks chest rules too.</summary>
+    internal static bool PickupRulesActive { get; private set; }
     internal static string Status { get; private set; } = "Isolated YAVSOS stashing rules active.";
     private static FieldInfo? existingItemField;
     private static bool existingItemFailed;
@@ -85,21 +91,35 @@ internal static class AzuAutoStoreIntegration
             var assembly = info.Instance.GetType().Assembly;
             AzuExclusions.Initialize(assembly, logger);
             YAVSOS.Cleanup.CleanupTriggers.BindAzuStoreKey(assembly, logger);
-            var members = Resolve(assembly, out var missing);
+            var members = Resolve(assembly, out var missing, out var optional);
             if (!string.IsNullOrEmpty(ChestRuleStore.BindingFailure)) missing.Add(ChestRuleStore.BindingFailure);
-            var shape = Gather(assembly, members, missing);
-            var problems = AzuStoreCompatibility.Check(shape);
-            ReportUnread(logger, problems.Count == 0);
-            if (problems.Count != 0) { Disable(version, problems); return; }
+            var shape = Gather(assembly, members, missing, out var paths);
+            var check = AzuStoreCompatibility.Assess(shape);
+            ReportUnread(logger, check.Rules);
+            if (!check.Rules) { Disable(version, check.Whole); return; }
             harmony = new Harmony(HarmonyId);
+            var problems = new List<string>();
+            problems.AddRange(check.EmptyChestProblems); problems.AddRange(check.PickupProblems);
             Apply(harmony, members);
-            if (haveItemSites != 2 || canStoreSites != 1)
-            { Disable(version, new[] { $"Transpilers replaced {haveItemSites} HaveItem and {canStoreSites} CanItemBeStored sites; expected 2 and 1." }); return; }
+            // Each transpiler on its own, so one that fails turns off only its hook (D171): a throw or a wrong site count.
+            EmptyChestsActive = check.EmptyChests && Transpile(harmony, members.TryStore!, nameof(TryStoreTranspiler),
+                () => tryStoreSites == 1, () => $"The TryStore transpiler replaced {tryStoreSites} HaveItem sites; expected 1.", problems);
+            PickupRulesActive = check.Pickup && Transpile(harmony, members.AnyContainerWants!, nameof(AnyContainerWantsTranspiler),
+                () => pullHaveSites == 1 && canStoreSites == 1,
+                () => $"The AnyContainerWants transpiler replaced {pullHaveSites} HaveItem and {canStoreSites} CanItemBeStored sites; expected 1 and 1.", problems);
+            var guarded = GuardNewPaths(harmony, check.NewWritePaths, paths);
             State = AzuIntegrationState.Active;
             // Pay the one-time JIT and parser cost off the game thread, not on the first store key press.
             System.Threading.ThreadPool.QueueUserWorkItem(_ => Warm());
-            Status = $"YAVSOS/AzuAutoStore {version} integrated chest rules active.";
-            logger.LogInfo($"{Status} Compatibility checks passed in {clock.ElapsedMilliseconds} ms.");
+            Status = $"YAVSOS/AzuAutoStore {version} integrated chest rules active." +
+                (EmptyChestsActive ? "" : " Empty chests with a rule don't take items from the stash keys (AzuAutoStore changed).") +
+                (PickupRulesActive ? "" : " Ground pickup doesn't ask chest rules (AzuAutoStore changed); stores still follow them.");
+            logger.LogInfo($"{Status} Compatibility checks done in {clock.ElapsedMilliseconds} ms" + (problems.Count == 0 ? "." : "; parts are off (see the next warning)."));
+            if (problems.Count != 0) logger.LogWarning("AzuAutoStore check, parts turned off: " + string.Join(" ", problems.Take(12)));
+            var notes = check.Notes.Concat(optional).Concat(guarded).ToList();
+            if (notes.Count != 0)
+                logger.LogWarning($"AzuAutoStore {version} differs from the version YAVSOS was checked against; chest rules stay on: " + string.Join(" ", notes.Take(24)) +
+                    (notes.Count > 24 ? " …" : ""));
             ReportOtherPatchers(members, logger);
             AzuStoreOrder.Initialize(assembly, logger, method => Shape(method as MethodInfo));
             ReportUnread(logger, true); // The store-order checks read more methods; the integration is on.
@@ -110,8 +130,8 @@ internal static class AzuAutoStoreIntegration
     private static void Disable(string version, IEnumerable<string> problems)
     {
         AzuStoreOrder.Disable();
-        harmony?.UnpatchSelf(); harmony = null; depth = 0;
-        State = AzuIntegrationState.Disabled;
+        harmony?.UnpatchSelf(); harmony = null; depth = 0; logOnlyDepth = 0; logOnlyEntry = "";
+        State = AzuIntegrationState.Disabled; EmptyChestsActive = PickupRulesActive = false;
         Status = $"AzuAutoStore {version} changed in ways YAVSOS does not recognise; chest rules have no stash effect. AzuAutoStore keeps working normally.";
         log?.LogWarning(Status + " " + string.Join(" ", problems.Take(12)));
     }
@@ -121,41 +141,42 @@ internal static class AzuAutoStoreIntegration
         internal MethodInfo? TryStore, AnyContainerWants, StoreHotkey, StoreThisItem, StoreDrop, ContainerAwake;
     }
 
-    // Check 1: resolve by signature, never by version.
-    private static Members Resolve(Assembly assembly, out List<string> missing)
+    // Check 1: resolve by signature, never by version. Only what the whole integration needs goes into missing; a member
+    // one hook needs shows in that hook's shape, and the rest are notes (D171).
+    private static Members Resolve(Assembly assembly, out List<string> missing, out List<string> optional)
     {
-        var found = new List<string>(); missing = found;
-        Type? Type(string name) { var type = assembly.GetType(name, false); if (type == null) found.Add(name); return type; }
-        MethodInfo? Method(Type? type, string name, Type returns, params Type[] parameters)
+        var required = new List<string>(); var notes = new List<string>(); missing = required; optional = notes;
+        Type? Type(string name) => assembly.GetType(name, false);
+        MethodInfo? Method(Type? type, string name, Type returns, List<string>? list, params Type[] parameters)
         {
             var method = type == null ? null : AccessTools.DeclaredMethod(type, name, parameters);
-            if (method == null || method.ReturnType != returns) { found.Add($"{type?.FullName ?? "?"}::{name}"); return null; }
-            return method;
+            if (method != null && method.ReturnType == returns) return method;
+            list?.Add($"Missing member: {type?.FullName ?? "AzuAutoStore.Util.Functions"}::{name}.");
+            return null;
         }
         var functions = Type("AzuAutoStore.Util.Functions");
-        var boxes = Type("AzuAutoStore.Util.Boxes");
         var plugin = Type("AzuAutoStore.AzuAutoStorePlugin");
+        // D101: read for the panel's no-rule text when present; nothing depends on it (#103).
         existingItemField = plugin == null ? null : AccessTools.DeclaredField(plugin, "MustHaveExistingItemToPull");
-        var muc = Type("AzuAutoStore.APIs.MUC.MUCCompat");
-        Type("AzuAutoStore.Interfaces.IContainer");
-        Method(boxes, "CanItemBeStored", typeof(bool), typeof(string), typeof(string));
-        if (plugin != null && AccessTools.DeclaredField(plugin, "MustHaveExistingItemToPull") == null) found.Add("AzuAutoStorePlugin.MustHaveExistingItemToPull");
-        if (muc != null && AccessTools.DeclaredProperty(muc, "CanRouteToOtherOwner")?.GetGetMethod(true) == null) found.Add("MUCCompat.CanRouteToOtherOwner");
-        return new Members
+        var members = new Members
         {
-            TryStore = Method(functions, "TryStore", typeof(bool), typeof(Container), typeof(ItemDrop.ItemData).MakeByRefType(), typeof(bool), typeof(bool)),
-            AnyContainerWants = Method(functions, "AnyContainerWants", typeof(bool), typeof(ItemDrop)),
-            StoreHotkey = Method(functions, "TryStore", typeof(void)),
-            StoreThisItem = Method(functions, "TryStoreThisItem", typeof(void), typeof(ItemDrop.ItemData), typeof(Inventory)),
-            StoreDrop = Method(functions, "CheckItemDropInstanceAndStore", typeof(void), typeof(ItemDrop)),
+            // Null TryStore or AnyContainerWants: the shape check names it and turns off what needs it.
+            TryStore = Method(functions, "TryStore", typeof(bool), null, typeof(Container), typeof(ItemDrop.ItemData).MakeByRefType(), typeof(bool), typeof(bool)),
+            AnyContainerWants = Method(functions, "AnyContainerWants", typeof(bool), null, typeof(ItemDrop)),
+            // The backstop's entry guards; a missing one leaves that entry to H1 and the new-path guard.
+            StoreHotkey = Method(functions, "TryStore", typeof(void), notes),
+            StoreThisItem = Method(functions, "TryStoreThisItem", typeof(void), notes, typeof(ItemDrop.ItemData), typeof(Inventory)),
+            StoreDrop = Method(functions, "CheckItemDropInstanceAndStore", typeof(void), notes, typeof(ItemDrop)),
             ContainerAwake = AccessTools.DeclaredMethod(typeof(Container), "Awake")
         };
+        if (members.ContainerAwake == null) required.Add("Container::Awake");
+        return members;
     }
 
     // Check 2: original IL call graph facts, compared by the detached checker.
-    private static AzuAssemblyShape Gather(Assembly assembly, Members members, List<string> missing)
+    private static AzuAssemblyShape Gather(Assembly assembly, Members members, List<string> missing, out Dictionary<string, List<MethodBase>> paths)
     {
-        if (members.ContainerAwake == null) missing.Add("Container::Awake");
+        paths = new Dictionary<string, List<MethodBase>>(StringComparer.Ordinal);
         var contract = assembly.GetType("AzuAutoStore.Interfaces.IContainer", false);
         var implementers = contract == null ? Array.Empty<string>() : AccessTools.GetTypesFromAssembly(assembly)
             .Where(x => x != contract && contract.IsAssignableFrom(x) && !x.IsInterface).Select(x => x.FullName).ToArray();
@@ -166,7 +187,10 @@ internal static class AzuAutoStoreIntegration
             foreach (var method in type.GetMethods(AccessTools.allDeclared).Cast<MethodBase>().Concat(type.GetConstructors(AccessTools.allDeclared)))
             {
                 if (method.IsAbstract || method.ContainsGenericParameters || method.GetMethodBody() == null) continue;
-                if (Calls(method).Any(AzuStoreCompatibility.IsWriteSink)) callers.Add(Name(method));
+                if (!Calls(method).Any(AzuStoreCompatibility.IsWriteSink)) continue;
+                callers.Add(Name(method));
+                if (!paths.TryGetValue(Name(method), out var overloads)) paths.Add(Name(method), overloads = new List<MethodBase>());
+                overloads.Add(method);
             }
         }
         return new AzuAssemblyShape(missing, implementers, Shape(members.TryStore), Shape(members.AnyContainerWants), callers);
@@ -205,16 +229,16 @@ internal static class AzuAutoStoreIntegration
 
     internal static string Name(MethodBase method) => (method.DeclaringType?.FullName ?? "?") + "::" + method.Name;
 
+    private static HarmonyMethod Hook(string name, int priority = Priority.Normal) =>
+        new HarmonyMethod(AccessTools.DeclaredMethod(typeof(AzuAutoStoreIntegration), name)) { priority = priority };
+
     private static void Apply(Harmony patcher, Members members)
     {
-        haveItemSites = 0; canStoreSites = 0;
-        var self = typeof(AzuAutoStoreIntegration);
-        HarmonyMethod Hook(string name, int priority = Priority.Normal) => new HarmonyMethod(AccessTools.DeclaredMethod(self, name)) { priority = priority };
+        tryStoreSites = 0; pullHaveSites = 0; canStoreSites = 0;
         patcher.Patch(members.ContainerAwake, postfix: Hook(nameof(RememberInventory)));
-        patcher.Patch(members.TryStore, prefix: Hook(nameof(TryStorePrefix)), transpiler: Hook(nameof(TryStoreTranspiler)));
-        patcher.Patch(members.AnyContainerWants, transpiler: Hook(nameof(AnyContainerWantsTranspiler)));
+        patcher.Patch(members.TryStore, prefix: Hook(nameof(TryStorePrefix)));
         foreach (var method in new[] { members.StoreHotkey, members.StoreThisItem, members.StoreDrop })
-            patcher.Patch(method, prefix: Hook(nameof(EnterAzu), Priority.First), finalizer: Hook(nameof(LeaveAzu)));
+            if (method != null) patcher.Patch(method, prefix: Hook(nameof(EnterAzu), Priority.First), finalizer: Hook(nameof(LeaveAzu)));
         foreach (var add in new[]
         {
             AccessTools.DeclaredMethod(typeof(Inventory), "AddItem", new[] { typeof(ItemDrop.ItemData) }),
@@ -222,6 +246,46 @@ internal static class AzuAutoStoreIntegration
         })
             // Runs before the bundled MultiUserChest intercept, which respects __runOriginal (Azu 3.1.7).
             patcher.Patch(add ?? throw new MissingMethodException("Inventory", "AddItem"), prefix: Hook(nameof(Backstop), Priority.First));
+    }
+
+    private static bool Transpile(Harmony patcher, MethodInfo method, string transpiler, Func<bool> replaced, Func<string> mismatch, List<string> problems)
+    {
+        try
+        {
+            patcher.Patch(method, transpiler: Hook(transpiler));
+            if (replaced()) return true;
+            problems.Add(mismatch());
+        }
+        catch (Exception error) when (OptionalFailure.Recoverable(error))
+        {
+            problems.Add($"Patching {Name(method)} failed ({error.GetType().Name}: {error.Message}).");
+        }
+        try { patcher.Unpatch(method, HarmonyPatchType.Transpiler, HarmonyId); }
+        catch (Exception error) when (OptionalFailure.Recoverable(error)) { problems.Add($"Removing the {Name(method)} transpiler failed ({error.GetType().Name})."); }
+        return false;
+    }
+
+    // D171 (#102): a write path the reviewed list doesn't know is watched like the three entries, but its writes into a
+    // ruled chest are only logged. D046 refuses a write only where refusing was checked not to lose the item; on a path
+    // nobody reviewed, Azu might ignore the add's result, or have taken the item already (here, in a caller or on another
+    // peer). A misplaced item is the safe failure. azu-release-check reports the path for review.
+    private static IEnumerable<string> GuardNewPaths(Harmony patcher, IReadOnlyList<string> names, Dictionary<string, List<MethodBase>> paths)
+    {
+        var notes = new List<string>();
+        foreach (var name in names)
+        foreach (var method in paths.TryGetValue(name, out var overloads) ? overloads : new List<MethodBase>())
+        {
+            try
+            {
+                patcher.Patch(method, prefix: Hook(nameof(EnterLogOnly), Priority.First), finalizer: Hook(nameof(LeaveLogOnly)));
+                notes.Add($"Its writes into chests with a rule that doesn't accept the item are logged ({name}).");
+            }
+            catch (Exception error) when (OptionalFailure.Recoverable(error))
+            {
+                notes.Add($"Watching {name} failed ({error.GetType().Name}: {error.Message}); its writes aren't checked.");
+            }
+        }
+        return notes;
     }
 
     private static void ReportOtherPatchers(Members members, ManualLogSource logger)
@@ -374,7 +438,7 @@ internal static class AzuAutoStoreIntegration
         {
             if (IsCall(instruction, AzuStoreCompatibility.HaveItem))
             {
-                haveItemSites++;
+                tryStoreSites++;
                 var first = new CodeInstruction(OpCodes.Ldarg_0).MoveLabelsFrom(instruction);
                 yield return first;
                 yield return new CodeInstruction(OpCodes.Ldarg_1);
@@ -401,7 +465,7 @@ internal static class AzuAutoStoreIntegration
             var isStore = IsCall(instruction, AzuStoreCompatibility.CanItemBeStored);
             if (!isHave && !isStore) { result.Add(instruction); continue; }
             if (isStore) { canItemBeStored ??= AccessTools.MethodDelegate<Func<string, string, bool>>((MethodInfo)instruction.operand); canStoreSites++; }
-            else haveItemSites++;
+            else pullHaveSites++;
             result.Add(new CodeInstruction(loadChest.opcode, loadChest.operand).MoveLabelsFrom(instruction));
             result.Add(new CodeInstruction(OpCodes.Ldarg_0));
             result.Add(new CodeInstruction(OpCodes.Call, isHave ? haveItem : canStore));
@@ -417,12 +481,23 @@ internal static class AzuAutoStoreIntegration
 
     private static void EnterAzu(MethodBase __originalMethod) { if (depth++ == 0) entry = __originalMethod.Name; }
     private static Exception? LeaveAzu(Exception? __exception) { if (depth > 0) depth--; return __exception; }
+    private static void EnterLogOnly(MethodBase __originalMethod)
+    { EnterAzu(__originalMethod); if (logOnlyDepth++ == 0) logOnlyEntry = Name(__originalMethod); }
+    private static Exception? LeaveLogOnly(Exception? __exception) { if (logOnlyDepth > 0) logOnlyDepth--; return LeaveAzu(__exception); }
 
     // D046 backstop: refuse the one write; the item stays with the player (verified for Azu 3.1.7's paths).
     private static void Backstop(Inventory __instance, ItemDrop.ItemData item, ref bool __runOriginal, ref bool __result)
     {
         if (depth == 0 || !__runOriginal || item == null || !InventoryOwners.TryGetValue(__instance, out var chest)) return;
         if (!AzuStoreCompatibility.RefuseWrite(depth, Decide(chest, item))) return;
+        if (logOnlyDepth > 0)
+        {
+            // D046's required check: refusing here could lose the item, so the write goes through and is reported.
+            if (ReportedBackstops.Add("log:" + logOnlyEntry))
+                log?.LogWarning($"AzuAutoStore put an item into a chest whose rule doesn't accept it, through a path YAVSOS hasn't checked ({logOnlyEntry}). " +
+                    "Refusing could have lost the item, so the write went through. Chest rules remain active; please report this with your AzuAutoStore version.");
+            return;
+        }
         __runOriginal = false; __result = false; BackstopRefusals++;
         if (ReportedBackstops.Add(entry))
             log?.LogWarning($"AzuAutoStore tried to put an item into a ruled chest outside the checked path ({entry}); the write was refused and the item stayed where it was. Chest rules remain active.");

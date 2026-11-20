@@ -48,9 +48,9 @@ internal sealed class OptionalEpicLootSemanticsApi
     internal static OptionalCapability Probe(string? version, OptionalTypeResolver? resolve, out OptionalEpicLootSemanticsApi? api)
     {
         api = null;
-        var storage = OptionalEpicLootApi.Probe(version, resolve);
         const string adapter = OptionalEpicLootSemantics.Adapter;
-        if (!storage.Supported) return new OptionalCapability(adapter, storage.State, storage.ObservedVersion, storage.Diagnostic);
+        // #104 (D171): item roles need their own shapes only, not the rarity-storage probe; rarity names are the declared ones.
+        if (version == null || resolve == null) return OptionalCapability.Absent(adapter);
         try
         {
             var magic = OptionalJotunnApi.Require(resolve!, "EpicLoot.MagicItem");

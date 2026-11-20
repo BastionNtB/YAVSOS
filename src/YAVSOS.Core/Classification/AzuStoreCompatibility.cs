@@ -21,7 +21,10 @@ public sealed class AzuMethodShape
 /// <summary>What the loaded AzuAutoStore assembly looks like, gathered by the game-side adapter.</summary>
 public sealed class AzuAssemblyShape
 {
-    /// <summary>Required members resolved by signature (check 1); missing ones are listed by name.</summary>
+    /// <summary>
+    /// Members the whole integration needs, resolved by signature (check 1); missing ones are listed by name. Members
+    /// only one hook needs show in that hook's shape instead, and the ones YAVSOS doesn't need aren't required (D171).
+    /// </summary>
     public IReadOnlyList<string> MissingMembers { get; }
     public IReadOnlyList<string> ContainerImplementers { get; }
     public AzuMethodShape? TryStore { get; }
@@ -39,9 +42,38 @@ public sealed class AzuAssemblyShape
 }
 
 /// <summary>
+/// D171 (#102): what the startup checks allow, one hook at a time (D058). <see cref="Rules"/> false turns the whole
+/// integration off; <see cref="EmptyChests"/> (H2 in TryStore) and <see cref="Pickup"/> (H2 and H3 in
+/// AnyContainerWants) turn off alone, while rejection (H1) and the backstop keep working.
+/// </summary>
+public sealed class AzuCompatibility
+{
+    /// <summary>Problems that turn the whole integration off.</summary>
+    public IReadOnlyList<string> Whole { get; }
+    /// <summary>Problems that turn off only empty-chest acceptance on the stash keys (H2 in TryStore).</summary>
+    public IReadOnlyList<string> EmptyChestProblems { get; }
+    /// <summary>Problems that turn off only ground pickup's rule hooks (H2 and H3 in AnyContainerWants).</summary>
+    public IReadOnlyList<string> PickupProblems { get; }
+    /// <summary>Differences from the reviewed lists, logged only.</summary>
+    public IReadOnlyList<string> Notes { get; }
+    /// <summary>Write paths not on the list; each gets the backstop's log-only guard (D046's required check, D171).</summary>
+    public IReadOnlyList<string> NewWritePaths { get; }
+    public bool Rules => Whole.Count == 0;
+    public bool EmptyChests => Rules && EmptyChestProblems.Count == 0;
+    public bool Pickup => Rules && PickupProblems.Count == 0;
+    public AzuCompatibility(IEnumerable<string> whole, IEnumerable<string> emptyChests, IEnumerable<string> pickup, IEnumerable<string> notes,
+        IEnumerable<string> newWritePaths)
+    {
+        Whole = Array.AsReadOnly(whole.ToArray()); EmptyChestProblems = Array.AsReadOnly(emptyChests.ToArray());
+        PickupProblems = Array.AsReadOnly(pickup.ToArray()); Notes = Array.AsReadOnly(notes.ToArray());
+        NewWritePaths = Array.AsReadOnly(newWritePaths.ToArray());
+    }
+}
+
+/// <summary>
 /// AzuAutoStore startup checks 1–2 (docs/AZUAUTOSTORE-INTEGRATION.md) over a gathered shape, and the hook
-/// decisions H1–H3 plus the backstop. The expected deposit paths are AzuAutoStore 3.1.7's; a later version that
-/// keeps them is accepted without a version pin. Pure: no game, Harmony or Azu references.
+/// decisions H1–H3 plus the backstop. The expected deposit paths are AzuAutoStore 3.1.7's, compared for the log only
+/// (D171); each hook needs only the shape it patches. Pure: no game, Harmony or Azu references.
 /// </summary>
 public static class AzuStoreCompatibility
 {
@@ -57,7 +89,8 @@ public static class AzuStoreCompatibility
     });
 
     /// <summary>
-    /// Methods in AzuAutoStore 3.1.7's own namespaces that call a write sink directly. Regenerate with
+    /// Methods in AzuAutoStore 3.1.7's own namespaces that call a write sink directly, whose refusal safety was checked by
+    /// hand (D046). A method not on it gets the backstop's log-only guard at startup (D171). Regenerate with
     /// <c>scripts/azu-release-check</c> <c>--runtime-sink-callers</c> when a reviewed Azu release changes them.
     /// </summary>
     public static IReadOnlyList<string> ExpectedSinkCallers { get; } = Array.AsReadOnly(new[]
@@ -96,43 +129,48 @@ public static class AzuStoreCompatibility
         };
     }
 
-    /// <summary>Empty when compatible; otherwise one line per problem.</summary>
-    public static IReadOnlyList<string> Check(AzuAssemblyShape shape, IReadOnlyList<string>? expectedSinkCallers = null)
+    /// <summary>
+    /// D171 (#102): which of YAVSOS's changes to AzuAutoStore can run, decided one hook at a time (D058). Only a missing
+    /// required member or <c>TryStore</c> (H1's target) turns the whole integration off. The lists of write paths and
+    /// chest types are compared for the log only; the backstop logs a new write path's writes into ruled chests (D046).
+    /// </summary>
+    public static AzuCompatibility Assess(AzuAssemblyShape shape, IReadOnlyList<string>? expectedSinkCallers = null)
     {
         if (shape == null) throw new ArgumentNullException(nameof(shape));
         var expected = expectedSinkCallers ?? ExpectedSinkCallers;
-        var problems = new List<string>();
-        foreach (var member in shape.MissingMembers) problems.Add("Missing member: " + member);
-        var implementers = new HashSet<string>(shape.ContainerImplementers, StringComparer.Ordinal);
-        foreach (var added in implementers.Except(ExpectedImplementers, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal))
-            problems.Add("New deposit target type: " + added);
-        foreach (var removed in ExpectedImplementers.Except(implementers, StringComparer.Ordinal))
-            problems.Add("Missing deposit target type: " + removed);
-        if (shape.TryStore == null) problems.Add("TryStore(Container, ref ItemData, bool, bool) not found.");
+        var whole = new List<string>(); var emptyChests = new List<string>(); var pickup = new List<string>(); var notes = new List<string>();
+        foreach (var member in shape.MissingMembers) whole.Add("Missing member: " + member);
+        if (shape.TryStore == null) whole.Add("TryStore(Container, ref ItemData, bool, bool) not found.");
         else
         {
-            RequireOnce(shape.TryStore, HaveItem, problems); RequireOnce(shape.TryStore, CanItemBeStored, problems);
+            // H2 swaps TryStore's one "already holds it" test, which must come before its writes.
+            RequireOnce(shape.TryStore, HaveItem, emptyChests);
             var calls = shape.TryStore.Calls;
             var firstWrite = calls.Select((call, index) => (call, index)).Where(x => OwnerWrites.Contains(x.call, StringComparer.Ordinal))
                 .Select(x => x.index).DefaultIfEmpty(-1).Min();
-            if (firstWrite < 0) problems.Add("TryStore no longer writes through MoveStack/TryStoreToOtherOwner.");
-            else if (IndexOf(calls, HaveItem) > firstWrite || IndexOf(calls, CanItemBeStored) > firstWrite)
-                problems.Add("TryStore checks no longer precede its writes.");
+            if (firstWrite < 0) emptyChests.Add("TryStore no longer writes through MoveStack/TryStoreToOtherOwner.");
+            else if (IndexOf(calls, HaveItem) > firstWrite) emptyChests.Add("TryStore's HaveItem check no longer precedes its writes.");
         }
-        if (shape.AnyContainerWants == null) problems.Add("AnyContainerWants(ItemDrop) not found.");
+        // H2 and H3 in AnyContainerWants: one test each, and one chest local to pass to the rule.
+        if (shape.AnyContainerWants == null) pickup.Add("AnyContainerWants(ItemDrop) not found.");
         else
         {
-            RequireOnce(shape.AnyContainerWants, HaveItem, problems); RequireOnce(shape.AnyContainerWants, CanItemBeStored, problems);
-            RequireOnce(shape.AnyContainerWants, GetInventory, problems);
+            RequireOnce(shape.AnyContainerWants, HaveItem, pickup); RequireOnce(shape.AnyContainerWants, CanItemBeStored, pickup);
+            RequireOnce(shape.AnyContainerWants, GetInventory, pickup);
             if (shape.AnyContainerWants.LocalTypes.Count(x => x == "Container") != 1)
-                problems.Add("AnyContainerWants no longer keeps exactly one Container local.");
+                pickup.Add("AnyContainerWants no longer keeps exactly one Container local.");
         }
+        var implementers = new HashSet<string>(shape.ContainerImplementers, StringComparer.Ordinal);
+        foreach (var added in implementers.Except(ExpectedImplementers, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal))
+            notes.Add("New deposit target type: " + added);
+        foreach (var removed in ExpectedImplementers.Except(implementers, StringComparer.Ordinal))
+            notes.Add("Missing deposit target type: " + removed);
         var callers = new HashSet<string>(shape.SinkCallers, StringComparer.Ordinal);
-        foreach (var added in callers.Except(expected, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal))
-            problems.Add("New write path: " + added);
+        var newPaths = callers.Except(expected, StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        foreach (var added in newPaths) notes.Add("New write path: " + added);
         foreach (var removed in expected.Except(callers, StringComparer.Ordinal))
-            problems.Add("Write path moved or removed: " + removed);
-        return problems;
+            notes.Add("Write path moved or removed: " + removed);
+        return new AzuCompatibility(whole, emptyChests, pickup, notes, newPaths);
     }
 
     // D070: the store-key loops YAVSOS runs in its own order. Generic arguments are dropped from type names.

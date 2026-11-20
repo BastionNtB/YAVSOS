@@ -60,6 +60,11 @@ public sealed class CategorySearchResult
 /// P6-06 (D062 Q4): search in the category picker. A query matches category names and item names (or prefab IDs);
 /// an item leads to its smallest category, so "Copper" marks the ores subcategory rather than the umbrella. Bounded
 /// and read only; it never changes a rule. Pure and Unity-free.
+/// #118 (D171): names match at word starts, so "ores" finds "Ores &amp; metal scrap" and not "Heart of the Forest". Only
+/// when nothing matches at a word start, category or item, does the search match inside words ("rewood" finds
+/// "Corewood"), and only when no visible name matches at all does it match prefab IDs, which players can't see. In
+/// scripts written without spaces between words (Chinese, Japanese, Thai) every letter starts a word, so a search in
+/// those languages matches inside names as before.
 /// </summary>
 public static class CategorySearch
 {
@@ -75,28 +80,46 @@ public static class CategorySearch
         if (text.Length < MinimumQuery) return CategorySearchResult.None;
         var compare = CultureInfo.CurrentCulture.CompareInfo;
         const CompareOptions options = CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace;
-        int At(string value) => compare.IndexOf(value, text, options);
-        var categories = taxonomy.Categories.Values.Where(x => At(names.Shown(x.Id)) >= 0 && memberCount(x.Id) > 0)
-            .OrderBy(x => At(names.Shown(x.Id)) == 0 ? 0 : 1).ThenBy(x => x.DisplayRank).ThenBy(x => names.Shown(x.Id), StringComparer.CurrentCulture)
+        int Inside(string value) => compare.IndexOf(value, text, options);
+        int WordStart(string value)
+        {
+            for (var from = 0; from < value.Length;)
+            {
+                var at = compare.IndexOf(value, text, from, options);
+                if (at < 0) return -1;
+                if (at == 0 || !char.IsLetterOrDigit(value[at - 1]) || Unspaced(value[at]) || Unspaced(value[at - 1])) return at;
+                from = at + 1;
+            }
+            return -1;
+        }
+        // Letters in scripts that don't put spaces between words: Chinese characters, kana, Thai, Lao, Khmer, Myanmar.
+        static bool Unspaced(char c) => char.GetUnicodeCategory(c) == UnicodeCategory.OtherLetter &&
+            c is >= '\u0E00' and <= '\u0EFF' or >= '\u1000' and <= '\u109F' or >= '\u1780' and <= '\u17FF' or >= '\u3040' and <= '\u30FF'
+                or >= '\u3400' and <= '\u4DBF' or >= '\u4E00' and <= '\u9FFF' or >= '\uF900' and <= '\uFAFF';
+        var all = items.Where(x => x != null).ToList();
+        string[] Categories(Func<string, int> at) => taxonomy.Categories.Values.Where(x => at(names.Shown(x.Id)) >= 0 && memberCount(x.Id) > 0)
+            .OrderBy(x => at(names.Shown(x.Id)) == 0 ? 0 : 1).ThenBy(x => x.DisplayRank).ThenBy(x => names.Shown(x.Id), StringComparer.CurrentCulture)
             .ThenBy(x => x.Id, StringComparer.Ordinal).Take(MaximumCategories).Select(x => x.Id).ToArray();
-        var found = new List<(SearchableItem Item, int Rank)>();
-        foreach (var item in items)
+        List<ItemSearchHit> Items(Func<SearchableItem, int> at)
         {
-            if (item == null) continue;
-            var at = At(item.Name);
-            var rank = at == 0 ? 0 : at > 0 ? 1 : At(item.Prefab) >= 0 ? 2 : -1;
-            if (rank >= 0) found.Add((item, rank));
+            var hits = new List<ItemSearchHit>();
+            foreach (var (item, _) in all.Select(x => (Item: x, Rank: at(x))).Where(x => x.Rank >= 0).OrderBy(x => x.Rank)
+                         .ThenBy(x => x.Item.Name.Length).ThenBy(x => x.Item.Name, StringComparer.CurrentCulture).ThenBy(x => x.Item.Prefab, StringComparer.Ordinal))
+            {
+                var smallest = Smallest(taxonomy, item.Categories, memberCount);
+                if (smallest == null) continue;
+                hits.Add(new ItemSearchHit(item.Prefab, item.Name, smallest));
+                if (hits.Count == MaximumItems) break;
+            }
+            return hits;
         }
-        var hits = new List<ItemSearchHit>();
-        foreach (var (item, _) in found.OrderBy(x => x.Rank).ThenBy(x => x.Item.Name.Length).ThenBy(x => x.Item.Name, StringComparer.CurrentCulture)
-                     .ThenBy(x => x.Item.Prefab, StringComparer.Ordinal))
-        {
-            var smallest = Smallest(taxonomy, item.Categories, memberCount);
-            if (smallest == null) continue;
-            hits.Add(new ItemSearchHit(item.Prefab, item.Name, smallest));
-            if (hits.Count == MaximumItems) break;
-        }
-        return new CategorySearchResult(text, Array.AsReadOnly(categories), hits.AsReadOnly());
+        // A name that starts with the query ranks before one where a later word does.
+        static int Rank(int at) => at < 0 ? -1 : at == 0 ? 0 : 1;
+        var categories = Categories(WordStart);
+        var found = Items(x => Rank(WordStart(x.Name)));
+        if (categories.Length == 0 && found.Count == 0) { categories = Categories(Inside); found = Items(x => Rank(Inside(x.Name))); }
+        if (categories.Length == 0 && found.Count == 0) found = Items(x => Inside(x.Prefab) >= 0 ? 0 : -1);
+        return new CategorySearchResult(text, Array.AsReadOnly(categories), found.AsReadOnly());
     }
 
     /// <summary>Most names a tree row's note shows before "…" (D101 Q17); the row's tooltip lists them all.</summary>

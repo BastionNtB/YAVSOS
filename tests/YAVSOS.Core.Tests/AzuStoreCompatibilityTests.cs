@@ -20,22 +20,34 @@ public sealed class AzuStoreCompatibilityTests
                 wantsLocals ?? new[] { "ItemData", "Container", "Vector3" }),
             sinkCallers ?? AzuStoreCompatibility.ExpectedSinkCallers);
 
-    [Fact]
-    public void Shape317_IsCompatible() => Assert.Empty(AzuStoreCompatibility.Check(Shape()));
+    private static AzuCompatibility Assess(AzuAssemblyShape shape) => AzuStoreCompatibility.Assess(shape);
 
     [Fact]
-    public void MissingMemberOrMethod_Disables()
+    public void Shape317_IsCompatible()
     {
-        Assert.Contains(AzuStoreCompatibility.Check(Shape(missing: new[] { "AzuAutoStore.Util.Boxes::CanItemBeStored" })), x => x.Contains("Missing member"));
-        Assert.Contains(AzuStoreCompatibility.Check(Shape(noTryStore: true)), x => x.Contains("TryStore"));
+        var check = Assess(Shape());
+        Assert.True(check.Rules); Assert.True(check.EmptyChests); Assert.True(check.Pickup);
+        Assert.Empty(check.Notes); Assert.Empty(check.NewWritePaths);
     }
 
     [Fact]
-    public void NewOrMissingDepositTargetType_Disables()
+    public void MissingRequiredMemberOrTryStore_TurnsEverythingOff()
     {
-        var added = AzuStoreCompatibility.ExpectedImplementers.Concat(new[] { "AzuAutoStore.Interfaces.NewChest" });
-        Assert.Contains(AzuStoreCompatibility.Check(Shape(implementers: added)), x => x.Contains("NewChest"));
-        Assert.Contains(AzuStoreCompatibility.Check(Shape(implementers: AzuStoreCompatibility.ExpectedImplementers.Skip(1))), x => x.Contains("Missing deposit target"));
+        var member = Assess(Shape(missing: new[] { "Container::Awake" }));
+        Assert.False(member.Rules); Assert.False(member.EmptyChests); Assert.False(member.Pickup);
+        Assert.Contains(member.Whole, x => x.Contains("Missing member"));
+        var tryStore = Assess(Shape(noTryStore: true));
+        Assert.False(tryStore.Rules); Assert.Contains(tryStore.Whole, x => x.Contains("TryStore"));
+    }
+
+    [Fact]
+    public void NewOrMissingDepositTargetType_IsOnlyNoted()
+    {
+        // D171 (#102, option b): a new chest type still stores through TryStore, which H1 and the backstop guard.
+        var added = Assess(Shape(implementers: AzuStoreCompatibility.ExpectedImplementers.Concat(new[] { "AzuAutoStore.Interfaces.NewChest" })));
+        Assert.True(added.EmptyChests && added.Pickup); Assert.Contains(added.Notes, x => x.Contains("NewChest"));
+        var missing = Assess(Shape(implementers: AzuStoreCompatibility.ExpectedImplementers.Skip(1)));
+        Assert.True(missing.EmptyChests && missing.Pickup); Assert.Contains(missing.Notes, x => x.Contains("Missing deposit target"));
     }
 
     [Theory]
@@ -43,32 +55,57 @@ public sealed class AzuStoreCompatibilityTests
     [InlineData("two-have")]
     [InlineData("check-after-write")]
     [InlineData("no-write")]
-    public void TryStoreShapeChanges_Disable(string kind)
+    public void TryStoreShapeChanges_TurnOffOnlyEmptyChests(string kind)
     {
         var calls = kind switch
         {
             "no-have" => new[] { CanStore, Move },
             "two-have" => new[] { Have, Have, CanStore, Move },
-            "check-after-write" => new[] { Have, Move, CanStore },
+            "check-after-write" => new[] { CanStore, Move, Have },
             _ => new[] { Have, CanStore }
         };
-        Assert.NotEmpty(AzuStoreCompatibility.Check(Shape(tryStore: calls)));
+        var check = Assess(Shape(tryStore: calls));
+        Assert.True(check.Rules); Assert.False(check.EmptyChests); Assert.True(check.Pickup);
+        Assert.NotEmpty(check.EmptyChestProblems);
     }
 
     [Fact]
-    public void AnyContainerWantsShapeChanges_Disable()
+    public void TryStore_AzuOwnExclusionCheckMayMove()
     {
-        Assert.NotEmpty(AzuStoreCompatibility.Check(Shape(wants: new[] { AzuStoreCompatibility.GetInventory, CanStore })));
-        Assert.NotEmpty(AzuStoreCompatibility.Check(Shape(wantsLocals: new[] { "Container", "Container" })));
-        Assert.NotEmpty(AzuStoreCompatibility.Check(Shape(wants: new[] { Have, CanStore })));
+        // H2 swaps only the "already holds it" test; where Azu checks its own exclusions is Azu's (D171).
+        var check = Assess(Shape(tryStore: new[] { Have, Move, CanStore }));
+        Assert.True(check.EmptyChests);
     }
 
     [Fact]
-    public void NewOrMovedWritePath_DisablesEvenWithTheSameVersion()
+    public void AnyContainerWantsShapeChanges_TurnOffOnlyPickup()
     {
-        var added = AzuStoreCompatibility.ExpectedSinkCallers.Concat(new[] { "AzuAutoStore.Util.Functions::StoreAllButton" });
-        Assert.Contains(AzuStoreCompatibility.Check(Shape(sinkCallers: added)), x => x.Contains("StoreAllButton"));
-        Assert.Contains(AzuStoreCompatibility.Check(Shape(sinkCallers: AzuStoreCompatibility.ExpectedSinkCallers.Skip(1))), x => x.Contains("moved or removed"));
+        foreach (var shape in new[]
+        {
+            Shape(wants: new[] { AzuStoreCompatibility.GetInventory, CanStore }),
+            Shape(wantsLocals: new[] { "Container", "Container" }),
+            Shape(wants: new[] { Have, CanStore }),
+            new AzuAssemblyShape(Array.Empty<string>(), AzuStoreCompatibility.ExpectedImplementers,
+                new AzuMethodShape("TryStore", new[] { Have, CanStore, Move }), null, AzuStoreCompatibility.ExpectedSinkCallers)
+        })
+        {
+            var check = Assess(shape);
+            Assert.True(check.Rules); Assert.True(check.EmptyChests); Assert.False(check.Pickup);
+            Assert.NotEmpty(check.PickupProblems);
+        }
+    }
+
+    [Fact]
+    public void NewWritePath_IsGuardedAndMovedPathNoted()
+    {
+        // D046's own example: a future Azu adds a store-all button. It no longer turns rules off; the backstop logs its
+        // writes into ruled chests, since refusing a path nobody reviewed could lose the item.
+        var added = Assess(Shape(sinkCallers: AzuStoreCompatibility.ExpectedSinkCallers.Concat(new[] { "AzuAutoStore.Util.Functions::StoreAllButton" })));
+        Assert.True(added.Rules && added.EmptyChests && added.Pickup);
+        Assert.Equal(new[] { "AzuAutoStore.Util.Functions::StoreAllButton" }, added.NewWritePaths);
+        Assert.Contains(added.Notes, x => x.Contains("StoreAllButton"));
+        var moved = Assess(Shape(sinkCallers: AzuStoreCompatibility.ExpectedSinkCallers.Skip(1)));
+        Assert.True(moved.Rules); Assert.Empty(moved.NewWritePaths); Assert.Contains(moved.Notes, x => x.Contains("moved or removed"));
     }
 
     [Theory]

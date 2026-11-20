@@ -95,7 +95,6 @@ public sealed class OptionalEpicLootRarityTests
     [InlineData("null")]
     [InlineData("{}")]
     [InlineData("[{\"Version\":3,\"Rarity\":1}]")]
-    [InlineData("{\"Version\":2,\"Rarity\":1}")]
     [InlineData("{\"Version\":3,\"Rarity\":6}")]
     [InlineData("{\"Version\":3,\"Rarity\":-1}")]
     [InlineData("{\"Version\":3,\"Rarity\":1.0}")]

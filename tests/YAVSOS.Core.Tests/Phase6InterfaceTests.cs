@@ -56,6 +56,40 @@ public sealed class Phase6InterfaceTests
     }
 
     [Fact]
+    public void Search_MatchesWordStarts_ThenInsideWords_ThenPrefabIds()
+    {
+        // #118 (D171), the maintainer's case: "ores" listed Forest items through "f-ores-t" and their prefab IDs.
+        var items = new SearchableItem[]
+        {
+            new("TinOre", "Tin ore", new[] { "materials", "materials.ore" }),
+            new("CopperOre", "Copper ore", new[] { "materials", "materials.ore" }),
+            new("RoundLog", "Corewood", new[] { "materials", "materials.wood" }),
+            new("BlackCore", "Black core", new[] { "materials" }),
+            new("TrophyTheElder", "Heart of the Forest", new[] { "materials" }),
+            new("FishingBaitForest", "Mossy fishing bait", new[] { "materials" }),
+        };
+        var names = EnglishText.Names(Taxonomy);
+        var ores = CategorySearch.Find(names, "ores", items, Count);
+        Assert.Contains("materials.ore", ores.Categories);
+        Assert.Empty(ores.Items); // No visible name has a word starting "ores"; the category match is enough.
+        var ore = CategorySearch.Find(names, "ore", items, Count);
+        Assert.Equal(new[] { "TinOre", "CopperOre" }, ore.Items.Select(x => x.Prefab)); // Not Corewood, Black core or Forest.
+        // Nothing starts a word with "rewood": the search falls back to inside words.
+        Assert.Equal("RoundLog", Assert.Single(CategorySearch.Find(names, "rewood", items, Count).Items).Prefab);
+        // No visible name holds "baitforest" at all: prefab IDs, last.
+        Assert.Equal("FishingBaitForest", Assert.Single(CategorySearch.Find(names, "baitforest", items, Count).Items).Prefab);
+        // Chinese has no spaces between words: "铁矿" (iron ore) finds "铁矿石" and, inside a name, "黑铁矿" (black iron ore).
+        var chinese = new SearchableItem[]
+        {
+            new("IronOre", "铁矿石", new[] { "materials", "materials.ore" }), new("BlackIronOre", "黑铁矿", new[] { "materials", "materials.ore" })
+        };
+        Assert.Equal(new[] { "BlackIronOre", "IronOre" },
+            CategorySearch.Find(names, "铁矿", chinese, Count).Items.Select(x => x.Prefab).OrderBy(x => x, StringComparer.Ordinal));
+        // Word starts follow spaces and punctuation, not letters inside a word.
+        Assert.Equal("FishingBaitForest", Assert.Single(CategorySearch.Find(names, "fishing", items, Count).Items).Prefab);
+    }
+
+    [Fact]
     public void SearchRows_RevealTheHitUnderItsCollapsedUmbrella_AndHideTheRest()
     {
         var stored = new HashSet<string>(StringComparer.Ordinal);

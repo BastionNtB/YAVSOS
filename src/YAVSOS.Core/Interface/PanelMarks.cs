@@ -94,8 +94,10 @@ public static class PanelMarks
     /// <paramref name="exclusionsProblem"/>: why its exclusions are read only in part (D086 D2, D088), shown amber; null with
     /// <paramref name="exclusions"/> false means they can't be read and cleanup is off.
     /// </summary>
+    /// <param name="emptyChests">D171: empty chests with a rule accept items from the stash keys (H2 in TryStore).</param>
+    /// <param name="pickupRules">D171: ground pickup asks chest rules (H2 and H3 in AnyContainerWants).</param>
     public static IntegrationMark? Azu(string? version, bool rules, bool order, bool pickup, bool exclusions, bool pause, Message? keptOut = null,
-        Message? exclusionsProblem = null)
+        Message? exclusionsProblem = null, bool emptyChests = true, bool pickupRules = true)
     {
         if (version == null) return null;
         var name = version.Length == 0 ? Message.Of("yavsos_mark_azu_name") : Message.Of("yavsos_mark_azu_name_version").With("version", version);
@@ -104,12 +106,16 @@ public static class PanelMarks
         return new IntegrationMark(MarkKind.AzuAutoStore, name, new[]
         {
             Line("yavsos_mark_azu_rules", MarkState.Working),
+        }.Concat(emptyChests ? Array.Empty<MarkLine>() : new[] { Line("yavsos_mark_azu_empty_chests_broken", MarkState.Limited) })
+        .Concat(pickupRules ? Array.Empty<MarkLine>() : new[] { Line("yavsos_mark_azu_pickup_rules_broken", MarkState.Limited) })
+        .Concat(new[]
+        {
             order ? Line("yavsos_mark_azu_order", MarkState.Working) : Line("yavsos_mark_azu_order_broken", MarkState.Broken),
             pickup ? Line("yavsos_mark_azu_pickup", MarkState.Working) : Line("yavsos_mark_azu_pickup_broken", MarkState.Broken),
             exclusions && exclusionsProblem == null ? Line("yavsos_mark_azu_exclusions", MarkState.Working)
             : new MarkLine(exclusionsProblem ?? Message.Of("yavsos_mark_azu_exclusions_unreadable"), MarkState.Limited),
             pause ? Line("yavsos_mark_azu_pause", MarkState.Working) : Line("yavsos_mark_azu_pause_unreadable", MarkState.Limited)
-        }.Concat(keptOut == null ? Array.Empty<MarkLine>() : new[] { new MarkLine(keptOut, MarkState.Caution) }));
+        }.Concat(keptOut == null ? Array.Empty<MarkLine>() : new[] { new MarkLine(keptOut, MarkState.Caution) })));
     }
 
     /// <summary>YAVSOS's own stashing, when AzuAutoStore is not installed (D061).</summary>
@@ -234,11 +240,12 @@ public static class PanelMarks
         });
 
     /// <summary>RossItemDrawers (D047): AzuAutoStore fills a drawer reserved for an item. Null when not installed.</summary>
-    public static IntegrationMark? Drawers(bool installed, bool working, bool azu) => !installed ? null
+    /// <param name="azuEmptyChests">D171: AzuAutoStore's empty-chest hook is on; reserved drawers fill through it.</param>
+    public static IntegrationMark? Drawers(bool installed, bool working, bool azu, bool azuEmptyChests = true) => !installed ? null
         : new IntegrationMark(MarkKind.Drawers, Message.Of("yavsos_mark_drawers_name"), new[]
         {
             working ? Line("yavsos_mark_drawers_reserved", MarkState.Working)
-            : Line(azu ? "yavsos_mark_drawers_broken" : "yavsos_mark_drawers_no_azu", MarkState.Broken)
+            : Line(!azu ? "yavsos_mark_drawers_no_azu" : !azuEmptyChests ? "yavsos_mark_drawers_azu_changed" : "yavsos_mark_drawers_broken", MarkState.Broken)
         });
 
     /// <summary>The marks in display order, without the integrations that are not installed.</summary>

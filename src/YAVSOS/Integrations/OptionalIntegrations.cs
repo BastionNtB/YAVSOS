@@ -39,8 +39,13 @@ internal sealed class OptionalIntegrations
         FindPlugin(OptionalJotunnApi.PluginGuid, out var jotunnVersion, out var jotunnTypes);
         var jotunnCapability = OptionalJotunnApi.Probe(jotunnVersion, jotunnTypes, out var api);
         FindPlugin(OptionalEpicLootRarity.PluginGuid, out var epicVersion, out var epicTypes);
+        // #104 (D171): EpicLoot's rarities, declared before the item roles and any classification read them.
+        var epicLoot = OptionalEpicLootApi.Probe(epicVersion, epicTypes);
+        if (OptionalEpicLootApi.Rarities(epicVersion, epicTypes) is { } rarities)
+            try { OptionalEpicLootRarity.Declare(rarities); }
+            catch (ArgumentException) { } // An unusable declaration: the probe reports it, and the current names stay.
         var semantics = OptionalEpicLootSemanticsApi.Probe(epicVersion, epicTypes, out var semanticApi);
-        return new OptionalIntegrations(jotunnCapability, api, OptionalEpicLootApi.Probe(epicVersion, epicTypes), semantics, semanticApi);
+        return new OptionalIntegrations(jotunnCapability, api, epicLoot, semantics, semanticApi);
     }
 
     private static void FindPlugin(string guid, out string? version, out OptionalTypeResolver? resolve)

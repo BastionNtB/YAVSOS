@@ -77,7 +77,8 @@ public sealed class GridSource
 /// </summary>
 public static class ItemGrid
 {
-    public const int MaximumItems = 8192;
+    /// <summary>#105 (D171): the catalog's item limit (the assignments the server sends carry at most this many), so every loaded item can show.</summary>
+    public const int MaximumItems = AuthoritativeAssignmentsCodec.MaximumItems;
 
     public static IReadOnlyList<GridEntry> Build(IEnumerable<GridSource> catalog, IReadOnlyCollection<string> categories,
         IReadOnlyDictionary<string, IReadOnlyList<string>> filters, IReadOnlyCollection<string> includes, IReadOnlyCollection<string> excludes,

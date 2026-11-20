@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -140,6 +141,25 @@ internal sealed class OptionalJotunnApi
 /// </summary>
 internal static class OptionalEpicLootApi
 {
+    /// <summary>#104 (D171): EpicLoot's <c>ItemRarity</c> declaration as (stored value, name), for <see cref="OptionalEpicLootRarity.Declare"/>.</summary>
+    internal static IReadOnlyList<KeyValuePair<int, string>> Rarities(Type rarity) => Enum.GetValues(rarity).Cast<object>()
+        .Select(x => new KeyValuePair<int, string>(Convert.ToInt32(x, CultureInfo.InvariantCulture), Enum.GetName(rarity, x) ?? ""))
+        .Take(OptionalEpicLootRarity.MaximumRarities + 1).ToList();
+
+    /// <summary>
+    /// The loaded EpicLoot's declaration, or null without EpicLoot or an int-backed <c>ItemRarity</c>. Read whatever the
+    /// rarity-storage probe says, since the item roles use the names too (D171).
+    /// </summary>
+    internal static IReadOnlyList<KeyValuePair<int, string>>? Rarities(string? version, OptionalTypeResolver? resolve)
+    {
+        if (version == null || resolve == null) return null;
+        try
+        {
+            return resolve("EpicLoot.ItemRarity") is { IsEnum: true } rarity && Enum.GetUnderlyingType(rarity) == typeof(int) ? Rarities(rarity) : null;
+        }
+        catch (Exception error) when (OptionalFailure.Recoverable(error)) { return null; }
+    }
+
     internal static OptionalCapability Probe(string? version, OptionalTypeResolver? resolve)
     {
         const string adapter = OptionalEpicLootRarity.Adapter;
@@ -173,7 +193,7 @@ internal static class OptionalEpicLootApi
                     throw new MissingMemberException("ItemInfo.dataKey");
             }
             Field(component, "MagicItem", magic);
-            Field(magic, "Version", typeof(int));
+            // #104 (D171): MagicItem.Version no longer gates anything; the Rarity field is what YAVSOS reads.
             var rarityField = Field(magic, "Rarity", rarity);
             // Newtonsoft's default numeric enum form is the only supported stored shape.
             if (magic.GetCustomAttributesData().Concat(rarityField.GetCustomAttributesData()).Concat(rarity.GetCustomAttributesData())
@@ -181,17 +201,17 @@ internal static class OptionalEpicLootApi
                 throw new MissingMemberException("custom MagicItem JSON contract");
             if (!rarity.IsEnum || Enum.GetUnderlyingType(rarity) != typeof(int))
                 throw new MissingMemberException("ItemRarity underlying type");
-            var names = OptionalEpicLootRarity.RarityNames;
-            var values = Enum.GetValues(rarity).Cast<object>().Select(x => Convert.ToInt32(x, CultureInfo.InvariantCulture)).OrderBy(x => x).ToArray();
-            if (!values.SequenceEqual(Enumerable.Range(0, names.Count)) ||
-                names.Select((name, index) => Enum.GetName(rarity, index) == name).Any(x => !x))
-                throw new MissingMemberException("ItemRarity declaration");
+            // #104 (D171): the rarities are EpicLoot's own declaration, whatever it holds; only an unusable one fails.
+            IReadOnlyList<string> names;
+            try { OptionalEpicLootRarity.Validate(Rarities(rarity), out names); }
+            catch (ArgumentException) { throw new MissingMemberException("ItemRarity declaration"); }
             foreach (var (method, result) in new[] { ("IsMagicCraftingMaterial", typeof(bool)), ("IsRunestone", typeof(bool)), ("GetCraftingMaterialRarity", rarity) })
                 if (crafting.GetMethod(method, BindingFlags.Public | BindingFlags.Static, null, new[] { itemData }, null)?.ReturnType != result)
                     throw new MissingMemberException("CraftingItemExtensions." + method);
+            var listed = string.Join(", ", names);
             return new OptionalCapability(adapter, OptionalCapabilityState.Supported, version,
-                "read-only custom data " + OptionalEpicLootRarity.InstanceDataKey + "; MagicItem version " +
-                OptionalEpicLootRarity.SupportedMagicItemVersion + "; " + OptionalEpicLootRarity.AdapterVersion);
+                "read-only custom data " + OptionalEpicLootRarity.InstanceDataKey + "; " + OptionalEpicLootRarity.AdapterVersion +
+                "; rarities " + (listed.Length > 300 ? listed.Substring(0, 300) + " …" : listed));
         }
         catch (Exception error) when (OptionalFailure.Recoverable(error))
         {

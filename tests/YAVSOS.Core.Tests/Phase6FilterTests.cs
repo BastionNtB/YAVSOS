@@ -147,15 +147,17 @@ public sealed class Phase6FilterTests
         Assert.Equal("", Read(supported, sword, Data("")));
         Assert.Equal("", Read(supported, sword, Data("null")));
         Assert.Equal("epic", Read(supported, sword, Data("{\"Version\":3,\"Rarity\":2}")));
-        // Could not read: an incompatible adapter, an unsupported version, malformed or oversized data.
+        // #104 (D171): the data version doesn't gate the read.
+        Assert.Equal("epic", Read(supported, sword, Data("{\"Version\":4,\"Rarity\":2}")));
+        // Could not read: an incompatible adapter, an undeclared rarity, malformed or oversized data.
         Assert.Equal(ClassificationFilters.Unreadable, Read(incompatible, sword, Data("{\"Version\":3,\"Rarity\":2}")));
-        Assert.Equal(ClassificationFilters.Unreadable, Read(supported, sword, Data("{\"Version\":4,\"Rarity\":2}")));
+        Assert.Equal(ClassificationFilters.Unreadable, Read(supported, sword, Data("{\"Version\":3,\"Rarity\":99}")));
         Assert.Equal(ClassificationFilters.Unreadable, Read(supported, sword, Data("{\"Rarity\":")));
         Assert.Equal(ClassificationFilters.Unreadable, Read(supported, sword, Data(new string(' ', OptionalEpicLootRarity.MaximumInstancePayload + 1))));
         // Not an equipment item: rarity is never instance evidence.
         Assert.Equal("", Read(incompatible, wood, Data("x")));
         // The older reader keeps its behaviour: anything not read is simply absent.
-        Assert.Empty(OptionalEpicLootRarity.ReadInstance(supported, sword, Data("{\"Version\":4,\"Rarity\":2}")));
+        Assert.Empty(OptionalEpicLootRarity.ReadInstance(supported, sword, Data("{\"Version\":3,\"Rarity\":99}")));
     }
 
     [Fact]

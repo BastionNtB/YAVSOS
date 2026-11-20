@@ -100,6 +100,8 @@ public sealed class OptionalEpicLootSemanticsTests
     [InlineData("{\"Version\":3,\"Rarity\":0,\"IsUnidentified\":true}")]
     [InlineData("{\"IsUnidentified\":true,\"Rarity\":\"Ancient\",\"Version\":3,\"Effects\":[]}")]
     [InlineData("{\"Version\":3,\"Rarity\":2,\"IsUnident\\u0069fied\":true}")]
+    [InlineData("{\"Version\":4,\"Rarity\":0,\"IsUnidentified\":true}")]   // #104 (D171): the data version no longer gates
+    [InlineData("{\"Rarity\":1,\"IsUnidentified\":true}")]
     public void Observe_UnidentifiedDefinitionFlagSupportsNewBiomeIdentityWithoutInventedFacets(string payload)
     {
         var result = Classify(Definition("CustomBiome_NewLoot", "Misc", "Epic|MagicCraftingMaterial"), payload: payload);
@@ -115,7 +117,6 @@ public sealed class OptionalEpicLootSemanticsTests
     [InlineData("null")]
     [InlineData("{\"Version\":3,\"Rarity\":0}")]
     [InlineData("{\"Version\":3,\"Rarity\":0,\"IsUnidentified\":false}")]
-    [InlineData("{\"Version\":4,\"Rarity\":0,\"IsUnidentified\":true}")]
     [InlineData("{\"Version\":3,\"Rarity\":6,\"IsUnidentified\":true}")]
     [InlineData("{\"Version\":3,\"Rarity\":0,\"IsUnidentified\":\"true\"}")]
     [InlineData("{\"Version\":3,\"Rarity\":0,\"IsUnidentified\":1}")]

@@ -1297,7 +1297,8 @@ internal sealed partial class RuleControls
             PanelMarks.Azu(azu, AzuAutoStoreIntegration.State == AzuIntegrationState.Active, AzuStoreOrder.Active, AzuStoreOrder.PickupActive,
                 AzuExclusions.State != AzuExclusionState.Unavailable, AzuExclusions.PauseState != AzuExclusionState.Unavailable, line,
                 AzuExclusions.State == AzuExclusionState.Limited ? Message.Of("yavsos_mark_azu_exclusions_changed")
-                : AzuExclusions.RecentErrors ? Message.Of("yavsos_mark_azu_exclusions_errors").Count(AzuExclusions.Errors) : null),
+                : AzuExclusions.RecentErrors ? Message.Of("yavsos_mark_azu_exclusions_errors").Count(AzuExclusions.Errors) : null,
+                AzuAutoStoreIntegration.EmptyChestsActive, AzuAutoStoreIntegration.PickupRulesActive),
             azu == null ? PanelMarks.Stashing(settings.AllowStashing.Value, reader, MarkKey(settings.StashShortcut.Value), MarkKey(settings.StashItemShortcut.Value),
                 ChestRuleStore.Bound) : null,
             PanelMarks.Cleanup(settings.AllowCleanup.Value, reader, azu != null && AzuExclusions.State == AzuExclusionState.Unavailable, ChestRuleStore.Bound),
@@ -1306,8 +1307,10 @@ internal sealed partial class RuleControls
                 plugin.ServerPolicyRejected, plugin.CategoriesServerFailed, plugin.CategoriesServerRebuildFailed),
             PanelMarks.MultiUserChest(copy, muc),
             PanelMarks.EpicLoot(epic != OptionalCapabilityState.Absent, epic == OptionalCapabilityState.Supported),
-            PanelMarks.Drawers(Chainloader.PluginInfos.ContainsKey(RossItemDrawersIntegration.RossGuid), AzuAutoStoreIntegration.ReservedDrawerWants != null,
-                AzuAutoStoreIntegration.State == AzuIntegrationState.Active),
+            // D171: reserved drawers fill through the empty-chest swap (H2), so they need it on.
+            PanelMarks.Drawers(Chainloader.PluginInfos.ContainsKey(RossItemDrawersIntegration.RossGuid),
+                AzuAutoStoreIntegration.ReservedDrawerWants != null && AzuAutoStoreIntegration.EmptyChestsActive,
+                AzuAutoStoreIntegration.State == AzuIntegrationState.Active, AzuAutoStoreIntegration.EmptyChestsActive),
             PanelMarks.Display(DisplayFaults.Off));
         return marks;
     }

@@ -38,6 +38,17 @@ public sealed class ItemGridTests
     private static IReadOnlyList<GridEntry> Grid(string[] categories, string[]? always = null, string[]? never = null, string[]? here = null,
         string? query = null, Dictionary<string, IReadOnlyList<string>>? filters = null) =>
         ItemGrid.Build(Catalog(), categories, filters ?? None, always ?? Array.Empty<string>(), never ?? Array.Empty<string>(), here ?? Array.Empty<string>(), query);
+
+    [Fact]
+    public void Grid_TakesAsManyItemsAsTheCatalog()
+    {
+        // #105 (D171): a pack with more than 8,192 items used to throw here and turn the rule panel off.
+        var bread = Index.Items["Bread"];
+        var catalog = Enumerable.Range(0, AuthoritativeAssignmentsCodec.MaximumItems).Select(i => new GridSource("Item" + i, "Item " + i, bread));
+        Assert.Equal(AuthoritativeAssignmentsCodec.MaximumItems, ItemGrid.MaximumItems);
+        var grid = ItemGrid.Build(catalog, new[] { "food.health" }, None, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
+        Assert.Equal(AuthoritativeAssignmentsCodec.MaximumItems, grid.Count);
+    }
     private static string Show(IEnumerable<GridEntry> rows) =>
         string.Join(" ", rows.Select(x => $"{x.Section}:{x.Prefab}{(x.Mark == GridMark.Always ? "+" : x.Mark == GridMark.Never ? "-" : "")}{(x.Taken ? "" : "~")}"));
 
